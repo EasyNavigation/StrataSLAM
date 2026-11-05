@@ -38,7 +38,8 @@ bool has_error(const ConfigResult& r, const std::string& text) {
 }  // namespace
 
 TEST(Profiles, EveryShippedProfileValidates) {
-  for (const char* name : {"handheld_rgbd", "handheld_oak_d_lite", "lidar_only", "combined_aerial",
+  for (const char* name : {"ground_camera", "ground_lidar", "ground_lidar_camera_imu",
+                           "handheld_camera_imu", "aerial_lidar_camera_imu", "handheld_oak_d_lite",
                            "summit_lidar", "tiago_lidar_camera", "tiago_camera_only"}) {
     const auto r = load_profile_file(std::string(STRATASLAM_PROFILE_DIR) + "/" + name + ".yaml");
     EXPECT_TRUE(r.ok()) << name << ": " << (r.errors.empty() ? "" : r.errors[0].format());
@@ -46,7 +47,8 @@ TEST(Profiles, EveryShippedProfileValidates) {
 }
 
 TEST(Profiles, ExampleValuesParsed) {
-  const auto r = load_profile_file(std::string(STRATASLAM_PROFILE_DIR) + "/handheld_rgbd.yaml");
+  const auto r =
+      load_profile_file(std::string(STRATASLAM_PROFILE_DIR) + "/handheld_camera_imu.yaml");
   ASSERT_TRUE(r.ok());
   const Config& c = *r.config;
   EXPECT_TRUE(c.sensors.camera.enabled);
@@ -57,7 +59,7 @@ TEST(Profiles, ExampleValuesParsed) {
 }
 
 TEST(Profiles, NullFloorHeightPrior) {
-  const auto r = load_profile_file(std::string(STRATASLAM_PROFILE_DIR) + "/lidar_only.yaml");
+  const auto r = load_profile_file(std::string(STRATASLAM_PROFILE_DIR) + "/ground_lidar.yaml");
   ASSERT_TRUE(r.ok());
   EXPECT_FALSE(r.config->multifloor.floor_height_prior.has_value());
 }
@@ -68,8 +70,9 @@ namespace {
 // uses it, commented
 // (`# key: value`) with its default otherwise. The Summit and Tiago profiles are particular robots
 // and bags.
-const char* kTemplates[] = {"handheld_rgbd", "handheld_oak_d_lite", "lidar_only",
-                            "combined_aerial"};
+const char* kTemplates[] = {"ground_camera",           "ground_lidar",
+                            "ground_lidar_camera_imu", "handheld_camera_imu",
+                            "aerial_lidar_camera_imu", "handheld_oak_d_lite"};
 
 struct OptionLine {
   size_t index;  ///< line number in the file
@@ -139,6 +142,12 @@ TEST(Profiles, TheTemplatesHoldEveryOption) {
   }
 }
 
+// Options that replace one another: uncommenting one comments out the other where it is active, as
+// the template says ("give a topic or a frame, not both").
+const std::map<std::string, std::string> kAlternatives = {
+    {"sensors.external_odometry.topic", "sensors.external_odometry.frame"},
+    {"sensors.external_odometry.frame", "sensors.external_odometry.topic"}};
+
 // Uncommenting any one commented option (a commented section with its keys) leaves a valid profile:
 // the defaults and examples in the comments are real values, and no option is commented out of a
 // place where it cannot go. The values of a disabled sensor are only checked once it is enabled:
@@ -155,6 +164,10 @@ TEST(Profiles, EveryCommentedOptionOfTheTemplatesIsValidWhenUncommented) {
       auto edited = lines;
       const auto uncomment = [&](size_t i) { edited[i].erase(edited[i].find('#'), 2); };
       uncomment(o.index);
+      if (const auto alt = kAlternatives.find(o.path); alt != kAlternatives.end())
+        for (const auto& other : opts_)
+          if (other.path == alt->second && !other.commented)
+            edited[other.index].insert(static_cast<size_t>(other.indent), "# ");
       for (size_t c = k + 1;
            c < opts_.size() && opts_[c].commented_parent && opts_[c].indent > o.indent; ++c)
         uncomment(opts_[c].index);

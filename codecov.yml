@@ -1,0 +1,11 @@
+# Codecov shows the coverage (README badge); the gate is scripts/check_coverage.py in the CI's coverage job, so
+# Codecov's own statuses only inform and never block a pull request.
+coverage:
+  status:
+    project:
+      default:
+        informational: true
+    patch:
+      default:
+        informational: true
+comment: false

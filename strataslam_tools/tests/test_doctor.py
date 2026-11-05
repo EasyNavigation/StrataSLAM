@@ -76,7 +76,7 @@ def lots_of_disk(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture
 def prof():  # type: ignore[no-untyped-def]
-    return load_profile(PROFILES / "handheld_rgbd.yaml")
+    return load_profile(PROFILES / "handheld_camera_imu.yaml")
 
 
 def test_a_correct_setup_passes_everything(prof) -> None:  # type: ignore[no-untyped-def]
@@ -213,7 +213,7 @@ def test_disk_thresholds(prof, monkeypatch, free, expected) -> None:  # type: ig
 
 
 def test_combined_profile_checks_lidar_camera_sync_and_extrinsic() -> None:
-    prof = load_profile(PROFILES / "combined_aerial.yaml")
+    prof = load_profile(PROFILES / "aerial_lidar_camera_imu.yaml")
     data = good_data(prof)
     lid_t = [i / 10 + 1000.0 for i in range(40)]
     data.topics[prof["sensors"]["lidar"]["topic"]] = topic(lid_t, [ns(header=hdr("lidar", t)) for t in lid_t[:3]])
@@ -232,7 +232,8 @@ def test_combined_profile_checks_lidar_camera_sync_and_extrinsic() -> None:
 
 
 def test_barometer_checks() -> None:
-    prof = load_profile(PROFILES / "lidar_only.yaml")
+    prof = load_profile(PROFILES / "ground_lidar.yaml")
+    prof["sensors"]["barometer"] = {"enabled": True, "topic": "/pressure"}
 
     def data_with(pressure: np.ndarray):  # type: ignore[no-untyped-def]
         d = doctor.DoctorData()
@@ -282,7 +283,7 @@ def test_rgb_depth_offset_survives_a_dropped_frame_and_still_sees_a_whole_period
 
 
 def test_lidar_camera_offset_at_different_rates_says_what_it_cannot_see() -> None:
-    prof = load_profile(PROFILES / "combined_aerial.yaml")
+    prof = load_profile(PROFILES / "aerial_lidar_camera_imu.yaml")
     data = good_data(prof)
     lid_t = [i / 10 + 1000.0 for i in range(40)]
     data.topics[prof["sensors"]["lidar"]["topic"]] = topic(lid_t, [ns(header=hdr("lidar", 1000.0))])
@@ -347,7 +348,7 @@ def test_doctor_cannot_run_is_exit_code_3(tmp_path) -> None:  # type: ignore[no-
     import argparse
 
     from strataslam_tools import cli
-    args = argparse.Namespace(profile=str(PROFILES / "lidar_only.yaml"), bag=str(tmp_path / "missing"), json=False, seconds=1.0)
+    args = argparse.Namespace(profile=str(PROFILES / "ground_lidar.yaml"), bag=str(tmp_path / "missing"), json=False, seconds=1.0)
     assert cli.cmd_doctor(args) == 3
     args = argparse.Namespace(profile=str(tmp_path / "missing.yaml"), bag=str(tmp_path), json=False, seconds=1.0)
     assert cli.cmd_doctor(args) == 3
@@ -364,6 +365,7 @@ def test_sections_with_every_key_commented_out_read_as_the_core_reads_them(tmp_p
     assert prof["output"] == {} and prof["runtime"] == {}
     assert enabled(prof, "lidar") and not enabled(prof, "camera") and not enabled(prof, "imu")
     assert doctor.check_disk(prof).name == "disk"
-    for name in ("handheld_rgbd", "handheld_oak_d_lite", "lidar_only", "combined_aerial"):
+    for name in ("ground_camera", "ground_lidar", "ground_lidar_camera_imu", "handheld_camera_imu",
+                 "aerial_lidar_camera_imu", "handheld_oak_d_lite"):
         prof = load_profile(PROFILES / f"{name}.yaml")
         assert doctor.check_disk(prof).name == "disk", name

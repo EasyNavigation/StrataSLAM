@@ -1,17 +1,22 @@
 # Robot profile
 
-One YAML file describes the robot. Start from a file in `strataslam_ros/profiles/`. The four generic ones
-(`handheld_rgbd`, `handheld_oak_d_lite`, `lidar_only`, `combined_aerial`) are templates: they hold every option,
-active when the example uses it and commented with its default otherwise, so you uncomment what you need (a test
-keeps them complete). The Summit and Tiago profiles are particular robots and rosbags.
+One YAML file describes the robot. Start from a file in `strataslam_ros/profiles/`. The generic ones are templates,
+one per kind of robot: they hold every option, active when the example uses it and commented with its default
+otherwise, so you uncomment what you need (a test keeps them complete). The Summit and Tiago profiles are particular
+robots and rosbags.
 
-| Profile | Sensors |
+| Template | Platform | Sensors |
+| --- | --- | --- |
+| `ground_camera.yaml` | ground robot | RGB-D camera (RealSense D435i topics), the wheel odometry as its motion prior (TF `odom -> base_link`); no LiDAR, no IMU |
+| `ground_lidar.yaml` | ground robot | 3D LiDAR only |
+| `ground_lidar_camera_imu.yaml` | ground robot | 3D LiDAR (odometry), RGB-D camera (loop closures, colours), IMU (gravity only); camera and LiDAR loop closures |
+| `handheld_camera_imu.yaml` | hand-held | RealSense D435i (RGB-D camera + its IMU) |
+| `aerial_lidar_camera_imu.yaml` | drone | RealSense D435i (RGB-D camera + its IMU) and a 3D LiDAR |
+| `handheld_oak_d_lite.yaml` | hand-held | Luxonis OAK-D Lite with `oak_d_camera` (RGB-D + IMU) |
+
+| Robot profile | Sensors |
 | --- | --- |
-| `handheld_rgbd.yaml` | RealSense D435i (camera + IMU), hand-held |
-| `handheld_oak_d_lite.yaml` | Luxonis OAK-D Lite with `oak_d_camera` (RGB-D + IMU), hand-held |
-| `lidar_only.yaml` | 3D LiDAR + IMU + barometer, ground robot |
 | `summit_lidar.yaml` | 3D LiDAR only, Robotnik Summit XL (floor height prior off); the profile of the Summit rosbags and the Gazebo garage |
-| `combined_aerial.yaml` | camera + LiDAR + IMU on a drone |
 | `tiago_lidar_camera.yaml` | PAL Tiago: torso 3D LiDAR for the odometry, head RGB-D camera for loop closures and colours; the profile of the Tiago corridor rosbag |
 | `tiago_camera_only.yaml` | PAL Tiago without the LiDAR: head RGB-D camera, wheel odometry (TF) and base IMU (gravity only); on the corridor rosbag 1.1 m from the LiDAR trajectory |
 
@@ -38,7 +43,7 @@ refused with what to write instead. The values of the cameras that have been tes
 
 | Camera | Driver and launch | Topics | Depth range | IMU (`imu.topic`, `imu.noise`) |
 | --- | --- | --- | --- | --- |
-| Intel RealSense D435i | `realsense2_camera` 4.x: `ros2 launch realsense2_camera rs_launch.py camera_namespace:=/ align_depth.enable:=true enable_gyro:=true enable_accel:=true unite_imu_method:=2` (its defaults put the topics under `/camera/camera/` and leave the aligned depth and the IMU off) | `/camera/color/image_raw`, `/camera/aligned_depth_to_color/image_raw`, `/camera/color/camera_info` | 0.3-6.0 m | `/camera/imu`; nominal BMI055 noise (`handheld_rgbd.yaml`) |
+| Intel RealSense D435i | `realsense2_camera` 4.x: `ros2 launch realsense2_camera rs_launch.py camera_namespace:=/ align_depth.enable:=true enable_gyro:=true enable_accel:=true unite_imu_method:=2` (its defaults put the topics under `/camera/camera/` and leave the aligned depth and the IMU off) | `/camera/color/image_raw`, `/camera/aligned_depth_to_color/image_raw`, `/camera/color/camera_info` | 0.3-6.0 m | `/camera/imu`; nominal BMI055 noise (`handheld_camera_imu.yaml`) |
 | Luxonis OAK-D Lite | [oak_d_camera](https://github.com/jmguerreroh/oak_d_camera): `ros2 launch oak_d_camera camera.launch.py use_color:=true use_depth:=true use_imu:=true` (720p or lower) | `/oak/color/image`, `/oak/stereo/depth` (16UC1, aligned to colour), `/oak/color/camera_info` | 0.4-6.0 m | `/oak/imu` (raw BMI270); datasheet noise densities (`handheld_oak_d_lite.yaml`) |
 
 Measure the IMU noise of your own unit with `strataslam imu-noise` ([imu-noise.md](imu-noise.md)); without `noise:` the

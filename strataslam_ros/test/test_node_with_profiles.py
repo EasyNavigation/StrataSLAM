@@ -2,6 +2,7 @@
 `~/save_map` writes a valid map, `~/mark_floor_change` opens a floor."""
 
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -53,24 +54,28 @@ def ros_context():  # type: ignore[no-untyped-def]
     rclpy.shutdown()
 
 
-@pytest.mark.parametrize("name", ["handheld_rgbd", "lidar_only", "combined_aerial", "handheld_oak_d_lite"])
+@pytest.mark.parametrize("name", ["ground_camera", "ground_lidar", "ground_lidar_camera_imu", "handheld_camera_imu",
+                                  "aerial_lidar_camera_imu", "handheld_oak_d_lite"])
 def test_node_publishes_odometry_and_saves_a_valid_map(name: str, tmp_path: Path) -> None:
     bag_dir = tmp_path / "sim"
     export_bag(bag_dir, PROFILES / f"{name}.yaml", seconds=25.0)
+    if name == "ground_camera":  # the bag carries the wheel odometry the profile asks for: TF odom -> base_link
+        assert re.search(r"name: /tf$", (bag_dir / "bag" / "metadata.yaml").read_text(), re.MULTILINE)
     map_dir = tmp_path / "map"
     profile = profile_with_map_dir(PROFILES / f"{name}.yaml", map_dir, tmp_path / "profiles" / f"{name}.yaml")
-    # Where the vocabulary comes from: the profile, as a path relative to it (handheld_rgbd) or as `default`, the one
-    # shipped (handheld_oak_d_lite); nowhere (combined_aerial: the node must say at the end that no visual loop could
-    # close); or the launch (lidar_only).
+    # Where the vocabulary comes from: the profile, as a path relative to it (handheld_camera_imu) or as `default`, the
+    # one shipped (ground_camera, ground_lidar_camera_imu, handheld_oak_d_lite); nowhere (aerial_lidar_camera_imu: the
+    # node must say at the end that no visual loop could close); or the launch (ground_lidar). ground_camera also runs
+    # with the wheel odometry the bag carries as TF (odom -> base_link).
     vocabulary = []
     text = profile.read_text()
     line = next(ln for ln in text.splitlines() if ln.lstrip().startswith(("vocabulary:", "# vocabulary:")))
-    if name == "handheld_rgbd":
+    if name == "handheld_camera_imu":
         shutil.copy(bag_dir / "vocab.bin", profile.parent / "vocab.bin")
         profile.write_text(text.replace(line, "  vocabulary: vocab.bin", 1))
-    elif name == "combined_aerial":
+    elif name == "aerial_lidar_camera_imu":
         profile.write_text(text.replace(line, "", 1))
-    elif name == "lidar_only":
+    elif name == "ground_lidar":
         vocabulary = [f"vocabulary:={bag_dir / 'vocab.bin'}"]
 
     log_path = tmp_path / "launch.log"
@@ -109,7 +114,7 @@ def test_node_publishes_odometry_and_saves_a_valid_map(name: str, tmp_path: Path
         manifest = mapio.read_manifest(map_dir)
         assert len(manifest["floors"]) >= 1
 
-        if name == "handheld_rgbd":  # manual floor change
+        if name == "handheld_camera_imu":  # manual floor change
             r = node.call(node.mark, MarkFloorChange.Request(transition_type="elevator", target_floor=-1))
             assert r.success and r.floor == 1
             end = time.monotonic() + 15.0  # the next floor_state comes with the next frame
@@ -131,13 +136,13 @@ def test_node_publishes_odometry_and_saves_a_valid_map(name: str, tmp_path: Path
     text = log_path.read_text()
     assert "loop closures accepted" in text, text[-3000:]  # the summary of save_map
     off = "visual loop closure was disabled for the whole run: no vocabulary"
-    if name == "handheld_rgbd":
+    if name == "handheld_camera_imu":
         assert f"visual vocabulary: {profile.parent / 'vocab.bin'} (" in text and "from the profile)" in text, text[-3000:]
-    if name == "handheld_oak_d_lite":
+    if name in ("ground_camera", "ground_lidar_camera_imu", "handheld_oak_d_lite"):
         assert "vocabularies/tum_rgbd.bin (9964 words, from the profile)" in text, text[-3000:]
-    if name == "lidar_only":
+    if name == "ground_lidar":
         assert "words, from the launch)" in text, text[-3000:]
-    if name == "combined_aerial":
+    if name == "aerial_lidar_camera_imu":
         assert off in text, text[-3000:]
     else:
         assert off not in text, text[-3000:]

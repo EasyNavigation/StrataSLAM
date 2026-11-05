@@ -41,7 +41,7 @@ install(TARGETS strataslam_node LIBRARY DESTINATION lib ARCHIVE DESTINATION lib 
 if(strataslam_sim_FOUND)
   add_executable(strataslam_sim_export_bag src/sim_bag_exporter.cpp)
   target_link_libraries(strataslam_sim_export_bag PRIVATE strataslam::sim strataslam::core)
-  ament_target_dependencies(strataslam_sim_export_bag PUBLIC rclcpp rosbag2_cpp sensor_msgs geometry_msgs tf2_msgs strataslam_msgs)
+  ament_target_dependencies(strataslam_sim_export_bag PUBLIC rclcpp rosbag2_cpp sensor_msgs geometry_msgs nav_msgs tf2_msgs strataslam_msgs)
   target_compile_options(strataslam_sim_export_bag PRIVATE ${STRATASLAM_WARNINGS})
   install(TARGETS strataslam_sim_export_bag RUNTIME DESTINATION lib/${PROJECT_NAME})
 else()

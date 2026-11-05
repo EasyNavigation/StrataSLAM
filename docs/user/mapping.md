@@ -7,7 +7,7 @@ of a two-storey building with identical floors and a staircase (scenario S03), a
 
 ```bash
 source ~/strataslam_ws/install/setup.bash
-P=$(ros2 pkg prefix strataslam_ros)/share/strataslam_ros/profiles/handheld_rgbd.yaml
+P=$(ros2 pkg prefix strataslam_ros)/share/strataslam_ros/profiles/handheld_camera_imu.yaml
 # 1. A rosbag of the simulated building, its ground truth (trajectory.tum) and a visual vocabulary for it.
 ros2 run strataslam_ros strataslam_sim_export_bag S03 ~/strataslam_demo --profile $P
 # 2. Check the data against the profile: every row should be ✔ (exit code 0).

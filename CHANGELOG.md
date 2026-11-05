@@ -4,12 +4,18 @@
 
 ### Removed
 
+- The example profiles `handheld_rgbd`, `lidar_only` and `combined_aerial`: replaced by one template per kind of robot
+  (see Added).
 - Camera presets (`camera: {preset: ...}`, `imu: {noise_preset: ...}`, `strataslam_ros/presets/`): the profile is the
   whole configuration and a saved map keeps all of it (ADR-0053). A profile with `preset:` is refused with what to
   write instead; the values of the tested cameras are in the example profiles and in `docs/user/profiles.md`.
   `strataslam doctor --preset-dir` and the node's `preset_dir` parameter are gone.
 
 ### Added
+- The project logo and the CI, coverage (Codecov), licence, ROS 2 and C++ badges in the README (`docs/media/logo.png`); `scripts/check_links.py` also checks the `src` and `href` of HTML tags.
+- One template profile per kind of robot (ADR-0056): `ground_camera`, `ground_lidar`, `ground_lidar_camera_imu`,
+  `handheld_camera_imu`, `aerial_lidar_camera_imu` (and `handheld_oak_d_lite`). The simulator bag exporter writes the
+  wheel odometry when the profile enables it.
 - A visual vocabulary ships with `strataslam_ros` (`vocabularies/tum_rgbd.bin`, trained on TUM RGB-D, CC BY 4.0):
   `fusion.vocabulary: default`, used by the example profiles with a camera (ADR-0054); `fusion.vocabulary` in the profile;
   `save_map` reports the loop closures and repeats that visual loop closure was off without a vocabulary.

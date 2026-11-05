@@ -1,3 +1,16 @@
+<p align="center">
+  <img src="docs/media/logo.png" alt="StrataSLAM logo" width="200">
+</p>
+
+<p align="center">
+  <a href="https://github.com/EasyNavigation/StrataSLAM/actions/workflows/ci.yml"><img src="https://github.com/EasyNavigation/StrataSLAM/actions/workflows/ci.yml/badge.svg?branch=main" alt="ci"></a>
+  <a href="https://github.com/EasyNavigation/StrataSLAM/actions/workflows/nightly.yml"><img src="https://github.com/EasyNavigation/StrataSLAM/actions/workflows/nightly.yml/badge.svg" alt="nightly"></a>
+  <a href="https://codecov.io/gh/EasyNavigation/StrataSLAM"><img src="https://codecov.io/gh/EasyNavigation/StrataSLAM/branch/main/graph/badge.svg" alt="coverage"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License: Apache-2.0"></a>
+  <a href="docs/user/install.md"><img src="https://img.shields.io/badge/ROS%202-Jazzy-22314E.svg" alt="ROS 2 Jazzy"></a>
+  <img src="https://img.shields.io/badge/C%2B%2B-17-00599C.svg" alt="C++17">
+</p>
+
 # StrataSLAM
 
 Open multi-floor 3D SLAM for ROS 2: **one point cloud per floor and a global one, without the floors
@@ -25,8 +38,8 @@ source /opt/ros/jazzy/setup.bash
 src/strataslam/scripts/install_deps.sh ros          # apt: GTSAM, Eigen, yaml-cpp, OpenCV, libpng, libjpeg, pybind11, GTest
 colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release && source install/setup.bash
 P=$(ros2 pkg prefix strataslam_ros)/share/strataslam_ros/profiles
-strataslam doctor $P/handheld_rgbd.yaml          # check sensors, TF, sync
-strataslam map   $P/handheld_rgbd.yaml           # map (ros2 launch ...)
+strataslam doctor $P/handheld_camera_imu.yaml          # check sensors, TF, sync
+strataslam map   $P/handheld_camera_imu.yaml           # map (ros2 launch ...)
 strataslam fuse  ~/strataslam_maps/<run> --anchors anchors.yaml        # fuse the floors
 strataslam export ~/strataslam_maps/<run>                              # PCD; --format ply for PLY
 ```

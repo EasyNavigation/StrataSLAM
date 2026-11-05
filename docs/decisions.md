@@ -758,7 +758,7 @@ that has them is refused with what to write instead (not "unknown key"), so that
 values. Without `imu.noise` the nominal defaults are used. `LoadOptions` and the `preset_dir` parameter of the node and
 of `validate_profile` are gone; `strataslam imu-noise` prints the `sensors.imu.noise` block.
 
-**Cost.** The D435i's values are written in two profiles (`handheld_rgbd`, `combined_aerial`). Tests:
+**Cost.** The D435i's values are written in every template that uses it (four since ADR-0056). Tests:
 `Rules.PresetKeysOfOldProfilesSayWhatToWriteInstead`, `Rules.TheImuNoiseIsTheProfilesOrTheNominalDefaults`,
 `Rules.ACameraNeedsItsThreeTopics`, and the template tests (`Profiles.*`).
 
@@ -781,3 +781,25 @@ only comes back the other way (troubleshooting).
 
 **Tests.** `Rules.TheVocabularyComesFromTheProfileRelativeToItsFolder` (`default` is a name, not a path);
 `test_node_with_profiles.py` loads it from a profile (`vocabularies/tum_rgbd.bin (9964 words, from the profile)`).
+
+## ADR-0055 · The C++ code is formatted by `.clang-format`, and CI checks it
+
+`.clang-format` (Google style, 100 columns, the line length of the Python code too) existed but had never been applied
+(audit AUD-097). It is applied to every C++ file in one commit of its own, listed in `.git-blame-ignore-revs` so that
+`git blame` skips it, and the CI job `format-cpp` fails on any file it would change. The version is pinned
+(clang-format 18, Ubuntu 24.04's): another version can format the same file differently. The commit changes no
+behaviour: the build has no new warning, the unit and ROS tests pass, and S01, S07 and S11 give the same values bit
+for bit before and after (seed 42, one thread).
+
+## ADR-0056 · One template per kind of robot
+
+The generic profiles were named after a camera or a mix (`handheld_rgbd`, `lidar_only`, `combined_aerial`), and
+`lidar_only` also had an IMU and a barometer, so none started a ground robot with a camera, or with its LiDAR alone. The
+templates are now one per kind of robot, named `<platform>_<sensors>`: `ground_camera` (with the wheel odometry as the
+motion prior, TF `odom -> base_link`), `ground_lidar`, `ground_lidar_camera_imu` (LiDAR odometry, camera and LiDAR loop
+closures, IMU for gravity only: ADR-0032), `handheld_camera_imu` and `aerial_lidar_camera_imu`; `handheld_oak_d_lite`
+stays as the example of another camera. Nothing was released with the old names, so they are not kept as aliases.
+Every template holds every option (`Profiles.TheTemplatesHoldEveryOption`) and stays valid when any commented option
+is uncommented; `external_odometry.topic` and `.frame` are alternatives, so uncommenting one comments out the other.
+Each template runs the node on a simulator bag (`test_node_with_profiles.py`); the bag exporter writes the wheel
+odometry when the profile enables it (TF, or `nav_msgs/Odometry` on its topic).

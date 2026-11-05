@@ -9,8 +9,8 @@ the maintainer's:
 - [ ] Decide the version (the `[Unreleased]` section of `CHANGELOG.md`), move it to a dated section, and create a
       signed tag (`git tag -s vX.Y.Z`).
 - [ ] Connect the repository to Zenodo and publish the release (`.zenodo.json` has the metadata); copy the DOI into
-      `CITATION.cff` (`doi:`) and into the README.
+      `CITATION.cff` (`doi:`) and into the README, as a badge next to the others (Zenodo gives its Markdown).
 - [ ] Run the nightly workflow once (`workflow_dispatch`) on the release commit: `scripts/make_results.sh`
       regenerates `docs/results.md` and `docs/scenarios.md`; commit them with the tag.
-- [ ] Decide the open items marked `TODO(decision)`: reference LiDAR, code style. (The project license is
-      Apache-2.0 and the licences of the dependencies are decided: ADR-0051.)
+- [ ] Decide the open items marked `TODO(decision)`: reference LiDAR. (The project license is Apache-2.0 and the
+      licences of the dependencies are decided: ADR-0051; the code style is applied and checked: ADR-0055.)

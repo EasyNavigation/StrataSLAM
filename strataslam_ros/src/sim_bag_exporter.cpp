@@ -13,6 +13,7 @@
 #include <fstream>
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <iostream>
+#include <nav_msgs/msg/odometry.hpp>
 #include <rclcpp/qos.hpp>
 #include <rclcpp/serialization.hpp>
 #include <rosbag2_cpp/writer.hpp>
@@ -45,8 +46,9 @@ void write(rosbag2_cpp::Writer& w, const std::string& topic, const Msg& msg, int
   w.write(msg, topic, rclcpp::Time(ns, RCL_ROS_TIME));
 }
 
-geometry_msgs::msg::TransformStamped static_tf(const std::string& parent, const std::string& child,
-                                               const gtsam::Pose3& p, int64_t ns) {
+geometry_msgs::msg::TransformStamped transform_stamped(const std::string& parent,
+                                                       const std::string& child,
+                                                       const gtsam::Pose3& p, int64_t ns) {
   geometry_msgs::msg::TransformStamped t;
   t.header.stamp = to_time(ns);
   t.header.frame_id = parent;
@@ -114,6 +116,7 @@ int main(int argc, char** argv) {
     spec.sim.lidar = cfg.sensors.lidar.enabled;
     spec.sim.imu = cfg.sensors.imu.enabled;
     spec.sim.baro = cfg.sensors.barometer.enabled;
+    spec.sim.external_odom = cfg.sensors.external_odometry.enabled;
   }
   spec.sim.camera_hz = camera_hz;
   spec.sim.lidar_hz = lidar_hz;
@@ -137,10 +140,12 @@ int main(int argc, char** argv) {
     md.offered_qos_profiles = {rclcpp::QoS(rclcpp::KeepLast(1)).transient_local().reliable()};
     writer.create_topic(md);
     tf2_msgs::msg::TFMessage tf;
+    tf.transforms.push_back(transform_stamped(base, "camera_color_optical_frame",
+                                              spec.sim.extrinsics.T_base_camera, t0));
     tf.transforms.push_back(
-        static_tf(base, "camera_color_optical_frame", spec.sim.extrinsics.T_base_camera, t0));
-    tf.transforms.push_back(static_tf(base, "lidar_link", spec.sim.extrinsics.T_base_lidar, t0));
-    tf.transforms.push_back(static_tf(base, "imu_link", spec.sim.extrinsics.T_base_imu, t0));
+        transform_stamped(base, "lidar_link", spec.sim.extrinsics.T_base_lidar, t0));
+    tf.transforms.push_back(
+        transform_stamped(base, "imu_link", spec.sim.extrinsics.T_base_imu, t0));
     write(writer, "/tf_static", tf, t0);
   }
   const auto K = sim.intrinsics();
@@ -171,6 +176,28 @@ int main(int argc, char** argv) {
         msg.header.frame_id = base;
         msg.fluid_pressure = b.pressure_pa;
         write(writer, baro_t, msg, b.stamp);
+        break;
+      }
+      case T::Odom: {  // the wheels: a nav_msgs/Odometry topic or the TF frame -> base, as the
+                       // profile asks
+        const auto o = sim.odom(ev.index);
+        const auto& ext = cfg.sensors.external_odometry;
+        const std::string odom_frame = ext.frame.empty() ? cfg.robot.odom_frame : ext.frame;
+        auto t = transform_stamped(odom_frame, base, o.pose, o.stamp);
+        if (!ext.topic.empty()) {
+          nav_msgs::msg::Odometry msg;
+          msg.header = t.header;
+          msg.child_frame_id = base;
+          msg.pose.pose.position.x = o.pose.x();
+          msg.pose.pose.position.y = o.pose.y();
+          msg.pose.pose.position.z = o.pose.z();
+          msg.pose.pose.orientation = t.transform.rotation;
+          write(writer, ext.topic, msg, o.stamp);
+        } else {
+          tf2_msgs::msg::TFMessage tf;
+          tf.transforms.push_back(t);
+          write(writer, "/tf", tf, o.stamp);
+        }
         break;
       }
       case T::Rgbd: {
@@ -255,8 +282,6 @@ int main(int argc, char** argv) {
         write(writer, lidar_t, c, s.stamp);
         break;
       }
-      case T::Odom:
-        break;
     }
   }
   writer.close();

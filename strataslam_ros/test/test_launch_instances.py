@@ -67,7 +67,7 @@ def stop(p: subprocess.Popen) -> None:
 
 
 def test_instances_in_one_domain(tmp_path: Path) -> None:
-    profile = profile_with_map_dir(PROFILES / "lidar_only.yaml", tmp_path / "map", tmp_path / "profiles" / "lidar_only.yaml")
+    profile = profile_with_map_dir(PROFILES / "ground_lidar.yaml", tmp_path / "map", tmp_path / "profiles" / "ground_lidar.yaml")
     first = launch(profile, tmp_path / "first.log")
     others: list[subprocess.Popen] = []
     try:

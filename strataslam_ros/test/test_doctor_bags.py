@@ -9,7 +9,7 @@ from ros_helpers import PROFILES, export_bag
 
 from strataslam_tools import doctor
 
-PROFILE = PROFILES / "handheld_rgbd.yaml"
+PROFILE = PROFILES / "handheld_camera_imu.yaml"
 
 
 def run_doctor(bag: Path) -> tuple[int, dict[str, str]]:
