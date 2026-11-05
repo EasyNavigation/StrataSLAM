@@ -53,6 +53,8 @@ jobs:
       - uses: codecov/codecov-action@v5
         with:
           files: coverage.xml
+          disable_search: true  # only coverage.xml: its own search and gcov run picked up every system header
+          plugins: noop
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
 
@@ -98,7 +100,9 @@ jobs:
           name: core-binaries
           path: bin
       - run: chmod +x bin/*
-      - run: pip install -e "strataslam_tools[dev]"
+      # numpy as in ROS 2 Jazzy (Ubuntu 24.04), the platform the tools run on: the pinned mypy cannot read the stubs
+      # of numpy 2.x, so an unpinned install failed the type check on code that had not changed.
+      - run: pip install -e "strataslam_tools[dev]" "numpy==1.26.4"
       - run: ruff check .
       # mypy reads its configuration from strataslam_tools/pyproject.toml, so it runs from there.
       - run: mypy strataslam_tools
