@@ -62,7 +62,8 @@ artifacts loads it today.
 | OpenCV | OpenCV, libopencv-dev, libopencv_* | 4.6 | Apache-2.0 | ORB, PnP RANSAC (not imgcodecs: on Ubuntu it loads GDAL and poppler, GPL; ADR-0047) | apt | active |
 | Google Benchmark | benchmark | 1.8 | Apache-2.0 | Performance benchmarks | apt | active |
 | pybind11 | pybind11 | 2.11 | BSD-3-Clause | Python bindings (profile validation from the launch file) | apt | active |
-| Rerun | rerun-sdk, rerun | 0.22.1 with ROS 2 Jazzy (numpy 1.x), any later otherwise | MIT | Live view of a run (`viewer:=true`; optional extra `viewer`, not linked) | pip | active |
+| Rerun | rerun-sdk, rerun | 0.22.1 with ROS 2 Jazzy (numpy 1.x), any later otherwise | MIT | Live view of a run (`viewer:=true`; optional extra `viewer`, 0.22.1; not linked) | pip | active |
+| Apache Arrow (Python) | pyarrow | 16.0.0 with ROS 2 Jazzy (numpy 1.x; later releases need numpy 2), any otherwise | Apache-2.0 | Imported by Rerun; installed with it for the live view (optional extra `viewer`) | pip | active |
 | matplotlib | matplotlib | >= 3.6 (tested 3.11) | PSF-2.0 | Plots of `strataslam imu-noise --plot` and the documentation scripts (optional extra `plot`) | pip | active |
 | Boost | Boost, libboost_* | 1.83 | BSL-1.0 | filesystem, serialization, timer, required by GTSAM | apt (through GTSAM) | transitive |
 | oneTBB | TBB, libtbb, libtbbmalloc | 2021.11 | Apache-2.0 | GTSAM's parallel elimination | apt (through GTSAM) | transitive |

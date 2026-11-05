@@ -64,9 +64,9 @@ def _launch_setup(context, *args, **kwargs):
     if LaunchConfiguration("viewer").perform(context).lower() in ("true", "1", "yes"):
         try:
             import rerun  # noqa: F401  (checked here, so a missing Rerun stops the launch with its fix)
-        except ImportError:
-            raise RuntimeError("viewer:=true needs Rerun: pip install rerun-sdk==0.22.1 "
-                               "(the last release that works with the numpy 1.x of ROS 2 Jazzy)") from None
+        except ImportError as e:  # not installed, or a dependency that does not load (pyarrow built for numpy 2)
+            raise RuntimeError(f"viewer:=true needs Rerun ({e}): pip install rerun-sdk==0.22.1 pyarrow==16.0.0 "
+                               "(the releases that work with the numpy 1.x of ROS 2 Jazzy)") from None
         # A bag starts once the viewer listens (so it sees every pose), and the floor cloud is sent every second.
         params.update({"wait_for_viewer_s": 30.0, "cloud_period_s": 1.0})
         viewer = Node(package="strataslam_ros", executable="strataslam_viewer", namespace=namespace, output="screen")

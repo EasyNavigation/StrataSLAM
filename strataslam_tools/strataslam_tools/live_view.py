@@ -5,7 +5,7 @@ next to the log.
 
 ROS-free: `strataslam_ros/viewer.py` feeds it from the node's topics; anything that has poses, floor
 states and floor clouds can. Needs the optional extra `viewer` (`pip install rerun-sdk`); with ROS 2
-Jazzy, `rerun-sdk==0.22.1`, the last release that works with its numpy 1.x.
+Jazzy, `rerun-sdk==0.22.1` with `pyarrow==16.0.0`, the releases that work with its numpy 1.x.
 """
 
 from __future__ import annotations
@@ -51,8 +51,8 @@ def _rerun() -> Any:
     try:
         import rerun as rr
     except ImportError as e:
-        raise SystemExit("the live view needs Rerun: pip install rerun-sdk "
-                         "(with ROS 2 Jazzy: pip install rerun-sdk==0.22.1)") from e
+        raise SystemExit(f"the live view needs Rerun ({e}): pip install rerun-sdk "
+                         "(with ROS 2 Jazzy: pip install rerun-sdk==0.22.1 pyarrow==16.0.0)") from e
     return rr
 
 

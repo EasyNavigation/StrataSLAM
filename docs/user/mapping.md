@@ -105,7 +105,7 @@ warns and drops the frames. The log ends with the number of messages, LiDAR scan
 ## Watching a run live
 
 ```bash
-pip install --user --break-system-packages rerun-sdk==0.22.1   # once (see below)
+pip install --user --break-system-packages rerun-sdk==0.22.1 pyarrow==16.0.0   # once (see below)
 ros2 launch strataslam_ros strataslam.launch.py profile:=profile.yaml viewer:=true [bag:=/path/to/bag]
 ```
 
@@ -149,5 +149,7 @@ at the result, until you close it or press Ctrl+C. The question needs Tk (`pytho
 already open is reused and left open.
 
 ROS 2 Jazzy ships numpy 1.x, and Rerun 0.23 and later need numpy 2: install 0.22.1, the last release that works
-with it (installing a later one would replace the numpy that ROS's compiled packages use). Outside ROS any recent
-`rerun-sdk` works (`pip install -e "strataslam_tools[viewer]"`).
+with it (installing a later one would replace the numpy that ROS's compiled packages use), with pyarrow 16.0.0, which
+Rerun imports: pip would otherwise bring the latest pyarrow, which refuses to load with numpy 1.x ("pyarrow requires
+NumPy 2.0 or newer"), and Rerun with it. `pip install -e "strataslam_tools[viewer]"` installs these
+two. Outside ROS, with numpy 2, any recent `rerun-sdk` works.

@@ -12,8 +12,9 @@ dependencies = ["numpy>=1.26", "pyyaml>=6.0"]
 [project.optional-dependencies]
 dev = ["pytest>=7.4", "open3d>=0.18", "ruff==0.17.3", "mypy==1.9.0", "types-PyYAML>=6.0"]
 plot = ["matplotlib>=3.6"]
-# Live view (strataslam_tools.live_view, launch argument viewer:=true). ROS 2 Jazzy ships numpy 1.x: rerun-sdk 0.22.1.
-viewer = ["rerun-sdk>=0.22"]
+# Live view (strataslam_tools.live_view, launch argument viewer:=true). ROS 2 Jazzy ships numpy 1.x: rerun-sdk 0.22.1,
+# the last release for it, with pyarrow 16.0.0, which it imports (a recent pyarrow refuses to load with numpy 1.x).
+viewer = ["rerun-sdk==0.22.1", "pyarrow==16.0.0"]
 
 [project.scripts]
 strataslam = "strataslam_tools.cli:main"
