@@ -44,7 +44,7 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
-      - run: scripts/install_deps.sh core && sudo apt-get install -y gcovr
+      - run: scripts/install_deps.sh core && sudo apt-get install -y --no-install-recommends gcovr
       - run: cmake -S strataslam_core -B build -DCMAKE_BUILD_TYPE=Debug -DSTRATASLAM_ENABLE_COVERAGE=ON
       - run: cmake --build build -j 2  # two jobs: a GTSAM translation unit takes over 1 GB; -j alone ran the 16 GB runner out of memory
       - run: ctest --test-dir build --output-on-failure -j2
@@ -129,7 +129,7 @@ jobs:
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v5
-      - run: scripts/install_deps.sh core && sudo apt-get install -y clang-tidy libomp-dev
+      - run: scripts/install_deps.sh core && sudo apt-get install -y --no-install-recommends clang-tidy libomp-dev
       - run: cmake -S superbuild -B build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
       - run: run-clang-tidy -p build -quiet 'strataslam_core/src/.*\.cpp$'
 
@@ -139,7 +139,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
-      - run: sudo apt-get update && sudo apt-get install -y clang-format-18
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends clang-format-18
       - run: git ls-files -z '*.cpp' '*.hpp' | xargs -0 clang-format-18 --dry-run --Werror
 
   license-audit:
