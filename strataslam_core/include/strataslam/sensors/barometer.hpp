@@ -30,7 +30,8 @@ class BaroFilter {
   double temperature_k_, tau_s_;
   std::optional<double> p_ref_;
   std::optional<double> base_station_pa_;  ///< latest base-station pressure, if any
-  std::optional<double> base_station_ref_; ///< base-station pressure when the rover reference was set
+  std::optional<double>
+      base_station_ref_;  ///< base-station pressure when the rover reference was set
   std::optional<double> height_;
   Timestamp last_stamp_ = 0;
 };

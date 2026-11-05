@@ -1,8 +1,8 @@
+#include "strataslam/evaluation/metrics.hpp"
+
 #include <gtest/gtest.h>
 
 #include <random>
-
-#include "strataslam/evaluation/metrics.hpp"
 
 using namespace strataslam;
 using namespace strataslam::eval;
@@ -14,7 +14,8 @@ std::vector<TimedPose> line(int n, double speed = 1.0, double dt_s = 0.1) {
   for (int i = 0; i < n; ++i) {
     const double s = i * dt_s;
     // Gentle curve so that alignment is well-conditioned in 3D.
-    gtsam::Pose3 p(gtsam::Rot3::Yaw(0.2 * s), Eigen::Vector3d(speed * s, 2.0 * std::sin(0.3 * s), 0.3 * std::cos(0.2 * s)));
+    gtsam::Pose3 p(gtsam::Rot3::Yaw(0.2 * s),
+                   Eigen::Vector3d(speed * s, 2.0 * std::sin(0.3 * s), 0.3 * std::cos(0.2 * s)));
     t.push_back({static_cast<Timestamp>(i * dt_s * 1e9), p});
   }
   return t;
@@ -41,7 +42,9 @@ TEST(Metrics, AteKnownNoiseLevel) {
   const auto gt = line(200);
   auto est = gt;
   for (size_t i = 0; i < est.size(); ++i) {
-    est[i].pose = gtsam::Pose3(est[i].pose.rotation(), Eigen::Vector3d(est[i].pose.translation() + Eigen::Vector3d(0, 0, i % 2 ? 0.05 : -0.05)));
+    est[i].pose = gtsam::Pose3(
+        est[i].pose.rotation(),
+        Eigen::Vector3d(est[i].pose.translation() + Eigen::Vector3d(0, 0, i % 2 ? 0.05 : -0.05)));
   }
   const auto r = ate(est, gt, AlignMode::SE3);
   EXPECT_NEAR(r.rmse, 0.05, 2e-3);
@@ -63,14 +66,16 @@ TEST(Metrics, FourDofAlignmentRecoversPose4ExactlyAndIgnoresTilt) {
   EXPECT_LT((est.translation() - X.translation()).norm(), 1e-9);
 
   const auto gt = line(100);
-  const auto est_traj = transformed(gt, gtsam::Pose3(gtsam::Rot3::Yaw(1.0), Eigen::Vector3d(1, 2, 3)).inverse());
+  const auto est_traj =
+      transformed(gt, gtsam::Pose3(gtsam::Rot3::Yaw(1.0), Eigen::Vector3d(1, 2, 3)).inverse());
   EXPECT_NEAR(ate(est_traj, gt, AlignMode::FourDof).rmse, 0.0, 1e-9);
 }
 
 TEST(Metrics, RpeConstantScaleDrift) {
   const auto gt = line(100);
   std::vector<TimedPose> est = gt;
-  for (auto& p : est) p.pose = gtsam::Pose3(p.pose.rotation(), Eigen::Vector3d(p.pose.translation() * 1.1));
+  for (auto& p : est)
+    p.pose = gtsam::Pose3(p.pose.rotation(), Eigen::Vector3d(p.pose.translation() * 1.1));
   const auto r = rpe(est, gt, static_cast<int64_t>(1e9));
   // Translation over 1 s is ~1 m (+0.1 m per metre travelled): error is ~0.1 m.
   EXPECT_NEAR(r.trans_rmse, 0.1, 0.02);

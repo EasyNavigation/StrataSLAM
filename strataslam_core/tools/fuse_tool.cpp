@@ -1,5 +1,6 @@
 // Offline floor fusion of a saved map: reads <map_dir>, writes <map_dir>/fused/.
-// Usage: fuse_tool <map_dir> [--formulation lie4|se3soft|euler] [--anchors anchors.yaml] [--floor-height-prior m]
+// Usage: fuse_tool <map_dir> [--formulation lie4|se3soft|euler] [--anchors anchors.yaml]
+// [--floor-height-prior m]
 #include <cstdio>
 #include <sstream>
 #include <string>
@@ -8,7 +9,10 @@
 
 int main(int argc, char** argv) {
   if (argc < 2) {
-    std::fprintf(stderr, "usage: %s <map_dir> [--formulation lie4|se3soft|euler] [--anchors file.yaml] [--floor-height-prior m] [--stacking on|off] [--same-level A,B;C,D]\n", argv[0]);
+    std::fprintf(stderr,
+                 "usage: %s <map_dir> [--formulation lie4|se3soft|euler] [--anchors file.yaml] "
+                 "[--floor-height-prior m] [--stacking on|off] [--same-level A,B;C,D]\n",
+                 argv[0]);
     return 2;
   }
   const std::string dir = argv[1];
@@ -59,7 +63,8 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "%s\n", w.error().message.c_str());
     return 1;
   }
-  for (const auto& warn : result.value().warnings) std::fprintf(stderr, "warning: %s\n", warn.c_str());
+  for (const auto& warn : result.value().warnings)
+    std::fprintf(stderr, "warning: %s\n", warn.c_str());
   std::printf("%s", result.value().transforms_yaml().c_str());
   return 0;
 }

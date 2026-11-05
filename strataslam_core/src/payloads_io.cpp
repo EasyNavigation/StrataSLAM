@@ -46,7 +46,8 @@ class ByteReader {
   bool get_array(std::vector<T>& v, size_t n) {
     if (n > (b_.size() - pos_) / sizeof(T)) return false;
     v.resize(n);
-    if (n == 0) return true;  // memcpy from/to a null pointer is undefined even for 0 bytes (audit A6-03)
+    if (n == 0)
+      return true;  // memcpy from/to a null pointer is undefined even for 0 bytes (audit A6-03)
     std::memcpy(v.data(), b_.data() + pos_, n * sizeof(T));
     pos_ += n * sizeof(T);
     return true;

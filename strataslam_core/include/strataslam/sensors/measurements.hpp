@@ -1,11 +1,11 @@
 #pragma once
 
+#include <gtsam/geometry/Pose3.h>
+
+#include <Eigen/Core>
 #include <array>
 #include <cstdint>
 #include <vector>
-
-#include <Eigen/Core>
-#include <gtsam/geometry/Pose3.h>
 
 #include "strataslam/common/types.hpp"
 
@@ -69,9 +69,9 @@ struct RgbdFrame {
 
 /// 3D LiDAR scan; points are in the sensor frame at their own measurement time.
 struct LidarScan {
-  Timestamp stamp = 0;                 ///< start of the sweep
+  Timestamp stamp = 0;  ///< start of the sweep
   std::vector<Eigen::Vector3f> points;
-  std::vector<float> time_offsets_s;   ///< per point, from `stamp`; empty if unknown
+  std::vector<float> time_offsets_s;  ///< per point, from `stamp`; empty if unknown
 };
 
 /// Fixed sensor extrinsics (T_base_sensor).

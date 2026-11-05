@@ -16,7 +16,10 @@ int main(int argc, char** argv) {
   cfg.threads = 4;
   if (argc > 3) cfg.deskew = std::stoi(argv[3]) != 0;
   if (argc > 4) cfg.max_correspondence = std::stod(argv[4]);
-  if (argc > 5) { cfg.scan_voxel = std::stod(argv[5]); cfg.map_voxel = cfg.scan_voxel; }
+  if (argc > 5) {
+    cfg.scan_voxel = std::stod(argv[5]);
+    cfg.map_voxel = cfg.scan_voxel;
+  }
   if (argc > 6) cfg.threads = std::stoi(argv[6]);
   if (argc > 7) cfg.pin_degenerate = std::stoi(argv[7]) != 0;
   if (argc > 8) cfg.degeneracy_threshold = std::stod(argv[8]);
@@ -32,8 +35,14 @@ int main(int argc, char** argv) {
     f.lidar = &scan;
     const auto r = fe.process(f);
     const auto gt = sim.gt_pose(scan.stamp);
-    const Eigen::Vector3d d = r.valid ? Eigen::Vector3d(r.T_odom_base.translation() - gt.translation()) : Eigen::Vector3d::Zero();
-    std::printf("%4zu pts=%5zu valid=%d state=%d fit=%.2f mineig=%.3f kf=%d err=%.3f d=(%.3f %.3f %.3f) gt=(%.1f %.1f %.1f)\n", i, scan.points.size(), r.valid,
-                int(r.quality.state), r.quality.fitness, r.quality.min_eigenvalue, r.is_keyframe, r.valid ? d.norm() : -1.0, d.x(), d.y(), d.z(), gt.x(), gt.y(), gt.z());
+    const Eigen::Vector3d d = r.valid
+                                  ? Eigen::Vector3d(r.T_odom_base.translation() - gt.translation())
+                                  : Eigen::Vector3d::Zero();
+    std::printf(
+        "%4zu pts=%5zu valid=%d state=%d fit=%.2f mineig=%.3f kf=%d err=%.3f d=(%.3f %.3f %.3f) "
+        "gt=(%.1f %.1f %.1f)\n",
+        i, scan.points.size(), r.valid, int(r.quality.state), r.quality.fitness,
+        r.quality.min_eigenvalue, r.is_keyframe, r.valid ? d.norm() : -1.0, d.x(), d.y(), d.z(),
+        gt.x(), gt.y(), gt.z());
   }
 }

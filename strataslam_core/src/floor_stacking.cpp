@@ -3,10 +3,9 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
-#include <vector>
-
 #include <opencv2/core.hpp>
 #include <opencv2/imgproc.hpp>
+#include <vector>
 
 namespace strataslam {
 
@@ -24,26 +23,33 @@ Pts structure_points(const PointCloud& c, const StackingOptions& o) {
 int count_cells(const Pts& p, double cell) {
   std::vector<std::pair<int, int>> k;
   k.reserve(p.size());
-  for (const auto& q : p) k.emplace_back(static_cast<int>(std::floor(q.x() / cell)), static_cast<int>(std::floor(q.y() / cell)));
+  for (const auto& q : p)
+    k.emplace_back(static_cast<int>(std::floor(q.x() / cell)),
+                   static_cast<int>(std::floor(q.y() / cell)));
   std::sort(k.begin(), k.end());
   return static_cast<int>(std::unique(k.begin(), k.end()) - k.begin());
 }
 
 struct Raster {
-  cv::Mat img;        ///< CV_32F, 1 where occupied
+  cv::Mat img;             ///< CV_32F, 1 where occupied
   Eigen::Vector2d origin;  ///< metric position of pixel (0, 0)
   int cells = 0;
 };
 
 Raster rasterize(const Pts& pts, double cell, bool dilate) {
   Eigen::Vector2d lo(1e18, 1e18), hi(-1e18, -1e18);
-  for (const auto& p : pts) { lo = lo.cwiseMin(p); hi = hi.cwiseMax(p); }
+  for (const auto& p : pts) {
+    lo = lo.cwiseMin(p);
+    hi = hi.cwiseMax(p);
+  }
   Raster r;
   r.origin = lo - Eigen::Vector2d(cell, cell);
-  const int w = static_cast<int>(std::ceil((hi.x() - lo.x()) / cell)) + 3, h = static_cast<int>(std::ceil((hi.y() - lo.y()) / cell)) + 3;
+  const int w = static_cast<int>(std::ceil((hi.x() - lo.x()) / cell)) + 3,
+            h = static_cast<int>(std::ceil((hi.y() - lo.y()) / cell)) + 3;
   r.img = cv::Mat::zeros(h, w, CV_32F);
   for (const auto& p : pts) {
-    const int u = static_cast<int>((p.x() - r.origin.x()) / cell), v = static_cast<int>((p.y() - r.origin.y()) / cell);
+    const int u = static_cast<int>((p.x() - r.origin.x()) / cell),
+              v = static_cast<int>((p.y() - r.origin.y()) / cell);
     if (u >= 0 && u < w && v >= 0 && v < h) r.img.at<float>(v, u) = 1.f;
   }
   r.cells = cv::countNonZero(r.img);
@@ -51,17 +57,23 @@ Raster rasterize(const Pts& pts, double cell, bool dilate) {
   return r;
 }
 
-struct Peak { double score = -1; double yaw = 0; Eigen::Vector2d t = Eigen::Vector2d::Zero(); };
+struct Peak {
+  double score = -1;
+  double yaw = 0;
+  Eigen::Vector2d t = Eigen::Vector2d::Zero();
+};
 
-/// Scores of every candidate (yaw, translation): the fraction of b's (rotated) cells that fall on a's
-/// dilated structure. `a_dilated` is the larger structure, `b` the smaller one.
+/// Scores of every candidate (yaw, translation): the fraction of b's (rotated) cells that fall on
+/// a's dilated structure. `a_dilated` is the larger structure, `b` the smaller one.
 struct Search {
-  std::vector<Peak> candidates;  ///< best translation of every yaw, plus every local maximum above `floor_score`
+  std::vector<Peak>
+      candidates;  ///< best translation of every yaw, plus every local maximum above `floor_score`
   Peak best;
 };
 
-Search search(const Pts& a_pts, const Pts& b_pts, double cell, double yaw0, double yaw_window, double yaw_step,
-              const Eigen::Vector2d& t0, double radius, int cells_b_for_score, double floor_score) {
+Search search(const Pts& a_pts, const Pts& b_pts, double cell, double yaw0, double yaw_window,
+              double yaw_step, const Eigen::Vector2d& t0, double radius, int cells_b_for_score,
+              double floor_score) {
   Search s;
   const Raster A = rasterize(a_pts, cell, true);
   const int R = static_cast<int>(std::ceil(radius / cell));
@@ -76,7 +88,8 @@ Search search(const Pts& a_pts, const Pts& b_pts, double cell, double yaw0, doub
     // b placed at translation t has its pixel (0,0) at metric B.origin + t; in A's raster that is
     // ((B.origin + t - A.origin) / cell). Search t in a window of +-R cells around t0.
     const Eigen::Vector2d tl0 = (B.origin + t0 - A.origin) / cell;
-    const int x0 = static_cast<int>(std::lround(tl0.x())) - R, y0 = static_cast<int>(std::lround(tl0.y())) - R;
+    const int x0 = static_cast<int>(std::lround(tl0.x())) - R,
+              y0 = static_cast<int>(std::lround(tl0.y())) - R;
     const int cw = 2 * R + B.img.cols, ch = 2 * R + B.img.rows;
     cv::Mat crop = cv::Mat::zeros(ch, cw, CV_32F);
     const cv::Rect want(x0, y0, cw, ch), have(0, 0, A.img.cols, A.img.rows);
@@ -104,22 +117,26 @@ Search search(const Pts& a_pts, const Pts& b_pts, double cell, double yaw0, doub
     cv::dilate(resp, dil, cv::Mat::ones(k, k, CV_8U));
     for (int v = 0; v < resp.rows; ++v)
       for (int u = 0; u < resp.cols; ++u)
-        if (resp.at<float>(v, u) >= dil.at<float>(v, u) && resp.at<float>(v, u) > floor_score) s.candidates.push_back(to_peak(resp.at<float>(v, u), cv::Point(u, v)));
+        if (resp.at<float>(v, u) >= dil.at<float>(v, u) && resp.at<float>(v, u) > floor_score)
+          s.candidates.push_back(to_peak(resp.at<float>(v, u), cv::Point(u, v)));
   }
   return s;
 }
 
 }  // namespace
 
-std::optional<StackingMatch> match_floor_structure(const PointCloud& a_cloud, const PointCloud& b_cloud, const Pose4& initial,
-                                                    const StackingOptions& o, std::string* why) {
+std::optional<StackingMatch> match_floor_structure(const PointCloud& a_cloud,
+                                                   const PointCloud& b_cloud, const Pose4& initial,
+                                                   const StackingOptions& o, std::string* why) {
   const auto fail = [&](const std::string& m) -> std::optional<StackingMatch> {
     if (why) *why = m;
     return std::nullopt;
   };
   Pts a = structure_points(a_cloud, o), b = structure_points(b_cloud, o);
   const int ca = count_cells(a, o.cell), cb = count_cells(b, o.cell);
-  if (ca < o.min_cells || cb < o.min_cells) return fail("too little structure (" + std::to_string(ca) + " and " + std::to_string(cb) + " cells)");
+  if (ca < o.min_cells || cb < o.min_cells)
+    return fail("too little structure (" + std::to_string(ca) + " and " + std::to_string(cb) +
+                " cells)");
   // The smaller structure is the template: its fraction on the larger one is the score.
   if (cb > ca) {
     std::string w;
@@ -128,27 +145,33 @@ std::optional<StackingMatch> match_floor_structure(const PointCloud& a_cloud, co
     StackingMatch m = *r;
     m.a_to_b = r->a_to_b.inverse();
     std::swap(m.cells_a, m.cells_b);
-    // The inverse keeps (yaw, x, y) uncertainty up to a rotation: the covariance is isotropic in xy.
+    // The inverse keeps (yaw, x, y) uncertainty up to a rotation: the covariance is isotropic in
+    // xy.
     return m;
   }
   const double yaw0 = initial.theta();
   const Eigen::Vector2d t0(initial.translation().x(), initial.translation().y());
   const double window = o.yaw_window_deg * M_PI / 180.0, step = o.yaw_step_deg * M_PI / 180.0;
   Search coarse = search(a, b, o.cell, yaw0, window, step, t0, o.search_radius, cb, 0.0);
-  if (coarse.best.score < o.min_score) return fail("the structures do not overlap enough (best score " + std::to_string(coarse.best.score) + ")");
+  if (coarse.best.score < o.min_score)
+    return fail("the structures do not overlap enough (best score " +
+                std::to_string(coarse.best.score) + ")");
   // Best score at a distinct pose (another place or another heading).
   double runner = 0;
   for (const auto& c : coarse.candidates) {
     const double dyaw = std::abs(Pose4::WrapAngle(c.yaw - coarse.best.yaw)) * 180.0 / M_PI;
-    if ((c.t - coarse.best.t).norm() > o.exclusion_m || dyaw > o.exclusion_deg) runner = std::max(runner, c.score);
+    if ((c.t - coarse.best.t).norm() > o.exclusion_m || dyaw > o.exclusion_deg)
+      runner = std::max(runner, c.score);
   }
   const bool ambiguous = runner > 0 && coarse.best.score < o.peak_ratio * runner;
   if (ambiguous && !o.allow_ambiguous)
-    return fail("ambiguous: best score " + std::to_string(coarse.best.score) + " against " + std::to_string(runner) + " at another pose");
+    return fail("ambiguous: best score " + std::to_string(coarse.best.score) + " against " +
+                std::to_string(runner) + " at another pose");
   // Refinement on a finer raster around the coarse optimum.
   const double fine = o.cell * 0.5;
   const int cb_fine = count_cells(b, fine);
-  Search refined = search(a, b, fine, coarse.best.yaw, 1.5 * step, 0.25 * step, coarse.best.t, 1.5 * o.cell + 0.5, cb_fine, 0.0);
+  Search refined = search(a, b, fine, coarse.best.yaw, 1.5 * step, 0.25 * step, coarse.best.t,
+                          1.5 * o.cell + 0.5, cb_fine, 0.0);
   const Peak& p = refined.best.score >= 0 ? refined.best : coarse.best;
   StackingMatch m;
   m.a_to_b = Pose4(p.yaw, Eigen::Vector3d(p.t.x(), p.t.y(), initial.translation().z()));

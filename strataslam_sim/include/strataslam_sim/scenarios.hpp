@@ -35,9 +35,11 @@ struct ScenarioResult {
   std::vector<strataslam::AcceptedLoop> loops;
   std::vector<strataslam::TransitionRecord> transitions;
   strataslam::eval::Report report;
-  std::optional<strataslam::FusionResult> fusion;  ///< offline floor fusion, for multi-floor scenarios that need it
-  size_t cross_floor_candidates = 0;   ///< candidates from another floor that layer 1 let through (must be 0)
-  std::vector<std::string> failures;   ///< acceptance criteria that were not met
+  std::optional<strataslam::FusionResult>
+      fusion;  ///< offline floor fusion, for multi-floor scenarios that need it
+  size_t cross_floor_candidates =
+      0;  ///< candidates from another floor that layer 1 let through (must be 0)
+  std::vector<std::string> failures;  ///< acceptance criteria that were not met
   bool passed() const { return failures.empty(); }
 };
 
@@ -53,25 +55,28 @@ std::shared_ptr<const strataslam::BowVocabulary> sim_vocabulary();
 /// per-floor 4-DoF transform error and floor height error in the map frame.
 struct FusedMetrics {
   std::map<strataslam::FloorId, strataslam::eval::FusionError> transform_error;
-  std::map<strataslam::FloorId, double> height_error;  ///< |mean z of the floor's keyframes - truth| in the map frame
+  std::map<strataslam::FloorId, double>
+      height_error;  ///< |mean z of the floor's keyframes - truth| in the map frame
   double worst_translation = 0, worst_rotation_deg = 0, worst_height = 0;
 };
-FusedMetrics evaluate_fusion(const ScenarioSpec& spec, const Simulator& sim, const ScenarioResult& result,
-                             const strataslam::FusionResult& fusion);
+FusedMetrics evaluate_fusion(const ScenarioSpec& spec, const Simulator& sim,
+                             const ScenarioResult& result, const strataslam::FusionResult& fusion);
 
 /// Anchors as a user marks them on the estimated floor clouds (ADR-0034). Each structural corner is
-/// placed where it appears in that floor's map: expressed relative to the keyframe of that floor that
-/// saw it from closest (ground truth) and carried into the map by that keyframe's *estimated* pose, so
-/// the map's own distortion is in the mark; then `sigma` of marking error. A corner no keyframe saw
-/// within `max_view` m on some floor is not marked at all. The ground truth only tells which physical
-/// corner is clicked (the user knows the building); no floor frame is fitted to it.
+/// placed where it appears in that floor's map: expressed relative to the keyframe of that floor
+/// that saw it from closest (ground truth) and carried into the map by that keyframe's *estimated*
+/// pose, so the map's own distortion is in the mark; then `sigma` of marking error. A corner no
+/// keyframe saw within `max_view` m on some floor is not marked at all. The ground truth only tells
+/// which physical corner is clicked (the user knows the building); no floor frame is fitted to it.
 struct AnchorChoice {
   bool elevator = true;  ///< elevator door frame and shaft corners
   bool stairs = false;   ///< stairwell corners
   bool building = true;  ///< inner corners of the outer walls
 };
-std::vector<strataslam::AnchorSet> make_anchors(const Simulator& sim, const ScenarioResult& result, uint64_t seed, double sigma = 0.05,
-                                              AnchorChoice choice = AnchorChoice(), double max_view = 6.0);
+std::vector<strataslam::AnchorSet> make_anchors(const Simulator& sim, const ScenarioResult& result,
+                                                uint64_t seed, double sigma = 0.05,
+                                                AnchorChoice choice = AnchorChoice(),
+                                                double max_view = 6.0);
 
 /// Ground-truth trajectory samples of the base (every `step` s), for evaluation.
 std::vector<strataslam::eval::TimedPose> ground_truth(const Simulator& sim, double step = 0.05);

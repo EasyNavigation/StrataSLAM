@@ -15,7 +15,8 @@ namespace strataslam {
 
 namespace {
 
-// "ESVB" dates from the name easyslam; kept so that vocabularies trained before the rename still load.
+// "ESVB" dates from the name easyslam; kept so that vocabularies trained before the rename still
+// load.
 constexpr char kMagic[4] = {'E', 'S', 'V', 'B'};
 
 Descriptor majority(const std::vector<Descriptor>& all, const std::vector<int>& members) {
@@ -25,7 +26,8 @@ Descriptor majority(const std::vector<Descriptor>& all, const std::vector<int>& 
   }
   Descriptor d{};
   for (size_t b = 0; b < 256; ++b) {
-    if (2 * counts[b] > static_cast<int>(members.size())) d[b / 8] |= static_cast<uint8_t>(1u << (b % 8));
+    if (2 * counts[b] > static_cast<int>(members.size()))
+      d[b / 8] |= static_cast<uint8_t>(1u << (b % 8));
   }
   return d;
 }
@@ -37,7 +39,11 @@ BowVocabulary BowVocabulary::train(const std::vector<Descriptor>& data, const Bo
   v.nodes_.push_back(Node{});
   std::mt19937_64 rng(cfg.seed);
 
-  struct Job { int node; std::vector<int> members; int level; };
+  struct Job {
+    int node;
+    std::vector<int> members;
+    int level;
+  };
   std::vector<Job> stack;
   std::vector<int> all(data.size());
   std::iota(all.begin(), all.end(), 0);
@@ -47,7 +53,8 @@ BowVocabulary BowVocabulary::train(const std::vector<Descriptor>& data, const Bo
   while (!stack.empty()) {
     Job job = std::move(stack.back());
     stack.pop_back();
-    const bool leaf = job.level >= cfg.levels || static_cast<int>(job.members.size()) < 2 * cfg.branching;
+    const bool leaf =
+        job.level >= cfg.levels || static_cast<int>(job.members.size()) < 2 * cfg.branching;
     if (leaf) {
       v.nodes_[job.node].word = static_cast<int32_t>(leaf_members.size());
       leaf_members.push_back(std::move(job.members));
@@ -62,7 +69,10 @@ BowVocabulary BowVocabulary::train(const std::vector<Descriptor>& data, const Bo
       for (int m : job.members) {
         int dmin = 1 << 20;
         for (const auto& c : cent) dmin = std::min(dmin, hamming_distance(data[m], c));
-        if (dmin > best_d) { best_d = dmin; best = m; }
+        if (dmin > best_d) {
+          best_d = dmin;
+          best = m;
+        }
       }
       cent.push_back(data[best]);
     }
@@ -73,7 +83,10 @@ BowVocabulary BowVocabulary::train(const std::vector<Descriptor>& data, const Bo
         int bc = 0, bd = 1 << 20;
         for (int c = 0; c < K; ++c) {
           const int d = hamming_distance(data[m], cent[c]);
-          if (d < bd) { bd = d; bc = c; }
+          if (d < bd) {
+            bd = d;
+            bc = c;
+          }
         }
         groups[bc].push_back(m);
       }
@@ -101,12 +114,15 @@ BowVocabulary BowVocabulary::train(const std::vector<Descriptor>& data, const Bo
     for (int m : leaf_members[w]) word_of[m] = static_cast<int>(w);
   for (int d = 0; d < n_docs; ++d) {
     std::unordered_set<int> seen;
-    for (int i = d * cfg.docs_chunk; i < std::min(static_cast<int>(data.size()), (d + 1) * cfg.docs_chunk); ++i) seen.insert(word_of[i]);
+    for (int i = d * cfg.docs_chunk;
+         i < std::min(static_cast<int>(data.size()), (d + 1) * cfg.docs_chunk); ++i)
+      seen.insert(word_of[i]);
     for (int w : seen) ++doc_freq[w];
   }
   v.idf_.resize(v.n_words_);
   for (size_t w = 0; w < v.n_words_; ++w) {
-    v.idf_[w] = std::max(0.05f, static_cast<float>(std::log((n_docs + 1.0) / (doc_freq[w] + 1.0))) + 0.1f);
+    v.idf_[w] =
+        std::max(0.05f, static_cast<float>(std::log((n_docs + 1.0) / (doc_freq[w] + 1.0))) + 0.1f);
   }
   return v;
 }
@@ -118,7 +134,10 @@ uint32_t BowVocabulary::lookup(const Descriptor& d) const {
     int best_d = 1 << 20;
     for (int32_t c = nodes_[n].first_child; c < nodes_[n].first_child + nodes_[n].n_children; ++c) {
       const int dist = hamming_distance(d, nodes_[c].centroid);
-      if (dist < best_d) { best_d = dist; best = c; }
+      if (dist < best_d) {
+        best_d = dist;
+        best = c;
+      }
     }
     n = best;
   }
@@ -135,7 +154,8 @@ BowVector BowVocabulary::transform(const std::vector<Descriptor>& descriptors) c
   std::sort(out.begin(), out.end());
   float sum = 0;
   for (const auto& p : out) sum += p.second;
-  if (sum > 0) for (auto& p : out) p.second /= sum;
+  if (sum > 0)
+    for (auto& p : out) p.second /= sum;
   return out;
 }
 
@@ -143,9 +163,14 @@ double BowVocabulary::score(const BowVector& a, const BowVector& b) {
   double s = 0;
   size_t i = 0, j = 0;
   while (i < a.size() && j < b.size()) {
-    if (a[i].first == b[j].first) { s += std::min(a[i].second, b[j].second); ++i; ++j; }
-    else if (a[i].first < b[j].first) ++i;
-    else ++j;
+    if (a[i].first == b[j].first) {
+      s += std::min(a[i].second, b[j].second);
+      ++i;
+      ++j;
+    } else if (a[i].first < b[j].first)
+      ++i;
+    else
+      ++j;
   }
   return s;
 }
@@ -153,7 +178,8 @@ double BowVocabulary::score(const BowVector& a, const BowVector& b) {
 Result<void> BowVocabulary::save(const std::string& path) const {
   std::ofstream out(path, std::ios::binary);
   if (!out) return Error{path + ": cannot open for writing"};
-  const uint32_t version = 1, n_nodes = static_cast<uint32_t>(nodes_.size()), n_words = static_cast<uint32_t>(n_words_);
+  const uint32_t version = 1, n_nodes = static_cast<uint32_t>(nodes_.size()),
+                 n_words = static_cast<uint32_t>(n_words_);
   out.write(kMagic, 4);
   out.write(reinterpret_cast<const char*>(&version), 4);
   out.write(reinterpret_cast<const char*>(&n_nodes), 4);
@@ -164,7 +190,8 @@ Result<void> BowVocabulary::save(const std::string& path) const {
     out.write(reinterpret_cast<const char*>(&n.n_children), 4);
     out.write(reinterpret_cast<const char*>(&n.word), 4);
   }
-  out.write(reinterpret_cast<const char*>(idf_.data()), static_cast<std::streamsize>(idf_.size() * 4));
+  out.write(reinterpret_cast<const char*>(idf_.data()),
+            static_cast<std::streamsize>(idf_.size() * 4));
   if (!out) return Error{path + ": write failed"};
   return {};
 }
@@ -178,8 +205,10 @@ Result<BowVocabulary> BowVocabulary::load(const std::string& path) {
   in.read(reinterpret_cast<char*>(&version), 4);
   in.read(reinterpret_cast<char*>(&n_nodes), 4);
   in.read(reinterpret_cast<char*>(&n_words), 4);
-  if (!in || std::memcmp(magic, kMagic, 4) != 0) return Error{path + ": bad vocabulary magic number"};
-  if (version != 1) return Error{path + ": unsupported vocabulary version " + std::to_string(version)};
+  if (!in || std::memcmp(magic, kMagic, 4) != 0)
+    return Error{path + ": bad vocabulary magic number"};
+  if (version != 1)
+    return Error{path + ": unsupported vocabulary version " + std::to_string(version)};
   if (n_nodes > (1u << 26)) return Error{path + ": implausible vocabulary size"};
   BowVocabulary v;
   v.nodes_.resize(n_nodes);
@@ -199,8 +228,10 @@ Result<BowVocabulary> BowVocabulary::load(const std::string& path) {
 bool BowVocabulary::operator==(const BowVocabulary& o) const {
   if (nodes_.size() != o.nodes_.size() || idf_ != o.idf_) return false;
   for (size_t i = 0; i < nodes_.size(); ++i) {
-    if (nodes_[i].centroid != o.nodes_[i].centroid || nodes_[i].first_child != o.nodes_[i].first_child ||
-        nodes_[i].n_children != o.nodes_[i].n_children || nodes_[i].word != o.nodes_[i].word) return false;
+    if (nodes_[i].centroid != o.nodes_[i].centroid ||
+        nodes_[i].first_child != o.nodes_[i].first_child ||
+        nodes_[i].n_children != o.nodes_[i].n_children || nodes_[i].word != o.nodes_[i].word)
+      return false;
   }
   return true;
 }
@@ -212,8 +243,9 @@ void BowDatabase::add(KeyframeId id, SessionId session, Timestamp stamp, const B
   for (const auto& [w, weight] : vec) inverted_[w].push_back({idx, weight});
 }
 
-std::vector<BowDatabase::Candidate> BowDatabase::query(const BowVector& q, SessionId session, Timestamp stamp,
-                                                       double exclude_recent_s, double min_score, size_t max_results) const {
+std::vector<BowDatabase::Candidate> BowDatabase::query(const BowVector& q, SessionId session,
+                                                       Timestamp stamp, double exclude_recent_s,
+                                                       double min_score, size_t max_results) const {
   std::unordered_map<uint32_t, double> acc;
   for (const auto& [w, weight] : q) {
     if (w >= inverted_.size()) continue;
@@ -225,7 +257,8 @@ std::vector<BowDatabase::Candidate> BowDatabase::query(const BowVector& q, Sessi
     if (e.session == session && (stamp - e.stamp) * 1e-9 < exclude_recent_s) continue;
     if (s >= min_score) out.push_back({e.id, s});
   }
-  std::sort(out.begin(), out.end(), [](const Candidate& a, const Candidate& b) { return a.score > b.score; });
+  std::sort(out.begin(), out.end(),
+            [](const Candidate& a, const Candidate& b) { return a.score > b.score; });
   if (out.size() > max_results) out.resize(max_results);
   return out;
 }

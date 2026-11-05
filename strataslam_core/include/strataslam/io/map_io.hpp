@@ -1,12 +1,11 @@
 #pragma once
 
+#include <Eigen/Core>
+#include <Eigen/Geometry>
 #include <map>
 #include <optional>
 #include <string>
 #include <vector>
-
-#include <Eigen/Core>
-#include <Eigen/Geometry>
 
 #include "strataslam/common/result.hpp"
 #include "strataslam/common/types.hpp"
@@ -20,8 +19,8 @@ struct KeyframeRecord {
   KeyframeId id = 0;
   Timestamp stamp_ns = 0;
   SessionId session = 0;
-  Eigen::Vector3d t = Eigen::Vector3d::Zero();                    ///< in the floor frame
-  Eigen::Quaterniond q = Eigen::Quaterniond::Identity();          ///< (x, y, z, w) on disk
+  Eigen::Vector3d t = Eigen::Vector3d::Zero();            ///< in the floor frame
+  Eigen::Quaterniond q = Eigen::Quaterniond::Identity();  ///< (x, y, z, w) on disk
 
   bool operator==(const KeyframeRecord& o) const {
     return id == o.id && stamp_ns == o.stamp_ns && session == o.session && t == o.t &&
@@ -30,11 +29,11 @@ struct KeyframeRecord {
 };
 
 struct EdgeRecord {
-  std::string type;                  ///< e.g. "odometry", "loop", "baro"
+  std::string type;  ///< e.g. "odometry", "loop", "baro"
   KeyframeId from = 0, to = 0;
   std::vector<double> measurement;
   uint32_t info_dim = 0;
-  std::vector<double> information;   ///< upper triangle, row-major, info_dim*(info_dim+1)/2
+  std::vector<double> information;  ///< upper triangle, row-major, info_dim*(info_dim+1)/2
 
   bool operator==(const EdgeRecord& o) const {
     return type == o.type && from == o.from && to == o.to && measurement == o.measurement &&
@@ -44,7 +43,7 @@ struct EdgeRecord {
 
 struct FloorMetadata {
   FloorId id = 0;
-  Eigen::Vector3d gravity = Eigen::Vector3d(0, 0, -1);        ///< unit vector, floor frame
+  Eigen::Vector3d gravity = Eigen::Vector3d(0, 0, -1);  ///< unit vector, floor frame
   Eigen::Vector3d ground_normal = Eigen::Vector3d(0, 0, 1);
   std::optional<double> reference_pressure_pa;
   std::vector<std::string> sensors;
@@ -55,7 +54,8 @@ struct FloorMetadata {
   bool operator==(const FloorMetadata& o) const {
     return id == o.id && gravity == o.gravity && ground_normal == o.ground_normal &&
            reference_pressure_pa == o.reference_pressure_pa && sensors == o.sensors &&
-           sessions == o.sessions && alignment_residual_rad == o.alignment_residual_rad && altitude_m == o.altitude_m;
+           sessions == o.sessions && alignment_residual_rad == o.alignment_residual_rad &&
+           altitude_m == o.altitude_m;
   }
 };
 

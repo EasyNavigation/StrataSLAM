@@ -1,51 +1,51 @@
-// strataslam_node: hosts the ROS-free core pipeline (SlamSystem) behind the topics, services and TF of
-// the plan (section 11). All SLAM logic lives in strataslam_core; this file only converts messages.
+// strataslam_node: hosts the ROS-free core pipeline (SlamSystem) behind the topics, services and TF
+// of the plan (section 11). All SLAM logic lives in strataslam_core; this file only converts
+// messages.
+#include <message_filters/subscriber.h>
+#include <message_filters/sync_policies/approximate_time.h>
+#include <message_filters/synchronizer.h>
 #include <pwd.h>
+#include <tf2_ros/buffer.h>
+#include <tf2_ros/transform_broadcaster.h>
+#include <tf2_ros/transform_listener.h>
 #include <unistd.h>
 
 #include <algorithm>
+#include <ament_index_cpp/get_package_share_directory.hpp>
 #include <chrono>
-#include <cstring>
 #include <cmath>
 #include <cstdlib>
+#include <cstring>
 #include <ctime>
 #include <deque>
 #include <filesystem>
 #include <fstream>
 #include <functional>
-#include <initializer_list>
 #include <future>
+#include <geometry_msgs/msg/transform_stamped.hpp>
+#include <initializer_list>
 #include <iomanip>
 #include <map>
 #include <memory>
-#include <optional>
-#include <random>
-#include <set>
-#include <sstream>
-#include <string>
-#include <thread>
-
-#include <geometry_msgs/msg/transform_stamped.hpp>
-#include <message_filters/subscriber.h>
-#include <message_filters/sync_policies/approximate_time.h>
-#include <message_filters/synchronizer.h>
 #include <nav_msgs/msg/odometry.hpp>
 #include <nav_msgs/msg/path.hpp>
-#include <ament_index_cpp/get_package_share_directory.hpp>
+#include <optional>
+#include <random>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp/serialization.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
+#include <rosbag2_cpp/reader.hpp>
 #include <sensor_msgs/msg/camera_info.hpp>
 #include <sensor_msgs/msg/fluid_pressure.hpp>
 #include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
-#include <rosbag2_cpp/reader.hpp>
+#include <set>
+#include <sstream>
 #include <std_srvs/srv/trigger.hpp>
+#include <string>
 #include <tf2_msgs/msg/tf_message.hpp>
-#include <tf2_ros/buffer.h>
-#include <tf2_ros/transform_broadcaster.h>
-#include <tf2_ros/transform_listener.h>
+#include <thread>
 
 #include "strataslam/config/config_loader.hpp"
 #include "strataslam/frontend/depth_utils.hpp"
@@ -72,26 +72,39 @@ class RclcppLogger final : public strataslam::Logger {
   explicit RclcppLogger(rclcpp::Logger l) : l_(l) {}
   void log(strataslam::LogLevel level, const std::string& m) override {
     switch (level) {
-      case strataslam::LogLevel::Debug: RCLCPP_DEBUG(l_, "%s", m.c_str()); break;
-      case strataslam::LogLevel::Info: RCLCPP_INFO(l_, "%s", m.c_str()); break;
-      case strataslam::LogLevel::Warn: RCLCPP_WARN(l_, "%s", m.c_str()); break;
-      case strataslam::LogLevel::Error: RCLCPP_ERROR(l_, "%s", m.c_str()); break;
+      case strataslam::LogLevel::Debug:
+        RCLCPP_DEBUG(l_, "%s", m.c_str());
+        break;
+      case strataslam::LogLevel::Info:
+        RCLCPP_INFO(l_, "%s", m.c_str());
+        break;
+      case strataslam::LogLevel::Warn:
+        RCLCPP_WARN(l_, "%s", m.c_str());
+        break;
+      case strataslam::LogLevel::Error:
+        RCLCPP_ERROR(l_, "%s", m.c_str());
+        break;
     }
   }
+
  private:
   rclcpp::Logger l_;
 };
 
-Timestamp stamp_ns(const builtin_interfaces::msg::Time& t) { return static_cast<Timestamp>(t.sec) * 1000000000LL + t.nanosec; }
+Timestamp stamp_ns(const builtin_interfaces::msg::Time& t) {
+  return static_cast<Timestamp>(t.sec) * 1000000000LL + t.nanosec;
+}
 
 gtsam::Pose3 to_pose(const geometry_msgs::msg::Transform& t) {
-  return gtsam::Pose3(gtsam::Rot3::Quaternion(t.rotation.w, t.rotation.x, t.rotation.y, t.rotation.z),
-                      gtsam::Point3(t.translation.x, t.translation.y, t.translation.z));
+  return gtsam::Pose3(
+      gtsam::Rot3::Quaternion(t.rotation.w, t.rotation.x, t.rotation.y, t.rotation.z),
+      gtsam::Point3(t.translation.x, t.translation.y, t.translation.z));
 }
 
 gtsam::Pose3 from_transform(const geometry_msgs::msg::Transform& t) {
-  return gtsam::Pose3(gtsam::Rot3::Quaternion(t.rotation.w, t.rotation.x, t.rotation.y, t.rotation.z),
-                      gtsam::Point3(t.translation.x, t.translation.y, t.translation.z));
+  return gtsam::Pose3(
+      gtsam::Rot3::Quaternion(t.rotation.w, t.rotation.x, t.rotation.y, t.rotation.z),
+      gtsam::Point3(t.translation.x, t.translation.y, t.translation.z));
 }
 
 geometry_msgs::msg::Transform to_transform(const gtsam::Pose3& p) {
@@ -117,25 +130,31 @@ std::string expand_map_dir(std::string dir) {
   std::strftime(date, sizeof date, "%Y%m%d", &tm);
   std::strftime(tim, sizeof tim, "%H%M%S", &tm);
   const auto replace = [&](const std::string& from, const std::string& to) {
-    for (size_t p = dir.find(from); p != std::string::npos; p = dir.find(from, p + to.size())) dir.replace(p, from.size(), to);
+    for (size_t p = dir.find(from); p != std::string::npos; p = dir.find(from, p + to.size()))
+      dir.replace(p, from.size(), to);
   };
   replace("{date}", date);
   replace("{time}", tim);
   return expand_home(dir);
 }
 
-/// "~" and "~/..." are the user's home (HOME, else the password database); "~name/..." is that user's home.
+/// "~" and "~/..." are the user's home (HOME, else the password database); "~name/..." is that
+/// user's home.
 std::string expand_home(std::string dir) {
-  // "~" and "~/..." are the user's home (HOME, else the password database); "~name/..." is that user's home. Before,
-  // any leading "~" became HOME ("~root/maps" -> "/home/userroot/maps"; audit A6-08).
+  // "~" and "~/..." are the user's home (HOME, else the password database); "~name/..." is that
+  // user's home. Before, any leading "~" became HOME ("~root/maps" -> "/home/userroot/maps"; audit
+  // A6-08).
   if (!dir.empty() && dir[0] == '~') {
     const size_t slash = dir.find('/');
-    const std::string user = dir.substr(1, slash == std::string::npos ? std::string::npos : slash - 1);
+    const std::string user =
+        dir.substr(1, slash == std::string::npos ? std::string::npos : slash - 1);
     const std::string rest = slash == std::string::npos ? "" : dir.substr(slash);
     std::string home;
     if (user.empty()) {
-      if (const char* h = std::getenv("HOME"); h && *h) home = h;
-      else if (const passwd* pw = getpwuid(getuid())) home = pw->pw_dir;
+      if (const char* h = std::getenv("HOME"); h && *h)
+        home = h;
+      else if (const passwd* pw = getpwuid(getuid()))
+        home = pw->pw_dir;
     } else if (const passwd* pw = getpwnam(user.c_str())) {
       home = pw->pw_dir;
     }
@@ -150,42 +169,68 @@ size_t field_size(const sm::PointField& f) {
   switch (f.datatype) {
     case sm::PointField::FLOAT32:
     case sm::PointField::UINT32:
-    case sm::PointField::INT32: return 4;
-    case sm::PointField::FLOAT64: return 8;
-    default: return 0;
+    case sm::PointField::INT32:
+      return 4;
+    case sm::PointField::FLOAT64:
+      return 8;
+    default:
+      return 0;
   }
 }
 
 /// Why a PointCloud2 cannot be read safely, or an empty string. The layout comes from the message
-/// itself (a driver, a bag), so it is checked before any byte is read: every field must lie inside a
-/// point, and the buffer must hold width x height points of point_step bytes.
-std::string cloud_layout_error(const sm::PointCloud2& m, std::initializer_list<const sm::PointField*> fields) {
+/// itself (a driver, a bag), so it is checked before any byte is read: every field must lie inside
+/// a point, and the buffer must hold width x height points of point_step bytes.
+std::string cloud_layout_error(const sm::PointCloud2& m,
+                               std::initializer_list<const sm::PointField*> fields) {
   for (const auto* f : fields) {
     if (!f) continue;
     const size_t size = field_size(*f);
-    if (size == 0) return "field '" + f->name + "' has an unsupported datatype " + std::to_string(f->datatype);
-    if (f->count != 1) return "field '" + f->name + "' has count " + std::to_string(f->count) + " (expected 1)";
+    if (size == 0)
+      return "field '" + f->name + "' has an unsupported datatype " + std::to_string(f->datatype);
+    if (f->count != 1)
+      return "field '" + f->name + "' has count " + std::to_string(f->count) + " (expected 1)";
     if (static_cast<size_t>(f->offset) + size > m.point_step)
-      return "field '" + f->name + "' (offset " + std::to_string(f->offset) + ") does not fit in point_step " + std::to_string(m.point_step);
+      return "field '" + f->name + "' (offset " + std::to_string(f->offset) +
+             ") does not fit in point_step " + std::to_string(m.point_step);
   }
   const uint64_t n = static_cast<uint64_t>(m.width) * m.height;
   if (n > 0 && m.point_step == 0) return "point_step is 0";
   if (m.height > 1 && m.row_step < static_cast<uint64_t>(m.width) * m.point_step)
     return "row_step " + std::to_string(m.row_step) + " < width x point_step";
   const uint64_t row = m.height > 1 ? m.row_step : static_cast<uint64_t>(m.width) * m.point_step;
-  const uint64_t needed = n == 0 ? 0 : (m.height - 1) * row + static_cast<uint64_t>(m.width) * m.point_step;
+  const uint64_t needed =
+      n == 0 ? 0 : (m.height - 1) * row + static_cast<uint64_t>(m.width) * m.point_step;
   if (m.data.size() < needed)
-    return "data holds " + std::to_string(m.data.size()) + " bytes, width x height x point_step needs " + std::to_string(needed);
+    return "data holds " + std::to_string(m.data.size()) +
+           " bytes, width x height x point_step needs " + std::to_string(needed);
   return {};
 }
 
 double read_field(const uint8_t* p, const sm::PointField& f) {
   switch (f.datatype) {
-    case sm::PointField::FLOAT32: { float v; std::memcpy(&v, p + f.offset, 4); return v; }
-    case sm::PointField::FLOAT64: { double v; std::memcpy(&v, p + f.offset, 8); return v; }
-    case sm::PointField::UINT32: { uint32_t v; std::memcpy(&v, p + f.offset, 4); return v; }
-    case sm::PointField::INT32: { int32_t v; std::memcpy(&v, p + f.offset, 4); return v; }
-    default: return 0.0;
+    case sm::PointField::FLOAT32: {
+      float v;
+      std::memcpy(&v, p + f.offset, 4);
+      return v;
+    }
+    case sm::PointField::FLOAT64: {
+      double v;
+      std::memcpy(&v, p + f.offset, 8);
+      return v;
+    }
+    case sm::PointField::UINT32: {
+      uint32_t v;
+      std::memcpy(&v, p + f.offset, 4);
+      return v;
+    }
+    case sm::PointField::INT32: {
+      int32_t v;
+      std::memcpy(&v, p + f.offset, 4);
+      return v;
+    }
+    default:
+      return 0.0;
   }
 }
 
@@ -193,7 +238,8 @@ double read_field(const uint8_t* p, const sm::PointField& f) {
 
 class StrataslamNode : public rclcpp::Node {
  public:
-  explicit StrataslamNode(const rclcpp::NodeOptions& options) : rclcpp::Node("strataslam_node", options) {
+  explicit StrataslamNode(const rclcpp::NodeOptions& options)
+      : rclcpp::Node("strataslam_node", options) {
     profile_path_ = declare_parameter<std::string>("profile", "");
     vocabulary_path_ = declare_parameter<std::string>("vocabulary", "");
     features_topic_ = declare_parameter<std::string>("features_topic", "");
@@ -204,46 +250,76 @@ class StrataslamNode : public rclcpp::Node {
     try {
       load_profile();
     } catch (const std::exception& e) {
-      // A node that cannot start must not leave its container (and `ros2 launch`) waiting forever. Shutting
-      // down here, inside the container's load request, could end the process before it answers the launch,
-      // which then waits for that answer: the node is created, does nothing, and ends the process just after.
+      // A node that cannot start must not leave its container (and `ros2 launch`) waiting forever.
+      // Shutting down here, inside the container's load request, could end the process before it
+      // answers the launch, which then waits for that answer: the node is created, does nothing,
+      // and ends the process just after.
       RCLCPP_FATAL(get_logger(), "cannot start: %s", e.what());
-      startup_failed_timer_ = create_wall_timer(std::chrono::milliseconds(500), [] { rclcpp::shutdown(); });
+      startup_failed_timer_ =
+          create_wall_timer(std::chrono::milliseconds(500), [] { rclcpp::shutdown(); });
       return;
     }
     tf_buffer_ = std::make_unique<tf2_ros::Buffer>(get_clock());
     if (bag_path_.empty()) tf_listener_ = std::make_unique<tf2_ros::TransformListener>(*tf_buffer_);
     tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
 
-    odom_pub_ = create_publisher<nav_msgs::msg::Odometry>("strataslam/odometry", rclcpp::QoS(10).reliable());
-    path_pub_ = create_publisher<nav_msgs::msg::Path>("strataslam/path", rclcpp::QoS(10).reliable());
-    state_pub_ = create_publisher<strataslam_msgs::msg::FloorState>("strataslam/floor_state", rclcpp::QoS(10).reliable());
-    cloud_pub_ = create_publisher<sm::PointCloud2>("strataslam/floor_cloud", rclcpp::QoS(1).transient_local().reliable());
-    // What the sensors see right now, in the odometry frame (for viewers): latest only, best effort.
-    scan_pub_ = create_publisher<sm::PointCloud2>("strataslam/scan", rclcpp::SensorDataQoS().keep_last(1));
-    depth_cloud_pub_ = create_publisher<sm::PointCloud2>("strataslam/depth_cloud", rclcpp::SensorDataQoS().keep_last(1));
-    camera_view_pub_ = create_publisher<strataslam_msgs::msg::CameraView>("strataslam/camera_view", rclcpp::SensorDataQoS().keep_last(1));
+    odom_pub_ = create_publisher<nav_msgs::msg::Odometry>("strataslam/odometry",
+                                                          rclcpp::QoS(10).reliable());
+    path_pub_ =
+        create_publisher<nav_msgs::msg::Path>("strataslam/path", rclcpp::QoS(10).reliable());
+    state_pub_ = create_publisher<strataslam_msgs::msg::FloorState>("strataslam/floor_state",
+                                                                    rclcpp::QoS(10).reliable());
+    cloud_pub_ = create_publisher<sm::PointCloud2>("strataslam/floor_cloud",
+                                                   rclcpp::QoS(1).transient_local().reliable());
+    // What the sensors see right now, in the odometry frame (for viewers): latest only, best
+    // effort.
+    scan_pub_ =
+        create_publisher<sm::PointCloud2>("strataslam/scan", rclcpp::SensorDataQoS().keep_last(1));
+    depth_cloud_pub_ = create_publisher<sm::PointCloud2>("strataslam/depth_cloud",
+                                                         rclcpp::SensorDataQoS().keep_last(1));
+    camera_view_pub_ = create_publisher<strataslam_msgs::msg::CameraView>(
+        "strataslam/camera_view", rclcpp::SensorDataQoS().keep_last(1));
 
     if (bag_path_.empty()) create_subscriptions();
-    save_srv_ = create_service<std_srvs::srv::Trigger>("~/save_map", [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
-                                                                              std::shared_ptr<std_srvs::srv::Trigger::Response> res) {
-      if (!guard("save_map", [&] { on_save_map(res); })) { res->success = false; res->message = "internal error (see the node log)"; }
-    });
-    mark_srv_ = create_service<strataslam_msgs::srv::MarkFloorChange>(
-        "~/mark_floor_change", [this](const std::shared_ptr<strataslam_msgs::srv::MarkFloorChange::Request> req,
-                                      std::shared_ptr<strataslam_msgs::srv::MarkFloorChange::Response> res) {
-          if (!guard("mark_floor_change", [&] { on_mark_floor_change(*req, *res); })) { res->success = false; res->message = "internal error (see the node log)"; }
+    save_srv_ = create_service<std_srvs::srv::Trigger>(
+        "~/save_map", [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+                             std::shared_ptr<std_srvs::srv::Trigger::Response> res) {
+          if (!guard("save_map", [&] { on_save_map(res); })) {
+            res->success = false;
+            res->message = "internal error (see the node log)";
+          }
         });
-    session_srv_ = create_service<std_srvs::srv::Trigger>("~/new_session", [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
-                                                                                    std::shared_ptr<std_srvs::srv::Trigger::Response> res) {
-      const bool ok = guard("new_session", [&] {
-        if (slam_) { slam_->new_session(); res->success = true; res->message = "new session"; }
-        else { res->success = false; res->message = "the pipeline has not started yet"; }
-      });
-      if (!ok) { res->success = false; res->message = "internal error (see the node log)"; }
-    });
-    cloud_timer_ = create_wall_timer(std::chrono::duration<double>(cloud_period_s_), [this] { guard("publish_cloud", [&] { publish_cloud(); }); });
-    RCLCPP_INFO(get_logger(), "%s started with profile %s", get_fully_qualified_name(), profile_path_.c_str());
+    mark_srv_ = create_service<strataslam_msgs::srv::MarkFloorChange>(
+        "~/mark_floor_change",
+        [this](const std::shared_ptr<strataslam_msgs::srv::MarkFloorChange::Request> req,
+               std::shared_ptr<strataslam_msgs::srv::MarkFloorChange::Response> res) {
+          if (!guard("mark_floor_change", [&] { on_mark_floor_change(*req, *res); })) {
+            res->success = false;
+            res->message = "internal error (see the node log)";
+          }
+        });
+    session_srv_ = create_service<std_srvs::srv::Trigger>(
+        "~/new_session", [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+                                std::shared_ptr<std_srvs::srv::Trigger::Response> res) {
+          const bool ok = guard("new_session", [&] {
+            if (slam_) {
+              slam_->new_session();
+              res->success = true;
+              res->message = "new session";
+            } else {
+              res->success = false;
+              res->message = "the pipeline has not started yet";
+            }
+          });
+          if (!ok) {
+            res->success = false;
+            res->message = "internal error (see the node log)";
+          }
+        });
+    cloud_timer_ = create_wall_timer(std::chrono::duration<double>(cloud_period_s_),
+                                     [this] { guard("publish_cloud", [&] { publish_cloud(); }); });
+    RCLCPP_INFO(get_logger(), "%s started with profile %s", get_fully_qualified_name(),
+                profile_path_.c_str());
     if (!bag_path_.empty()) {
       // Offline mode: every message of the bag is processed, in order, one after the other (no
       // subscription queues, so no scan is dropped and the result does not depend on the timing).
@@ -258,13 +334,14 @@ class StrataslamNode : public rclcpp::Node {
     }
   }
 
-  /// Ctrl+C online: the map of the run is saved as with a bag (`bag:=` saved it, a live run lost it silently; audit
-  /// AUD-092), unless nothing new was mapped since the last ~/save_map.
+  /// Ctrl+C online: the map of the run is saved as with a bag (`bag:=` saved it, a live run lost it
+  /// silently; audit AUD-092), unless nothing new was mapped since the last ~/save_map.
   ~StrataslamNode() override {
     if (!bag_path_.empty() || !slam_) return;
     const size_t kfs = slam_->keyframes().size();
     if (kfs == 0 || kfs == keyframes_at_last_save_) return;
-    RCLCPP_WARN(get_logger(), "stopping with %zu keyframe(s) not saved: saving the map", kfs - keyframes_at_last_save_);
+    RCLCPP_WARN(get_logger(), "stopping with %zu keyframe(s) not saved: saving the map",
+                kfs - keyframes_at_last_save_);
     try {
       auto res = std::make_shared<std_srvs::srv::Trigger::Response>();
       on_save_map(res);
@@ -275,52 +352,59 @@ class StrataslamNode : public rclcpp::Node {
 
  private:
   /// Runs the body of a ROS callback. An exception from the core or from a malformed message is
-  /// logged (throttled) and the message dropped: nothing unwinds into the executor and stops the node.
+  /// logged (throttled) and the message dropped: nothing unwinds into the executor and stops the
+  /// node.
   template <class F>
   bool guard(const char* where, F&& body) {
     try {
       body();
       return true;
     } catch (const std::exception& e) {
-      RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 2000, "%s: %s (message dropped)", where, e.what());
+      RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 2000, "%s: %s (message dropped)", where,
+                            e.what());
     } catch (...) {
-      RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 2000, "%s: unknown exception (message dropped)", where);
+      RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 2000,
+                            "%s: unknown exception (message dropped)", where);
     }
     return false;
   }
 
   std::string duplicate_hint() const {
     const char* domain = std::getenv("ROS_DOMAIN_ID");
-    return std::string("another ") + get_fully_qualified_name() + " is running in ROS_DOMAIN_ID " + (domain ? domain : "0") +
+    return std::string("another ") + get_fully_qualified_name() + " is running in ROS_DOMAIN_ID " +
+           (domain ? domain : "0") +
            ": start this one with namespace:=<name> (or another ROS_DOMAIN_ID)";
   }
 
-  /// Online, a second node with the same name would share the topics and answer the same service calls (a
-  /// save_map would write two maps). Every node announces when it started on ~/instance (transient local);
-  /// a node that hears of an older one with its name refuses to run, whenever that happens. The older one
-  /// never stops because of a newcomer.
+  /// Online, a second node with the same name would share the topics and answer the same service
+  /// calls (a save_map would write two maps). Every node announces when it started on ~/instance
+  /// (transient local); a node that hears of an older one with its name refuses to run, whenever
+  /// that happens. The older one never stops because of a newcomer.
   void announce_instance() {
     instance_.started = now();
     instance_.id = std::random_device{}() * 4294967296ULL + std::random_device{}();
     const auto qos = rclcpp::QoS(10).reliable().transient_local();
     instance_pub_ = create_publisher<strataslam_msgs::msg::Instance>("~/instance", qos);
-    instance_sub_ = create_subscription<strataslam_msgs::msg::Instance>("~/instance", qos, [this](strataslam_msgs::msg::Instance::ConstSharedPtr m) {
-      if (m->id == instance_.id || refused_) return;
-      const auto older = [](const strataslam_msgs::msg::Instance& a, const strataslam_msgs::msg::Instance& b) {
-        if (a.started.sec != b.started.sec) return a.started.sec < b.started.sec;
-        if (a.started.nanosec != b.started.nanosec) return a.started.nanosec < b.started.nanosec;
-        return a.id < b.id;
-      };
-      if (!older(*m, instance_)) return;
-      refused_ = true;
-      RCLCPP_FATAL(get_logger(), "%s", duplicate_hint().c_str());
-      rclcpp::shutdown();
-    });
+    instance_sub_ = create_subscription<strataslam_msgs::msg::Instance>(
+        "~/instance", qos, [this](strataslam_msgs::msg::Instance::ConstSharedPtr m) {
+          if (m->id == instance_.id || refused_) return;
+          const auto older = [](const strataslam_msgs::msg::Instance& a,
+                                const strataslam_msgs::msg::Instance& b) {
+            if (a.started.sec != b.started.sec) return a.started.sec < b.started.sec;
+            if (a.started.nanosec != b.started.nanosec)
+              return a.started.nanosec < b.started.nanosec;
+            return a.id < b.id;
+          };
+          if (!older(*m, instance_)) return;
+          refused_ = true;
+          RCLCPP_FATAL(get_logger(), "%s", duplicate_hint().c_str());
+          rclcpp::shutdown();
+        });
     instance_pub_->publish(instance_);
   }
 
-  /// Offline (a bag) nothing is called and the map is saved by the node itself: another instance with the
-  /// same name only shares the topics, which is worth a warning, not a refusal.
+  /// Offline (a bag) nothing is called and the map is saved by the node itself: another instance
+  /// with the same name only shares the topics, which is worth a warning, not a refusal.
   void check_single_instance(bool /*fatal*/) {
     const std::string me = get_fully_qualified_name();
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(1500);
@@ -340,10 +424,12 @@ class StrataslamNode : public rclcpp::Node {
   void load_profile() {
     if (profile_path_.empty()) throw std::runtime_error("parameter 'profile' is required");
     const auto r = strataslam::load_profile_file(profile_path_);
-    for (const auto& w : r.warnings) RCLCPP_WARN(get_logger(), "config warning: %s: %s", w.path.c_str(), w.message.c_str());
+    for (const auto& w : r.warnings)
+      RCLCPP_WARN(get_logger(), "config warning: %s: %s", w.path.c_str(), w.message.c_str());
     if (!r.ok()) {
       for (const auto& e : r.errors) RCLCPP_ERROR(get_logger(), "%s", e.format().c_str());
-      throw std::runtime_error("invalid profile " + profile_path_ + " (" + std::to_string(r.errors.size()) + " error(s))");
+      throw std::runtime_error("invalid profile " + profile_path_ + " (" +
+                               std::to_string(r.errors.size()) + " error(s))");
     }
     cfg_ = *r.config;
     std::ifstream in(profile_path_);
@@ -352,17 +438,21 @@ class StrataslamNode : public rclcpp::Node {
     const bool from_launch = !vocabulary_path_.empty();
     std::string vocabulary = from_launch ? vocabulary_path_ : cfg_.fusion.vocabulary;
     if (vocabulary == "default") {  // the one shipped with the package (ADR-0054)
-      vocabulary = ament_index_cpp::get_package_share_directory("strataslam_ros") + "/vocabularies/tum_rgbd.bin";
+      vocabulary = ament_index_cpp::get_package_share_directory("strataslam_ros") +
+                   "/vocabularies/tum_rgbd.bin";
     }
     vocabulary = expand_home(vocabulary);
     if (!vocabulary.empty()) {
       auto v = strataslam::BowVocabulary::load(vocabulary);
       if (!v) throw std::runtime_error(v.error().message);
       tuning_.vocabulary = std::make_shared<const strataslam::BowVocabulary>(std::move(v.value()));
-      RCLCPP_INFO(get_logger(), "visual vocabulary: %s (%zu words, from the %s)", vocabulary.c_str(), tuning_.vocabulary->words(),
+      RCLCPP_INFO(get_logger(), "visual vocabulary: %s (%zu words, from the %s)",
+                  vocabulary.c_str(), tuning_.vocabulary->words(),
                   from_launch ? "launch" : "profile");
     } else if (cfg_.sensors.camera.enabled) {
-      RCLCPP_WARN(get_logger(), "no vocabulary: visual loop closure is disabled (train one with `strataslam vocab train`, then "
+      RCLCPP_WARN(get_logger(),
+                  "no vocabulary: visual loop closure is disabled (train one with `strataslam "
+                  "vocab train`, then "
                   "set fusion.vocabulary in the profile or pass vocabulary:=)");
     }
     if (cfg_.sensors.camera.features == strataslam::FeatureType::Xfeat) {
@@ -373,20 +463,25 @@ class StrataslamNode : public rclcpp::Node {
 
   bool lookup(const std::string& frame, gtsam::Pose3* out) {
     const std::string base = cfg_.robot.base_frame;
-    if (frame.empty() || frame == base) { *out = gtsam::Pose3(); return true; }
+    if (frame.empty() || frame == base) {
+      *out = gtsam::Pose3();
+      return true;
+    }
     try {
       const auto t = tf_buffer_->lookupTransform(base, frame, tf2::TimePointZero);
       *out = to_pose(t.transform);
       return true;
     } catch (const tf2::TransformException& e) {
-      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000, "waiting for TF %s -> %s: %s", base.c_str(), frame.c_str(), e.what());
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000, "waiting for TF %s -> %s: %s",
+                           base.c_str(), frame.c_str(), e.what());
       return false;
     }
   }
 
   /// The pipeline needs the sensor extrinsics at construction: it starts with the first sensor data
   /// for which every enabled sensor's transform is available.
-  bool ensure_system(const std::string& camera_frame, const std::string& lidar_frame, const std::string& imu_frame) {
+  bool ensure_system(const std::string& camera_frame, const std::string& lidar_frame,
+                     const std::string& imu_frame) {
     if (slam_) return true;
     if (cfg_.sensors.camera.enabled && camera_frame.empty()) return false;
     if (cfg_.sensors.lidar.enabled && lidar_frame.empty()) return false;
@@ -398,21 +493,28 @@ class StrataslamNode : public rclcpp::Node {
     lidar_frame_ = lidar_frame;
     imu_frame_ = imu_frame;
     ext_ = ext;
-    slam_ = std::make_unique<strataslam::SlamSystem>(cfg_, ext, tuning_, std::make_shared<RclcppLogger>(get_logger()));
-    for (const auto& m : imu_backlog_) slam_->add_imu(m);  // data that arrived while the TF tree filled in
-    if (last_baro_reference_) slam_->add_baro_reference(*last_baro_reference_);  // before the rover's first sample
+    slam_ = std::make_unique<strataslam::SlamSystem>(cfg_, ext, tuning_,
+                                                     std::make_shared<RclcppLogger>(get_logger()));
+    for (const auto& m : imu_backlog_)
+      slam_->add_imu(m);  // data that arrived while the TF tree filled in
+    if (last_baro_reference_)
+      slam_->add_baro_reference(*last_baro_reference_);  // before the rover's first sample
     for (const auto& m : baro_backlog_) slam_->add_baro(m);
     imu_backlog_.clear();
     baro_backlog_.clear();
-    // Which sensor tracks the motion and which closes loops, with `auto` resolved: the profile may not say.
+    // Which sensor tracks the motion and which closes loops, with `auto` resolved: the profile may
+    // not say.
     const auto modes = strataslam::resolve_modes(cfg_);
-    const auto odom = modes.odometry == strataslam::OdometrySource::Camera ? "camera"
-                      : modes.odometry == strataslam::OdometrySource::Lidar ? "lidar" : "external";
-    const auto loops = modes.loop_closure == strataslam::LoopSource::Camera ? "camera"
-                       : modes.loop_closure == strataslam::LoopSource::Lidar ? "lidar" : "camera and lidar";
-    RCLCPP_INFO(get_logger(), "pipeline started: odometry from the %s%s, loop closures from the %s%s", odom,
-                cfg_.fusion.odometry_from == strataslam::OdometryFrom::Auto ? " (auto)" : "", loops,
-                cfg_.fusion.loop_closure_from == strataslam::LoopClosureFrom::Auto ? " (auto)" : "");
+    const auto odom = modes.odometry == strataslam::OdometrySource::Camera  ? "camera"
+                      : modes.odometry == strataslam::OdometrySource::Lidar ? "lidar"
+                                                                            : "external";
+    const auto loops = modes.loop_closure == strataslam::LoopSource::Camera  ? "camera"
+                       : modes.loop_closure == strataslam::LoopSource::Lidar ? "lidar"
+                                                                             : "camera and lidar";
+    RCLCPP_INFO(
+        get_logger(), "pipeline started: odometry from the %s%s, loop closures from the %s%s", odom,
+        cfg_.fusion.odometry_from == strataslam::OdometryFrom::Auto ? " (auto)" : "", loops,
+        cfg_.fusion.loop_closure_from == strataslam::LoopClosureFrom::Auto ? " (auto)" : "");
     visual_loops_off_ = modes.loop_closure != strataslam::LoopSource::Lidar && !tuning_.vocabulary;
     return true;
   }
@@ -427,39 +529,68 @@ class StrataslamNode : public rclcpp::Node {
       info_sub_.subscribe(this, s.camera.info_topic, qos.get_rmw_qos_profile());
       if (!features_topic_.empty()) {
         feat_sub_.subscribe(this, features_topic_, qos.get_rmw_qos_profile());
-        feat_sync_ = std::make_unique<message_filters::Synchronizer<FeatPolicy>>(FeatPolicy(10), depth_sub_, feat_sub_, info_sub_);
-        feat_sync_->registerCallback(std::bind(&StrataslamNode::on_features_guarded, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
+        feat_sync_ = std::make_unique<message_filters::Synchronizer<FeatPolicy>>(
+            FeatPolicy(10), depth_sub_, feat_sub_, info_sub_);
+        feat_sync_->registerCallback(std::bind(&StrataslamNode::on_features_guarded, this,
+                                               std::placeholders::_1, std::placeholders::_2,
+                                               std::placeholders::_3));
       } else {
         rgb_sub_.subscribe(this, s.camera.rgb_topic, qos.get_rmw_qos_profile());
-        rgb_sync_ = std::make_unique<message_filters::Synchronizer<RgbPolicy>>(RgbPolicy(10), depth_sub_, rgb_sub_, info_sub_);
-        rgb_sync_->registerCallback(std::bind(&StrataslamNode::on_rgb_guarded, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
+        rgb_sync_ = std::make_unique<message_filters::Synchronizer<RgbPolicy>>(
+            RgbPolicy(10), depth_sub_, rgb_sub_, info_sub_);
+        rgb_sync_->registerCallback(std::bind(&StrataslamNode::on_rgb_guarded, this,
+                                              std::placeholders::_1, std::placeholders::_2,
+                                              std::placeholders::_3));
       }
     }
-    if (s.lidar.enabled) lidar_sub_ = create_subscription<sm::PointCloud2>(s.lidar.topic, qos, [this](sm::PointCloud2::ConstSharedPtr m) { guard("lidar", [&] { on_lidar(*m); }); });
-    if (s.imu.enabled) imu_sub_ = create_subscription<sm::Imu>(s.imu.topic, qos, [this](sm::Imu::ConstSharedPtr m) { guard("imu", [&] { on_imu(*m); }); });
-    if (s.barometer.enabled) baro_sub_ = create_subscription<sm::FluidPressure>(s.barometer.topic, qos, [this](sm::FluidPressure::ConstSharedPtr m) { guard("barometer", [&] { on_baro(*m); }); });
-    if (s.barometer.enabled && !s.barometer.reference_topic.empty())
-      baro_ref_sub_ = create_subscription<sm::FluidPressure>(s.barometer.reference_topic, qos, [this](sm::FluidPressure::ConstSharedPtr m) {
-        guard("barometer reference", [&] { on_baro_reference(*m); });
+    if (s.lidar.enabled)
+      lidar_sub_ = create_subscription<sm::PointCloud2>(
+          s.lidar.topic, qos,
+          [this](sm::PointCloud2::ConstSharedPtr m) { guard("lidar", [&] { on_lidar(*m); }); });
+    if (s.imu.enabled)
+      imu_sub_ = create_subscription<sm::Imu>(s.imu.topic, qos, [this](sm::Imu::ConstSharedPtr m) {
+        guard("imu", [&] { on_imu(*m); });
       });
+    if (s.barometer.enabled)
+      baro_sub_ = create_subscription<sm::FluidPressure>(
+          s.barometer.topic, qos, [this](sm::FluidPressure::ConstSharedPtr m) {
+            guard("barometer", [&] { on_baro(*m); });
+          });
+    if (s.barometer.enabled && !s.barometer.reference_topic.empty())
+      baro_ref_sub_ = create_subscription<sm::FluidPressure>(
+          s.barometer.reference_topic, qos, [this](sm::FluidPressure::ConstSharedPtr m) {
+            guard("barometer reference", [&] { on_baro_reference(*m); });
+          });
     if (s.external_odometry.enabled && !s.external_odometry.topic.empty())
-      ext_odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(s.external_odometry.topic, qos, [this](nav_msgs::msg::Odometry::ConstSharedPtr m) { guard("external odometry", [&] { on_ext_odom(*m); }); });
+      ext_odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(
+          s.external_odometry.topic, qos, [this](nav_msgs::msg::Odometry::ConstSharedPtr m) {
+            guard("external odometry", [&] { on_ext_odom(*m); });
+          });
     if (s.external_odometry.enabled && !s.external_odometry.frame.empty())
-      ext_tf_sub_ = create_subscription<tf2_msgs::msg::TFMessage>("/tf", rclcpp::QoS(100), [this](tf2_msgs::msg::TFMessage::ConstSharedPtr m) { guard("external odometry", [&] { on_ext_tf(*m); }); });
+      ext_tf_sub_ = create_subscription<tf2_msgs::msg::TFMessage>(
+          "/tf", rclcpp::QoS(100), [this](tf2_msgs::msg::TFMessage::ConstSharedPtr m) {
+            guard("external odometry", [&] { on_ext_tf(*m); });
+          });
   }
 
   // message_filters takes a bound member function, not a lambda.
-  void on_features_guarded(const sm::Image::ConstSharedPtr& depth, const strataslam_msgs::msg::FeatureFrame::ConstSharedPtr& feat,
+  void on_features_guarded(const sm::Image::ConstSharedPtr& depth,
+                           const strataslam_msgs::msg::FeatureFrame::ConstSharedPtr& feat,
                            const sm::CameraInfo::ConstSharedPtr& info) {
-    queue_camera(stamp_ns(depth->header.stamp), [this, depth, feat, info] { guard("camera features", [&] { on_features(depth, feat, info); }); });
+    queue_camera(stamp_ns(depth->header.stamp), [this, depth, feat, info] {
+      guard("camera features", [&] { on_features(depth, feat, info); });
+    });
   }
-  void on_rgb_guarded(const sm::Image::ConstSharedPtr& depth, const sm::Image::ConstSharedPtr& rgb, const sm::CameraInfo::ConstSharedPtr& info) {
-    queue_camera(stamp_ns(depth->header.stamp), [this, depth, rgb, info] { guard("camera", [&] { on_rgb(depth, rgb, info); }); });
+  void on_rgb_guarded(const sm::Image::ConstSharedPtr& depth, const sm::Image::ConstSharedPtr& rgb,
+                      const sm::CameraInfo::ConstSharedPtr& info) {
+    queue_camera(stamp_ns(depth->header.stamp),
+                 [this, depth, rgb, info] { guard("camera", [&] { on_rgb(depth, rgb, info); }); });
   }
 
-  /// With an external odometry, a camera frame waits until it covers the frame's stamp (wheel odometry trails the
-  /// camera by a fraction of a second), at most kCameraWait behind the newest frame. In arrival order, so a bag
-  /// gives the same result run after run. `all`: process every frame waiting (end of a bag).
+  /// With an external odometry, a camera frame waits until it covers the frame's stamp (wheel
+  /// odometry trails the camera by a fraction of a second), at most kCameraWait behind the newest
+  /// frame. In arrival order, so a bag gives the same result run after run. `all`: process every
+  /// frame waiting (end of a bag).
   void queue_camera(Timestamp stamp, std::function<void()> process) {
     camera_queue_.emplace_back(stamp, std::move(process));
     newest_camera_ = std::max(newest_camera_, stamp);
@@ -481,17 +612,21 @@ class StrataslamNode : public rclcpp::Node {
     strataslam::OdomMeasurement o;
     o.stamp = stamp_ns(m.header.stamp);
     const auto& p = m.pose.pose;
-    o.pose = gtsam::Pose3(gtsam::Rot3::Quaternion(p.orientation.w, p.orientation.x, p.orientation.y, p.orientation.z),
-                          gtsam::Point3(p.position.x, p.position.y, p.position.z));
+    o.pose = gtsam::Pose3(
+        gtsam::Rot3::Quaternion(p.orientation.w, p.orientation.x, p.orientation.y, p.orientation.z),
+        gtsam::Point3(p.position.x, p.position.y, p.position.z));
     if (slam_) slam_->add_odom(o);
     last_ext_stamp_ = std::max(last_ext_stamp_, o.stamp);
     drain_camera(false);
   }
 
-  /// The external odometry from TF: the transforms `external_odometry.frame` -> robot.base_frame (wheels).
+  /// The external odometry from TF: the transforms `external_odometry.frame` -> robot.base_frame
+  /// (wheels).
   void on_ext_tf(const tf2_msgs::msg::TFMessage& m) {
     for (const auto& t : m.transforms) {
-      if (t.header.frame_id != cfg_.sensors.external_odometry.frame || t.child_frame_id != cfg_.robot.base_frame) continue;
+      if (t.header.frame_id != cfg_.sensors.external_odometry.frame ||
+          t.child_frame_id != cfg_.robot.base_frame)
+        continue;
       if (slam_) slam_->add_odom({stamp_ns(t.header.stamp), to_pose(t.transform)});
       last_ext_stamp_ = std::max(last_ext_stamp_, stamp_ns(t.header.stamp));
     }
@@ -500,11 +635,15 @@ class StrataslamNode : public rclcpp::Node {
 
   /// Reads the bag at `bag_path_` and feeds the pipeline synchronously, then saves the map.
   void run_bag() {
-    // With a viewer (launch argument viewer:=true) the bag starts once it listens, so it sees every pose.
+    // With a viewer (launch argument viewer:=true) the bag starts once it listens, so it sees every
+    // pose.
     if (wait_for_viewer_s_ > 0.0) {
-      RCLCPP_INFO(get_logger(), "waiting up to %.0f s for a viewer on /strataslam/odometry", wait_for_viewer_s_);
-      const auto deadline = std::chrono::steady_clock::now() + std::chrono::duration<double>(wait_for_viewer_s_);
-      while (rclcpp::ok() && odom_pub_->get_subscription_count() == 0 && std::chrono::steady_clock::now() < deadline) {
+      RCLCPP_INFO(get_logger(), "waiting up to %.0f s for a viewer on /strataslam/odometry",
+                  wait_for_viewer_s_);
+      const auto deadline =
+          std::chrono::steady_clock::now() + std::chrono::duration<double>(wait_for_viewer_s_);
+      while (rclcpp::ok() && odom_pub_->get_subscription_count() == 0 &&
+             std::chrono::steady_clock::now() < deadline) {
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
       }
     }
@@ -520,27 +659,33 @@ class StrataslamNode : public rclcpp::Node {
     rclcpp::Serialization<sm::CameraInfo> ser_info;
     rclcpp::Serialization<strataslam_msgs::msg::FeatureFrame> ser_feat;
     size_t n_lidar = 0, n_total = 0, n_camera = 0;
-    // Camera: each colour image (or feature frame) is paired with the depth image of the closest stamp
-    // within kPairTolerance, and with the latest camera_info; a pair is processed as soon as both are
-    // read, in bag order. Deterministic, unlike the time-window policy of message_filters.
-    constexpr Timestamp kPairTolerance = 25'000'000;  // ns: below half the period of a 15-30 Hz camera
+    // Camera: each colour image (or feature frame) is paired with the depth image of the closest
+    // stamp within kPairTolerance, and with the latest camera_info; a pair is processed as soon as
+    // both are read, in bag order. Deterministic, unlike the time-window policy of message_filters.
+    constexpr Timestamp kPairTolerance =
+        25'000'000;  // ns: below half the period of a 15-30 Hz camera
     const bool use_features = !features_topic_.empty();
     std::deque<sm::Image::SharedPtr> depth_q, rgb_q;
     std::deque<strataslam_msgs::msg::FeatureFrame::SharedPtr> feat_q;
     sm::CameraInfo::SharedPtr info;
     const auto pair_camera = [&]() {
       while (!depth_q.empty() && (use_features ? !feat_q.empty() : !rgb_q.empty())) {
-        const Timestamp tc = use_features ? stamp_ns(feat_q.front()->header.stamp) : stamp_ns(rgb_q.front()->header.stamp);
+        const Timestamp tc = use_features ? stamp_ns(feat_q.front()->header.stamp)
+                                          : stamp_ns(rgb_q.front()->header.stamp);
         const Timestamp td = stamp_ns(depth_q.front()->header.stamp);
         if (std::llabs(tc - td) <= kPairTolerance) {
           if (info) {
-            if (use_features) on_features_guarded(depth_q.front(), feat_q.front(), info);
-            else on_rgb_guarded(depth_q.front(), rgb_q.front(), info);
+            if (use_features)
+              on_features_guarded(depth_q.front(), feat_q.front(), info);
+            else
+              on_rgb_guarded(depth_q.front(), rgb_q.front(), info);
             ++n_camera;
           }
           depth_q.pop_front();
-          if (use_features) feat_q.pop_front();
-          else rgb_q.pop_front();
+          if (use_features)
+            feat_q.pop_front();
+          else
+            rgb_q.pop_front();
         } else if (td < tc) {
           depth_q.pop_front();  // no colour image this close: the older one is dropped
         } else if (use_features) {
@@ -550,11 +695,12 @@ class StrataslamNode : public rclcpp::Node {
         }
       }
     };
-    // The cloud timer cannot fire while this callback runs: the floor cloud is published from the loop,
-    // at the same wall-clock period.
+    // The cloud timer cannot fire while this callback runs: the floor cloud is published from the
+    // loop, at the same wall-clock period.
     const auto cloud_period = std::chrono::duration<double>(cloud_period_s_);
     auto next_cloud = std::chrono::steady_clock::now() + cloud_period;
-    // Ctrl+C (SIGINT, or the launch's SIGTERM) stops reading: the map of what was processed is saved.
+    // Ctrl+C (SIGINT, or the launch's SIGTERM) stops reading: the map of what was processed is
+    // saved.
     bool interrupted = false;
     while (reader.has_next()) {
       if (!rclcpp::ok()) {
@@ -573,7 +719,8 @@ class StrataslamNode : public rclcpp::Node {
         if (topic == "/tf" || topic == "/tf_static") {
           tf2_msgs::msg::TFMessage m;
           ser_tf.deserialize_message(&raw, &m);
-          for (const auto& tr : m.transforms) tf_buffer_->setTransform(tr, "bag", topic == "/tf_static");
+          for (const auto& tr : m.transforms)
+            tf_buffer_->setTransform(tr, "bag", topic == "/tf_static");
           if (s.external_odometry.enabled && !s.external_odometry.frame.empty()) on_ext_tf(m);
         } else if (s.lidar.enabled && topic == s.lidar.topic) {
           sm::PointCloud2 m;
@@ -588,7 +735,8 @@ class StrataslamNode : public rclcpp::Node {
           sm::FluidPressure m;
           ser_baro.deserialize_message(&raw, &m);
           on_baro(m);
-        } else if (s.barometer.enabled && !s.barometer.reference_topic.empty() && topic == s.barometer.reference_topic) {
+        } else if (s.barometer.enabled && !s.barometer.reference_topic.empty() &&
+                   topic == s.barometer.reference_topic) {
           sm::FluidPressure m;
           ser_baro.deserialize_message(&raw, &m);
           on_baro_reference(m);
@@ -620,13 +768,16 @@ class StrataslamNode : public rclcpp::Node {
     }
     drain_camera(true);
     if (interrupted) {
-      RCLCPP_WARN(get_logger(), "bag interrupted after %zu of %zu messages: saving the map of what was processed", n_total,
-                  static_cast<size_t>(reader.get_metadata().message_count));
+      RCLCPP_WARN(get_logger(),
+                  "bag interrupted after %zu of %zu messages: saving the map of what was processed",
+                  n_total, static_cast<size_t>(reader.get_metadata().message_count));
     } else {  // with the context shut down there is nobody to publish to
       guard("publish_cloud", [&] { publish_cloud(); });
       guard("same level", [&] { check_same_level(true); });
     }
-    RCLCPP_INFO(get_logger(), "bag %s: %zu messages, %zu LiDAR scans and %zu camera frames processed", bag_path_.c_str(), n_total, n_lidar, n_camera);
+    RCLCPP_INFO(get_logger(),
+                "bag %s: %zu messages, %zu LiDAR scans and %zu camera frames processed",
+                bag_path_.c_str(), n_total, n_lidar, n_camera);
     auto res = std::make_shared<std_srvs::srv::Trigger::Response>();
     on_save_map(res);
   }
@@ -635,7 +786,8 @@ class StrataslamNode : public rclcpp::Node {
     imu_frame_pending_ = m.header.frame_id;
     strataslam::ImuSample s;
     s.stamp = stamp_ns(m.header.stamp);
-    s.accel = Eigen::Vector3d(m.linear_acceleration.x, m.linear_acceleration.y, m.linear_acceleration.z);
+    s.accel =
+        Eigen::Vector3d(m.linear_acceleration.x, m.linear_acceleration.y, m.linear_acceleration.z);
     s.gyro = Eigen::Vector3d(m.angular_velocity.x, m.angular_velocity.y, m.angular_velocity.z);
     if (slam_) {
       slam_->add_imu(s);
@@ -696,36 +848,46 @@ class StrataslamNode : public rclcpp::Node {
     f->K.cy = info.k[5];
     f->K.width = static_cast<int>(info.width);
     f->K.height = static_cast<int>(info.height);
-    if (!(f->K.fx > 0) || !(f->K.fy > 0)) {  // NaN or zero: some drivers publish a depth camera_info without K
-      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000, "camera_info on %s has no valid K (fx=%g): frames dropped; use the colour camera_info",
-                           cfg_.sensors.camera.info_topic.c_str(), f->K.fx);
+    if (!(f->K.fx > 0) ||
+        !(f->K.fy > 0)) {  // NaN or zero: some drivers publish a depth camera_info without K
+      RCLCPP_WARN_THROTTLE(
+          get_logger(), *get_clock(), 5000,
+          "camera_info on %s has no valid K (fx=%g): frames dropped; use the colour camera_info",
+          cfg_.sensors.camera.info_topic.c_str(), f->K.fx);
       return false;
     }
     if (!depth_to_meters(depth, &f->depth)) {
-      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000, "unsupported depth encoding '%s' (need 16UC1 or 32FC1)", depth.encoding.c_str());
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
+                           "unsupported depth encoding '%s' (need 16UC1 or 32FC1)",
+                           depth.encoding.c_str());
       return false;
     }
     return f->K.fx > 0 && f->depth.width == f->K.width && f->depth.height == f->K.height;
   }
 
-  void on_features(const sm::Image::ConstSharedPtr& depth, const strataslam_msgs::msg::FeatureFrame::ConstSharedPtr& feat, const sm::CameraInfo::ConstSharedPtr& info) {
+  void on_features(const sm::Image::ConstSharedPtr& depth,
+                   const strataslam_msgs::msg::FeatureFrame::ConstSharedPtr& feat,
+                   const sm::CameraInfo::ConstSharedPtr& info) {
     camera_frame_pending_ = depth->header.frame_id;
     if (!ensure_system(depth->header.frame_id, lidar_frame_pending_, imu_frame_pending_)) return;
     strataslam::RgbdFrame f;
     if (!fill_frame(*depth, *info, &f)) return;
-    const size_t n = std::min({feat->u.size(), feat->v.size(), feat->response.size(), feat->descriptors.size() / strataslam::kDescriptorBytes});
+    const size_t n = std::min({feat->u.size(), feat->v.size(), feat->response.size(),
+                               feat->descriptors.size() / strataslam::kDescriptorBytes});
     for (size_t i = 0; i < n; ++i) {
       strataslam::RgbKeypoint k;
       k.u = feat->u[i];
       k.v = feat->v[i];
       k.response = feat->response[i];
-      std::memcpy(k.descriptor.data(), &feat->descriptors[i * strataslam::kDescriptorBytes], strataslam::kDescriptorBytes);
+      std::memcpy(k.descriptor.data(), &feat->descriptors[i * strataslam::kDescriptorBytes],
+                  strataslam::kDescriptorBytes);
       f.keypoints.push_back(k);
     }
     process_rgbd(f, nullptr);
   }
 
-  void on_rgb(const sm::Image::ConstSharedPtr& depth, const sm::Image::ConstSharedPtr& rgb, const sm::CameraInfo::ConstSharedPtr& info) {
+  void on_rgb(const sm::Image::ConstSharedPtr& depth, const sm::Image::ConstSharedPtr& rgb,
+              const sm::CameraInfo::ConstSharedPtr& info) {
     camera_frame_pending_ = depth->header.frame_id;
     if (!ensure_system(depth->header.frame_id, lidar_frame_pending_, imu_frame_pending_)) return;
     strataslam::RgbdFrame f;
@@ -737,15 +899,22 @@ class StrataslamNode : public rclcpp::Node {
     const bool mono = rgb->encoding == "mono8";
     const bool bgr = rgb->encoding == "bgr8", rgb8 = rgb->encoding == "rgb8";
     if (!mono && !bgr && !rgb8) {
-      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000, "unsupported color encoding '%s' (mono8, rgb8, bgr8)", rgb->encoding.c_str());
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
+                           "unsupported color encoding '%s' (mono8, rgb8, bgr8)",
+                           rgb->encoding.c_str());
       return;
     }
     for (size_t i = 0; i < g.data.size(); ++i) {
-      if (mono) g.data[i] = rgb->data[i];
-      else g.data[i] = static_cast<uint8_t>(0.299 * rgb->data[3 * i + (bgr ? 2 : 0)] + 0.587 * rgb->data[3 * i + 1] + 0.114 * rgb->data[3 * i + (bgr ? 0 : 2)]);
+      if (mono)
+        g.data[i] = rgb->data[i];
+      else
+        g.data[i] = static_cast<uint8_t>(0.299 * rgb->data[3 * i + (bgr ? 2 : 0)] +
+                                         0.587 * rgb->data[3 * i + 1] +
+                                         0.114 * rgb->data[3 * i + (bgr ? 0 : 2)]);
     }
     // Only keypoints with a depth can become landmarks of the RGB-D tracker: detect them there.
-    const auto with_depth = strataslam::valid_depth_mask(f.depth, cfg_.sensors.camera.depth_min, cfg_.sensors.camera.depth_max);
+    const auto with_depth = strataslam::valid_depth_mask(f.depth, cfg_.sensors.camera.depth_min,
+                                                         cfg_.sensors.camera.depth_max);
     f.keypoints = orb_->extract(g, &with_depth);
     if (!mono && cfg_.fusion.colorize_cloud) {
       f.rgb.width = g.width;
@@ -757,22 +926,25 @@ class StrataslamNode : public rclcpp::Node {
     process_rgbd(f, rgb.get());
   }
 
-  /// `rgb`: the colour image the keypoints come from (null with feature-frame input), for the live view.
+  /// `rgb`: the colour image the keypoints come from (null with feature-frame input), for the live
+  /// view.
   void process_rgbd(const strataslam::RgbdFrame& f, const sm::Image* rgb) {
     slam_->add_rgbd(f);
     publish_state(f.stamp);
     publish_camera_view(f, rgb);
-    if (depth_cloud_pub_->get_subscription_count() > 0 && std::chrono::steady_clock::now() >= next_depth_pub_) {
+    if (depth_cloud_pub_->get_subscription_count() > 0 &&
+        std::chrono::steady_clock::now() >= next_depth_pub_) {
       strataslam::BackprojectionConfig bp;
       bp.depth_min = cfg_.sensors.camera.depth_min;
       bp.depth_max = cfg_.sensors.camera.depth_max;
-      publish_live(*depth_cloud_pub_, strataslam::depth_to_cloud(f.depth, f.K, 4, bp), ext_.T_base_camera, f.stamp, next_depth_pub_);
+      publish_live(*depth_cloud_pub_, strataslam::depth_to_cloud(f.depth, f.K, 4, bp),
+                   ext_.T_base_camera, f.stamp, next_depth_pub_);
     }
   }
 
-  /// The image, the depth and the keypoints of a camera frame with what the tracking did with each one
-  /// (strataslam_msgs/CameraView), reduced to at most kViewWidth pixels wide: at most kViewPeriod apart
-  /// (wall clock), and only when someone listens.
+  /// The image, the depth and the keypoints of a camera frame with what the tracking did with each
+  /// one (strataslam_msgs/CameraView), reduced to at most kViewWidth pixels wide: at most
+  /// kViewPeriod apart (wall clock), and only when someone listens.
   void publish_camera_view(const strataslam::RgbdFrame& f, const sm::Image* rgb) {
     using strataslam_msgs::msg::CameraView;
     constexpr auto kViewPeriod = std::chrono::milliseconds(200);
@@ -798,7 +970,8 @@ class StrataslamNode : public rclcpp::Node {
       }
     }
     const bool bgr = rgb && rgb->encoding == "bgr8";
-    if (rgb && static_cast<int>(rgb->width) == f.depth.width && static_cast<int>(rgb->height) == f.depth.height &&
+    if (rgb && static_cast<int>(rgb->width) == f.depth.width &&
+        static_cast<int>(rgb->height) == f.depth.height &&
         (bgr || rgb->encoding == "rgb8" || rgb->encoding == "mono8")) {
       const int ch = rgb->encoding == "mono8" ? 1 : 3;
       v.image.width = v.depth.width;
@@ -820,17 +993,20 @@ class StrataslamNode : public rclcpp::Node {
       v.v.push_back(f.keypoints[i].v / static_cast<float>(step));
       uint8_t kind = use ? CameraView::UNMATCHED : CameraView::NOT_TRACKED;
       if (use && use->size() == f.keypoints.size()) {
-        kind = (*use)[i] == strataslam::KeypointUse::Inlier ? CameraView::INLIER
-            : (*use)[i] == strataslam::KeypointUse::Rejected ? CameraView::REJECTED : CameraView::UNMATCHED;
+        kind = (*use)[i] == strataslam::KeypointUse::Inlier     ? CameraView::INLIER
+               : (*use)[i] == strataslam::KeypointUse::Rejected ? CameraView::REJECTED
+                                                                : CameraView::UNMATCHED;
       }
       v.use.push_back(kind);
     }
     camera_view_pub_->publish(v);
   }
 
-  /// The points a sensor sees now, moved to the odometry frame with the pose just estimated: at most
-  /// kLivePeriod apart (wall clock) and kLiveMaxPoints per message, and only when someone listens.
-  void publish_live(rclcpp::Publisher<sm::PointCloud2>& pub, const std::vector<Eigen::Vector3f>& pts, const gtsam::Pose3& T_base_sensor,
+  /// The points a sensor sees now, moved to the odometry frame with the pose just estimated: at
+  /// most kLivePeriod apart (wall clock) and kLiveMaxPoints per message, and only when someone
+  /// listens.
+  void publish_live(rclcpp::Publisher<sm::PointCloud2>& pub,
+                    const std::vector<Eigen::Vector3f>& pts, const gtsam::Pose3& T_base_sensor,
                     Timestamp stamp, std::chrono::steady_clock::time_point& next) {
     constexpr auto kLivePeriod = std::chrono::milliseconds(100);
     constexpr size_t kLiveMaxPoints = 20000;
@@ -850,22 +1026,28 @@ class StrataslamNode : public rclcpp::Node {
   }
 
   size_t lidar_received_ = 0;
-  size_t lidar_malformed_ = 0;  ///< PointCloud2 messages dropped because their layout is inconsistent
+  size_t lidar_malformed_ =
+      0;  ///< PointCloud2 messages dropped because their layout is inconsistent
   void on_lidar(const sm::PointCloud2& m) {
     ++lidar_received_;
     lidar_frame_pending_ = m.header.frame_id;
     if (!ensure_system(camera_frame_pending_, m.header.frame_id, imu_frame_pending_)) return;
     const sm::PointField *fx = nullptr, *fy = nullptr, *fz = nullptr, *ft = nullptr;
     for (const auto& f : m.fields) {
-      if (f.name == "x") fx = &f;
-      else if (f.name == "y") fy = &f;
-      else if (f.name == "z") fz = &f;
-      else if (f.name == "t" || f.name == "time") ft = &f;
+      if (f.name == "x")
+        fx = &f;
+      else if (f.name == "y")
+        fy = &f;
+      else if (f.name == "z")
+        fz = &f;
+      else if (f.name == "t" || f.name == "time")
+        ft = &f;
     }
     if (!fx || !fy || !fz) return;
     if (const std::string err = cloud_layout_error(m, {fx, fy, fz, ft}); !err.empty()) {
       ++lidar_malformed_;
-      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000, "dropping malformed PointCloud2 on %s (%zu so far): %s",
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
+                           "dropping malformed PointCloud2 on %s (%zu so far): %s",
                            cfg_.sensors.lidar.topic.c_str(), lidar_malformed_, err.c_str());
       return;
     }
@@ -877,10 +1059,13 @@ class StrataslamNode : public rclcpp::Node {
     std::vector<double> times;
     for (size_t i = 0; i < n; ++i) {
       const uint8_t* p = m.data.data() + (i / m.width) * row + (i % m.width) * m.point_step;
-      const Eigen::Vector3f pt(static_cast<float>(read_field(p, *fx)), static_cast<float>(read_field(p, *fy)), static_cast<float>(read_field(p, *fz)));
+      const Eigen::Vector3f pt(static_cast<float>(read_field(p, *fx)),
+                               static_cast<float>(read_field(p, *fy)),
+                               static_cast<float>(read_field(p, *fz)));
       if (!pt.allFinite()) continue;
       scan.points.push_back(pt);
-      if (ft) times.push_back(read_field(p, *ft) * (ft->datatype == sm::PointField::UINT32 ? 1e-9 : 1.0));
+      if (ft)
+        times.push_back(read_field(p, *ft) * (ft->datatype == sm::PointField::UINT32 ? 1e-9 : 1.0));
     }
     if (ft && !times.empty()) {
       const double t0 = *std::min_element(times.begin(), times.end());
@@ -893,32 +1078,45 @@ class StrataslamNode : public rclcpp::Node {
 
   // ---------------- publishing ----------------
 
-  /// Whether the robot itself publishes odom -> base on TF (its wheel odometry). Decided once, online, before the
-  /// node publishes anything there: then the node cannot publish that transform too (a frame has one parent) and
-  /// publishes floor_<k> -> odom as the correction on top of the robot's odometry, its own odometry going to a sibling
-  /// frame `strataslam_odom`. Otherwise (no wheel odometry, or a bag processed offline) it publishes odom -> base
-  /// itself and the tree is whole (audit AUD-044).
-  /// Another node giving odom a parent (a localizer's map -> odom) and the SLAM's floor_<k> -> odom make two parents
-  /// for one frame: TF keeps one, and the floors hang loose. Said once, with what to do; nothing is changed.
+  /// Whether the robot itself publishes odom -> base on TF (its wheel odometry). Decided once,
+  /// online, before the node publishes anything there: then the node cannot publish that transform
+  /// too (a frame has one parent) and publishes floor_<k> -> odom as the correction on top of the
+  /// robot's odometry, its own odometry going to a sibling frame `strataslam_odom`. Otherwise (no
+  /// wheel odometry, or a bag processed offline) it publishes odom -> base itself and the tree is
+  /// whole (audit AUD-044). Another node giving odom a parent (a localizer's map -> odom) and the
+  /// SLAM's floor_<k> -> odom make two parents for one frame: TF keeps one, and the floors hang
+  /// loose. Said once, with what to do; nothing is changed.
   void warn_if_odom_has_another_parent() {
     if (odom_conflict_warned_ || !tf_listener_) return;
     std::string parent;
-    if (!tf_buffer_->_getParent(cfg_.robot.odom_frame, tf2::TimePointZero, parent) || parent.rfind("floor_", 0) == 0) return;
+    if (!tf_buffer_->_getParent(cfg_.robot.odom_frame, tf2::TimePointZero, parent) ||
+        parent.rfind("floor_", 0) == 0)
+      return;
     odom_conflict_warned_ = true;
-    RCLCPP_WARN(get_logger(), "TF: %s also has the parent '%s', from another node (a localizer such as AMCL publishing %s -> %s?). A frame "
-                "has one parent: if that node owns %s -> %s, set output.publish_tf: false in the profile (StrataSLAM then "
-                "publishes only floor_<k> -> strataslam_odom); if StrataSLAM should localize, stop the other node",
-                cfg_.robot.odom_frame.c_str(), parent.c_str(), parent.c_str(), cfg_.robot.odom_frame.c_str(), parent.c_str(),
-                cfg_.robot.odom_frame.c_str());
+    RCLCPP_WARN(get_logger(),
+                "TF: %s also has the parent '%s', from another node (a localizer such as AMCL "
+                "publishing %s -> %s?). A frame "
+                "has one parent: if that node owns %s -> %s, set output.publish_tf: false in the "
+                "profile (StrataSLAM then "
+                "publishes only floor_<k> -> strataslam_odom); if StrataSLAM should localize, stop "
+                "the other node",
+                cfg_.robot.odom_frame.c_str(), parent.c_str(), parent.c_str(),
+                cfg_.robot.odom_frame.c_str(), parent.c_str(), cfg_.robot.odom_frame.c_str());
   }
 
   bool robot_publishes_odom() {
     if (!robot_odom_tf_) {
-      robot_odom_tf_ = tf_listener_ && tf_buffer_->canTransform(cfg_.robot.odom_frame, cfg_.robot.base_frame, tf2::TimePointZero);
-      RCLCPP_INFO(get_logger(), *robot_odom_tf_ ? "TF %s -> %s comes from the robot: publishing floor_<k> -> %s as the correction on top of it, "
-                                                  "the SLAM odometry in strataslam_odom"
-                                                : "no TF %s -> %s from the robot: publishing it (and floor_<k> -> %s) from the SLAM odometry",
-                  cfg_.robot.odom_frame.c_str(), cfg_.robot.base_frame.c_str(), cfg_.robot.odom_frame.c_str());
+      robot_odom_tf_ =
+          tf_listener_ && tf_buffer_->canTransform(cfg_.robot.odom_frame, cfg_.robot.base_frame,
+                                                   tf2::TimePointZero);
+      RCLCPP_INFO(get_logger(),
+                  *robot_odom_tf_ ? "TF %s -> %s comes from the robot: publishing floor_<k> -> %s "
+                                    "as the correction on top of it, "
+                                    "the SLAM odometry in strataslam_odom"
+                                  : "no TF %s -> %s from the robot: publishing it (and floor_<k> "
+                                    "-> %s) from the SLAM odometry",
+                  cfg_.robot.odom_frame.c_str(), cfg_.robot.base_frame.c_str(),
+                  cfg_.robot.odom_frame.c_str());
     }
     return *robot_odom_tf_;
   }
@@ -927,16 +1125,19 @@ class StrataslamNode : public rclcpp::Node {
     const rclcpp::Time stamp(stamp_ns_value, RCL_ROS_TIME);
     const auto pose = slam_->current_pose_odom();
     const auto st = slam_->floor_status();
-    // output.publish_tf: false leaves map and odom to another node (a localizer that owns map -> odom): the SLAM keeps
-    // only its own branch floor_<k> -> strataslam_odom.
+    // output.publish_tf: false leaves map and odom to another node (a localizer that owns map ->
+    // odom): the SLAM keeps only its own branch floor_<k> -> strataslam_odom.
     const bool tf_tree = cfg_.output.publish_tf;
     if (!tf_tree && !tf_mode_logged_) {
       tf_mode_logged_ = true;
-      RCLCPP_INFO(get_logger(), "output.publish_tf is false: publishing only floor_<k> -> strataslam_odom; %s and %s are left to other nodes",
+      RCLCPP_INFO(get_logger(),
+                  "output.publish_tf is false: publishing only floor_<k> -> strataslam_odom; %s "
+                  "and %s are left to other nodes",
                   cfg_.robot.map_frame.c_str(), cfg_.robot.odom_frame.c_str());
     }
     const bool robot_odom = tf_tree && robot_publishes_odom();
-    const std::string slam_odom_frame = (robot_odom || !tf_tree) ? std::string("strataslam_odom") : cfg_.robot.odom_frame;
+    const std::string slam_odom_frame =
+        (robot_odom || !tf_tree) ? std::string("strataslam_odom") : cfg_.robot.odom_frame;
     if (tf_tree) warn_if_odom_has_another_parent();
     if (pose) {
       nav_msgs::msg::Odometry o;
@@ -952,7 +1153,10 @@ class StrataslamNode : public rclcpp::Node {
     }
     if (const auto fo = slam_->floor_from_odom()) {
       const std::string floor_frame =
-          "floor_" + std::to_string(std::max<int>(0, static_cast<int>(slam_->floor_status().floor < 0 ? last_floor_ : slam_->floor_status().floor)));
+          "floor_" +
+          std::to_string(std::max<int>(
+              0, static_cast<int>(slam_->floor_status().floor < 0 ? last_floor_
+                                                                  : slam_->floor_status().floor)));
       std::vector<geometry_msgs::msg::TransformStamped> out;
       geometry_msgs::msg::TransformStamped ts;
       ts.header.stamp = stamp;
@@ -961,8 +1165,9 @@ class StrataslamNode : public rclcpp::Node {
       ts.transform = to_transform(*fo);
       out.push_back(ts);
       if (tf_tree) {
-        // map -> floor_<k> for every floor seen: map is the first floor, and each other floor sits where the odometry
-        // entered it (its height included). `strataslam fuse` refines this offline.
+        // map -> floor_<k> for every floor seen: map is the first floor, and each other floor sits
+        // where the odometry entered it (its height included). `strataslam fuse` refines this
+        // offline.
         auto floors = floor_from_odom_;
         if (st.floor >= 0) floors[st.floor] = *fo;
         if (!root_floor_ && !floors.empty()) root_floor_ = floors.begin()->first;
@@ -980,20 +1185,24 @@ class StrataslamNode : public rclcpp::Node {
       if (!tf_tree) {
         // nothing above or on the robot's frames
       } else if (pose && !robot_odom) {
-        geometry_msgs::msg::TransformStamped tb;  // odom -> base from the SLAM odometry: the tree is whole
+        geometry_msgs::msg::TransformStamped
+            tb;  // odom -> base from the SLAM odometry: the tree is whole
         tb.header.stamp = stamp;
         tb.header.frame_id = cfg_.robot.odom_frame;
         tb.child_frame_id = cfg_.robot.base_frame;
         tb.transform = to_transform(*pose);
         out.push_back(tb);
       } else if (pose && robot_odom) {
-        // floor -> odom(robot) = (floor -> base, from the SLAM) * (odom(robot) -> base)^-1, at this stamp if TF has it.
+        // floor -> odom(robot) = (floor -> base, from the SLAM) * (odom(robot) -> base)^-1, at this
+        // stamp if TF has it.
         try {
           geometry_msgs::msg::TransformStamped wheel;
           try {
-            wheel = tf_buffer_->lookupTransform(cfg_.robot.odom_frame, cfg_.robot.base_frame, stamp);
+            wheel =
+                tf_buffer_->lookupTransform(cfg_.robot.odom_frame, cfg_.robot.base_frame, stamp);
           } catch (const tf2::TransformException&) {
-            wheel = tf_buffer_->lookupTransform(cfg_.robot.odom_frame, cfg_.robot.base_frame, tf2::TimePointZero);
+            wheel = tf_buffer_->lookupTransform(cfg_.robot.odom_frame, cfg_.robot.base_frame,
+                                                tf2::TimePointZero);
           }
           geometry_msgs::msg::TransformStamped tc;
           tc.header.stamp = stamp;
@@ -1002,8 +1211,9 @@ class StrataslamNode : public rclcpp::Node {
           tc.transform = to_transform((*fo) * (*pose) * from_transform(wheel.transform).inverse());
           out.push_back(tc);
         } catch (const tf2::TransformException& e) {
-          RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000, "no TF %s -> %s for the correction: %s", cfg_.robot.odom_frame.c_str(),
-                               cfg_.robot.base_frame.c_str(), e.what());
+          RCLCPP_WARN_THROTTLE(
+              get_logger(), *get_clock(), 5000, "no TF %s -> %s for the correction: %s",
+              cfg_.robot.odom_frame.c_str(), cfg_.robot.base_frame.c_str(), e.what());
         }
       }
       tf_broadcaster_->sendTransform(out);
@@ -1012,12 +1222,16 @@ class StrataslamNode : public rclcpp::Node {
       last_floor_ = st.floor;
       if (const auto fo = slam_->floor_from_odom()) floor_from_odom_[st.floor] = *fo;
     }
-    if (st.floor != last_state_floor_ || st.pending != last_pending_ || st.num_floors != last_num_floors_ || state_counter_++ % 10 == 0) {
+    if (st.floor != last_state_floor_ || st.pending != last_pending_ ||
+        st.num_floors != last_num_floors_ || state_counter_++ % 10 == 0) {
       strataslam_msgs::msg::FloorState fs;
       fs.header.stamp = stamp;
       fs.header.frame_id = cfg_.robot.map_frame;
       fs.floor = st.floor;
-      fs.state = st.pending ? "pending" : st.state == strataslam::FloorState::InTransition ? "in_transition" : st.state == strataslam::FloorState::Lost ? "lost" : "on_floor";
+      fs.state = st.pending                                         ? "pending"
+                 : st.state == strataslam::FloorState::InTransition ? "in_transition"
+                 : st.state == strataslam::FloorState::Lost         ? "lost"
+                                                                    : "on_floor";
       fs.transition_type = st.last_transition ? strataslam::to_string(*st.last_transition) : "";
       fs.session = st.session;
       fs.num_floors = static_cast<uint32_t>(st.num_floors);
@@ -1068,11 +1282,12 @@ class StrataslamNode : public rclcpp::Node {
 
   // ---------------- same-level candidates ----------------
 
-  /// Floors that could be one level (a drift of the odometry in z split it, or the robot came back to a floor
-  /// without relocalizing on it), checked as `strataslam fuse` checks them (ADR-0031) and only reported.
-  /// While on a floor: that floor against the others within same_level_max_dz, every kLevelCheckKeyframes
-  /// keyframes; at the end of a bag (`all`), every pair. The clouds are copied here (read-only, so the run
-  /// is unchanged) and registered in a background thread; its findings are logged on the next call.
+  /// Floors that could be one level (a drift of the odometry in z split it, or the robot came back
+  /// to a floor without relocalizing on it), checked as `strataslam fuse` checks them (ADR-0031)
+  /// and only reported. While on a floor: that floor against the others within same_level_max_dz,
+  /// every kLevelCheckKeyframes keyframes; at the end of a bag (`all`), every pair. The clouds are
+  /// copied here (read-only, so the run is unchanged) and registered in a background thread; its
+  /// findings are logged on the next call.
   void check_same_level(bool all) {
     constexpr size_t kLevelCheckKeyframes = 20;
     collect_same_level(all);
@@ -1081,29 +1296,39 @@ class StrataslamNode : public rclcpp::Node {
     std::vector<std::pair<int, int>> pairs;
     if (all) {
       for (auto i = floor_from_odom_.begin(); i != floor_from_odom_.end(); ++i)
-        for (auto j = std::next(i); j != floor_from_odom_.end(); ++j) pairs.push_back({i->first, j->first});
+        for (auto j = std::next(i); j != floor_from_odom_.end(); ++j)
+          pairs.push_back({i->first, j->first});
     } else {
-      if (st.floor < 0 || st.state != strataslam::FloorState::OnFloor || !floor_from_odom_.count(st.floor)) return;
+      if (st.floor < 0 || st.state != strataslam::FloorState::OnFloor ||
+          !floor_from_odom_.count(st.floor))
+        return;
       const size_t kfs = slam_->floor_path(st.floor).size();
       if (kfs < level_checked_kfs_[st.floor] + kLevelCheckKeyframes) return;
       level_checked_kfs_[st.floor] = kfs;
       for (const auto& [g, unused] : floor_from_odom_)
-        if (g != st.floor) pairs.push_back({std::min<int>(g, st.floor), std::max<int>(g, st.floor)});
+        if (g != st.floor)
+          pairs.push_back({std::min<int>(g, st.floor), std::max<int>(g, st.floor)});
     }
-    struct Job { int a, b; strataslam::Pose4 a_to_b; };
+    struct Job {
+      int a, b;
+      strataslam::Pose4 a_to_b;
+    };
     std::vector<Job> jobs;
     std::map<int, strataslam::PointCloud> clouds;
     const strataslam::FusionOptions opt;
     for (const auto& [a, b] : pairs) {
       if (level_reported_.count({a, b})) continue;
-      // Pose of b's floor frame in a's: in the plane through the odometry frame that both were tracked in; in
-      // height from the floor manager's levels, since the odometry misses an elevator or a change while lost.
+      // Pose of b's floor frame in a's: in the plane through the odometry frame that both were
+      // tracked in; in height from the floor manager's levels, since the odometry misses an
+      // elevator or a change while lost.
       const gtsam::Pose3 a_to_b = floor_from_odom_.at(a) * floor_from_odom_.at(b).inverse();
       const auto alt_a = slam_->floor_altitude(a), alt_b = slam_->floor_altitude(b);
       if (!alt_a || !alt_b) continue;
       const double dz = *alt_b - *alt_a;
       if (std::abs(dz) > opt.same_level_max_dz) continue;
-      jobs.push_back({a, b, strataslam::Pose4(a_to_b.rotation().yaw(), Eigen::Vector3d(a_to_b.x(), a_to_b.y(), dz))});
+      jobs.push_back({a, b,
+                      strataslam::Pose4(a_to_b.rotation().yaw(),
+                                        Eigen::Vector3d(a_to_b.x(), a_to_b.y(), dz))});
       for (int f : {a, b})
         if (!clouds.count(f)) clouds[f].points = slam_->floor_cloud(f, cfg_.output.voxel_size);
     }
@@ -1111,7 +1336,9 @@ class StrataslamNode : public rclcpp::Node {
     level_job_ = std::async(std::launch::async, [jobs, clouds = std::move(clouds), opt] {
       std::vector<strataslam::LevelCandidate> found;
       for (const auto& j : jobs)
-        if (auto c = strataslam::same_level_candidate(j.a, clouds.at(j.a), j.b, clouds.at(j.b), j.a_to_b, opt)) found.push_back(*c);
+        if (auto c = strataslam::same_level_candidate(j.a, clouds.at(j.a), j.b, clouds.at(j.b),
+                                                      j.a_to_b, opt))
+          found.push_back(*c);
       return found;
     });
     if (all) collect_same_level(true);  // end of the bag: wait for it and log what it found
@@ -1119,17 +1346,23 @@ class StrataslamNode : public rclcpp::Node {
 
   /// Logs the findings of the background check once it is done (`wait`: wait for it).
   void collect_same_level(bool wait) {
-    if (!level_job_.valid() || (!wait && level_job_.wait_for(std::chrono::seconds(0)) != std::future_status::ready)) return;
+    if (!level_job_.valid() ||
+        (!wait && level_job_.wait_for(std::chrono::seconds(0)) != std::future_status::ready))
+      return;
     for (const auto& c : level_job_.get()) {
       if (!level_reported_.insert({static_cast<int>(c.a), static_cast<int>(c.b)}).second) continue;
-      RCLCPP_WARN(get_logger(), "floors %d and %d could be the same level: compatible structure (score %.2f%s), heights %.2f m apart"
+      RCLCPP_WARN(get_logger(),
+                  "floors %d and %d could be the same level: compatible structure (score %.2f%s), "
+                  "heights %.2f m apart"
                   " (a candidate, not applied: confirm with `strataslam fuse --same-level %d,%d`)",
-                  static_cast<int>(c.a), static_cast<int>(c.b), c.score, c.structure_ambiguous ? ", but it also fits elsewhere" : "",
-                  std::abs(c.dz), static_cast<int>(c.a), static_cast<int>(c.b));
+                  static_cast<int>(c.a), static_cast<int>(c.b), c.score,
+                  c.structure_ambiguous ? ", but it also fits elsewhere" : "", std::abs(c.dz),
+                  static_cast<int>(c.a), static_cast<int>(c.b));
     }
   }
 
-  static sm::PointCloud2 xyz_cloud(const std::vector<Eigen::Vector3f>& pts, const std::string& frame, const rclcpp::Time& stamp) {
+  static sm::PointCloud2 xyz_cloud(const std::vector<Eigen::Vector3f>& pts,
+                                   const std::string& frame, const rclcpp::Time& stamp) {
     sm::PointCloud2 c;
     c.header.stamp = stamp;
     c.header.frame_id = frame;
@@ -1155,26 +1388,41 @@ class StrataslamNode : public rclcpp::Node {
   // ---------------- services ----------------
 
   void on_save_map(std::shared_ptr<std_srvs::srv::Trigger::Response> res) {
-    if (!slam_) { res->success = false; res->message = "the pipeline has not started yet"; return; }
+    if (!slam_) {
+      res->success = false;
+      res->message = "the pipeline has not started yet";
+      return;
+    }
     const std::string dir = expand_map_dir(cfg_.output.map_dir);
     const strataslam::MapData map = slam_->finalize(profile_text_);
     const auto w = strataslam::write_map(dir, map);
     res->success = static_cast<bool>(w);
     res->message = w ? dir : w.error().message;
     if (w) keyframes_at_last_save_ = slam_->keyframes().size();
-    RCLCPP_INFO(get_logger(), "save_map: %s (%zu keyframes, %zu loop closures accepted, lidar scans received: %zu)", res->message.c_str(),
-                slam_->keyframes().size(), slam_->loops().size(), lidar_received_);
-    // Said again at the end: the warning at start-up scrolls away, and a map without loops looks like a failed SLAM.
+    RCLCPP_INFO(
+        get_logger(),
+        "save_map: %s (%zu keyframes, %zu loop closures accepted, lidar scans received: %zu)",
+        res->message.c_str(), slam_->keyframes().size(), slam_->loops().size(), lidar_received_);
+    // Said again at the end: the warning at start-up scrolls away, and a map without loops looks
+    // like a failed SLAM.
     if (visual_loops_off_) {
-      RCLCPP_WARN(get_logger(), "save_map: visual loop closure was disabled for the whole run: no vocabulary (set fusion.vocabulary in "
+      RCLCPP_WARN(get_logger(),
+                  "save_map: visual loop closure was disabled for the whole run: no vocabulary "
+                  "(set fusion.vocabulary in "
                   "the profile or pass vocabulary:=)");
     }
   }
 
-  void on_mark_floor_change(const strataslam_msgs::srv::MarkFloorChange::Request& req, strataslam_msgs::srv::MarkFloorChange::Response& res) {
-    if (!slam_) { res.success = false; res.message = "the pipeline has not started yet"; return; }
+  void on_mark_floor_change(const strataslam_msgs::srv::MarkFloorChange::Request& req,
+                            strataslam_msgs::srv::MarkFloorChange::Response& res) {
+    if (!slam_) {
+      res.success = false;
+      res.message = "the pipeline has not started yet";
+      return;
+    }
     strataslam::TransitionType type = strataslam::TransitionType::Unknown;
-    if (!req.transition_type.empty() && !strataslam::parse_transition_type(req.transition_type, &type)) {
+    if (!req.transition_type.empty() &&
+        !strataslam::parse_transition_type(req.transition_type, &type)) {
       res.success = false;
       res.message = "unknown transition type '" + req.transition_type + "'";
       return;
@@ -1190,8 +1438,11 @@ class StrataslamNode : public rclcpp::Node {
   using DepthSub = message_filters::Subscriber<sm::Image>;
   using InfoSub = message_filters::Subscriber<sm::CameraInfo>;
   using FeatSub = message_filters::Subscriber<strataslam_msgs::msg::FeatureFrame>;
-  using FeatPolicy = message_filters::sync_policies::ApproximateTime<sm::Image, strataslam_msgs::msg::FeatureFrame, sm::CameraInfo>;
-  using RgbPolicy = message_filters::sync_policies::ApproximateTime<sm::Image, sm::Image, sm::CameraInfo>;
+  using FeatPolicy =
+      message_filters::sync_policies::ApproximateTime<sm::Image, strataslam_msgs::msg::FeatureFrame,
+                                                      sm::CameraInfo>;
+  using RgbPolicy =
+      message_filters::sync_policies::ApproximateTime<sm::Image, sm::Image, sm::CameraInfo>;
 
   std::string bag_path_;
   rclcpp::TimerBase::SharedPtr offline_timer_;
@@ -1202,15 +1453,18 @@ class StrataslamNode : public rclcpp::Node {
   std::optional<bool> robot_odom_tf_;
   std::optional<int> root_floor_;  ///< the floor that is map (the first one)
   bool tf_mode_logged_ = false, odom_conflict_warned_ = false;
-  size_t keyframes_at_last_save_ = 0;  ///< keyframes of the pipeline when the map was last saved  ///< the robot publishes odom -> base itself (decided once)
+  size_t keyframes_at_last_save_ =
+      0;  ///< keyframes of the pipeline when the map was last saved  ///< the robot publishes odom
+          ///< -> base itself (decided once)
   rclcpp::TimerBase::SharedPtr startup_failed_timer_;
   std::string profile_path_, vocabulary_path_, features_topic_, profile_text_;
   bool visual_loops_off_ = false;  ///< loops would come from the camera, but there is no vocabulary
   double cloud_period_s_ = 5.0;
   double wait_for_viewer_s_ = 0.0;
   strataslam::Extrinsics ext_;
-  std::map<int, gtsam::Pose3> floor_from_odom_;   ///< latest T_floor_odom of every floor (same-level checks)
-  std::map<int, size_t> level_checked_kfs_;       ///< keyframes of a floor at its last same-level check
+  std::map<int, gtsam::Pose3>
+      floor_from_odom_;  ///< latest T_floor_odom of every floor (same-level checks)
+  std::map<int, size_t> level_checked_kfs_;  ///< keyframes of a floor at its last same-level check
   std::set<std::pair<int, int>> level_reported_;
   std::future<std::vector<strataslam::LevelCandidate>> level_job_;
   rclcpp::Publisher<sm::PointCloud2>::SharedPtr scan_pub_, depth_cloud_pub_;
@@ -1247,7 +1501,8 @@ class StrataslamNode : public rclcpp::Node {
   std::optional<strataslam::BaroSample> last_baro_reference_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr ext_odom_sub_;
   rclcpp::Subscription<tf2_msgs::msg::TFMessage>::SharedPtr ext_tf_sub_;
-  std::deque<std::pair<Timestamp, std::function<void()>>> camera_queue_;  ///< frames waiting for the external odometry
+  std::deque<std::pair<Timestamp, std::function<void()>>>
+      camera_queue_;  ///< frames waiting for the external odometry
   Timestamp newest_camera_ = 0, last_ext_stamp_ = 0;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr save_srv_, session_srv_;
   rclcpp::Service<strataslam_msgs::srv::MarkFloorChange>::SharedPtr mark_srv_;

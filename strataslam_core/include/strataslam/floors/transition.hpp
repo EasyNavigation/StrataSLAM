@@ -1,10 +1,9 @@
 #pragma once
 
+#include <Eigen/Core>
 #include <array>
 #include <optional>
 #include <string>
-
-#include <Eigen/Core>
 
 #include "strataslam/common/types.hpp"
 
@@ -22,7 +21,7 @@ struct TransitionRecord {
   FloorId to = 0;
   KeyframeId kf_before = 0;
   KeyframeId kf_after = 0;
-  std::optional<double> delta_z;  ///< m, if measurable
+  std::optional<double> delta_z;                         ///< m, if measurable
   Eigen::Matrix4d covariance = Eigen::Matrix4d::Zero();  ///< tangent space of Pose4
   bool continuous_tracking = false;
   /// Pose4 (yaw, x, y, z) of the base at `kf_after` relative to the base at `kf_before`, when the

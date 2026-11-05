@@ -21,8 +21,8 @@ struct VisualKeypoint {
 
 struct VisualPayload {
   std::vector<VisualKeypoint> keypoints;
-  uint32_t descriptor_cols = 0;        ///< bytes per descriptor
-  std::vector<uint8_t> descriptors;    ///< keypoints.size() * descriptor_cols bytes
+  uint32_t descriptor_cols = 0;      ///< bytes per descriptor
+  std::vector<uint8_t> descriptors;  ///< keypoints.size() * descriptor_cols bytes
 
   bool operator==(const VisualPayload& o) const {
     return keypoints == o.keypoints && descriptor_cols == o.descriptor_cols &&

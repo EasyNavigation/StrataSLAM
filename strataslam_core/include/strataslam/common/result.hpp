@@ -15,8 +15,8 @@ struct Error {
 template <typename T>
 class Result {
  public:
-  Result(T value) : v_(std::move(value)) {}          // NOLINT: implicit by design
-  Result(Error error) : v_(std::move(error)) {}      // NOLINT: implicit by design
+  Result(T value) : v_(std::move(value)) {}      // NOLINT: implicit by design
+  Result(Error error) : v_(std::move(error)) {}  // NOLINT: implicit by design
 
   bool ok() const { return std::holds_alternative<T>(v_); }
   explicit operator bool() const { return ok(); }

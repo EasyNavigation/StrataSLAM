@@ -1,10 +1,9 @@
 #include "strataslam/frontend/lidar_frontend.hpp"
 
+#include <Eigen/Eigenvalues>
 #include <algorithm>
 #include <cmath>
 #include <deque>
-
-#include <Eigen/Eigenvalues>
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 #pragma GCC diagnostic ignored "-Wsign-compare"
@@ -22,27 +21,33 @@ namespace strataslam {
 
 namespace {
 
-// ---- Registration whose result depends neither on the run nor on the number of threads (ADR-0048) ----
+// ---- Registration whose result depends neither on the run nor on the number of threads (ADR-0048)
+// ----
 //
-// small_gicp's OpenMP helpers hand out work dynamically (`schedule(guided)`): its reduction sums each thread's
-// share in whatever order the threads took them, and its parallel downsampling orders the output points by which
-// thread finished first. Floating-point sums in a different order give a different pose, and over a long run a
-// different map (S11: 5 mm between two runs with 6 threads). Here the downsampling is sequential (as small_gicp's
-// own one-thread path), the normals are computed per point (each one independent of the others), and the
-// reduction splits the factors into a fixed number of contiguous chunks, summed in chunk order: the threads only
-// decide who computes a chunk, never how the sums are grouped. One thread or twenty give the same bits.
+// small_gicp's OpenMP helpers hand out work dynamically (`schedule(guided)`): its reduction sums
+// each thread's share in whatever order the threads took them, and its parallel downsampling orders
+// the output points by which thread finished first. Floating-point sums in a different order give a
+// different pose, and over a long run a different map (S11: 5 mm between two runs with 6 threads).
+// Here the downsampling is sequential (as small_gicp's own one-thread path), the normals are
+// computed per point (each one independent of the others), and the reduction splits the factors
+// into a fixed number of contiguous chunks, summed in chunk order: the threads only decide who
+// computes a chunk, never how the sums are grouped. One thread or twenty give the same bits.
 
 constexpr int kReductionChunks = 16;
 
 struct ChunkedReduction {
   int num_threads = 1;
 
-  template <typename TargetPointCloud, typename SourcePointCloud, typename TargetTree, typename CorrespondenceRejector, typename Factor>
+  template <typename TargetPointCloud, typename SourcePointCloud, typename TargetTree,
+            typename CorrespondenceRejector, typename Factor>
   std::tuple<Eigen::Matrix<double, 6, 6>, Eigen::Matrix<double, 6, 1>, double> linearize(
       const TargetPointCloud& target, const SourcePointCloud& source, const TargetTree& target_tree,
-      const CorrespondenceRejector& rejector, const Eigen::Isometry3d& T, std::vector<Factor>& factors) const {
-    std::vector<Eigen::Matrix<double, 6, 6>> Hs(kReductionChunks, Eigen::Matrix<double, 6, 6>::Zero());
-    std::vector<Eigen::Matrix<double, 6, 1>> bs(kReductionChunks, Eigen::Matrix<double, 6, 1>::Zero());
+      const CorrespondenceRejector& rejector, const Eigen::Isometry3d& T,
+      std::vector<Factor>& factors) const {
+    std::vector<Eigen::Matrix<double, 6, 6>> Hs(kReductionChunks,
+                                                Eigen::Matrix<double, 6, 6>::Zero());
+    std::vector<Eigen::Matrix<double, 6, 1>> bs(kReductionChunks,
+                                                Eigen::Matrix<double, 6, 1>::Zero());
     std::vector<double> es(kReductionChunks, 0.0);
     const std::int64_t n = static_cast<std::int64_t>(factors.size());
 #pragma omp parallel for num_threads(num_threads) schedule(static, 1)
@@ -52,7 +57,8 @@ struct ChunkedReduction {
         Eigen::Matrix<double, 6, 6> H;
         Eigen::Matrix<double, 6, 1> b;
         double e;
-        if (!factors[i].linearize(target, source, target_tree, T, i, rejector, &H, &b, &e)) continue;
+        if (!factors[i].linearize(target, source, target_tree, T, i, rejector, &H, &b, &e))
+          continue;
         Hs[c] += H;
         bs[c] += b;
         es[c] += e;
@@ -67,8 +73,8 @@ struct ChunkedReduction {
   }
 
   template <typename TargetPointCloud, typename SourcePointCloud, typename Factor>
-  double error(const TargetPointCloud& target, const SourcePointCloud& source, const Eigen::Isometry3d& T,
-               std::vector<Factor>& factors) const {
+  double error(const TargetPointCloud& target, const SourcePointCloud& source,
+               const Eigen::Isometry3d& T, std::vector<Factor>& factors) const {
     std::vector<double> es(kReductionChunks, 0.0);
     const std::int64_t n = static_cast<std::int64_t>(factors.size());
 #pragma omp parallel for num_threads(num_threads) schedule(static, 1)
@@ -86,15 +92,18 @@ using Cloud = small_gicp::PointCloud;
 using Tree = small_gicp::KdTree<Cloud>;
 
 /// Downsampled cloud with normals and covariances, and its kd-tree (deterministic, see above).
-std::pair<std::shared_ptr<Cloud>, std::shared_ptr<Tree>> preprocess(const Cloud& raw, double leaf, int neighbors, int threads) {
+std::pair<std::shared_ptr<Cloud>, std::shared_ptr<Tree>> preprocess(const Cloud& raw, double leaf,
+                                                                    int neighbors, int threads) {
   auto ds = small_gicp::voxelgrid_sampling(raw, leaf);
   auto tree = std::make_shared<Tree>(ds);
   small_gicp::estimate_normals_covariances_omp(*ds, *tree, neighbors, std::max(1, threads));
   return {ds, tree};
 }
 
-small_gicp::RegistrationResult align_gicp(const Cloud& target, const Cloud& source, const Tree& target_tree,
-                                          const Eigen::Isometry3d& init, double max_correspondence, int max_iterations, int threads) {
+small_gicp::RegistrationResult align_gicp(const Cloud& target, const Cloud& source,
+                                          const Tree& target_tree, const Eigen::Isometry3d& init,
+                                          double max_correspondence, int max_iterations,
+                                          int threads) {
   small_gicp::Registration<small_gicp::GICPFactor, ChunkedReduction> registration;
   registration.reduction.num_threads = std::max(1, threads);
   registration.rejector.max_dist_sq = max_correspondence * max_correspondence;
@@ -106,7 +115,8 @@ small_gicp::RegistrationResult align_gicp(const Cloud& target, const Cloud& sour
 
 std::vector<Eigen::Vector4d> to_homogeneous(const std::vector<Eigen::Vector3f>& pts) {
   std::vector<Eigen::Vector4d> out(pts.size());
-  for (size_t i = 0; i < pts.size(); ++i) out[i] = Eigen::Vector4d(pts[i].x(), pts[i].y(), pts[i].z(), 1.0);
+  for (size_t i = 0; i < pts.size(); ++i)
+    out[i] = Eigen::Vector4d(pts[i].x(), pts[i].y(), pts[i].z(), 1.0);
   return out;
 }
 
@@ -122,9 +132,11 @@ gtsam::Pose3 from_iso(const Eigen::Isometry3d& T) {
 }
 
 /// Normalized translation-Hessian spectrum: eigenvalues divided by the number of correspondences,
-/// reported as (min eigenvalue / max eigenvalue). A well-constrained room is ~1e-1, a corridor ~1e-3.
+/// reported as (min eigenvalue / max eigenvalue). A well-constrained room is ~1e-1, a corridor
+/// ~1e-3.
 void spectrum(const Eigen::Matrix<double, 6, 6>& H, double* min_over_max, double* cond) {
-  Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> es(H.block<3, 3>(3, 3));  // small_gicp ordering: [rot, trans]
+  Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> es(
+      H.block<3, 3>(3, 3));  // small_gicp ordering: [rot, trans]
   const double lo = std::max(0.0, es.eigenvalues()(0)), hi = std::max(1e-12, es.eigenvalues()(2));
   *min_over_max = lo / hi;
   *cond = lo > 0 ? hi / lo : 1e12;
@@ -143,10 +155,11 @@ struct LidarFrontend::Impl {
   small_gicp::PointCloud::Ptr map_cloud;
   std::shared_ptr<small_gicp::KdTree<small_gicp::PointCloud>> map_tree;
   bool initialized = false;
-  gtsam::Pose3 T_odom_base;       // last pose
+  gtsam::Pose3 T_odom_base;         // last pose
   gtsam::Pose3 last_keyframe_pose;  // T_odom_lidar of the last keyframe
-  gtsam::Pose3 velocity;          // body-frame delta per scan (constant velocity model)
-  std::deque<gtsam::Pose3> recent;  // last base poses, to estimate the velocity over a longer baseline
+  gtsam::Pose3 velocity;            // body-frame delta per scan (constant velocity model)
+  std::deque<gtsam::Pose3>
+      recent;  // last base poses, to estimate the velocity over a longer baseline
   Timestamp last_stamp = 0;
   TrackingQuality last_quality;
   std::vector<Eigen::Vector3f> last_kf_cloud;
@@ -156,7 +169,8 @@ struct LidarFrontend::Impl {
   void rebuild_map(const gtsam::Pose3& T_odom_lidar_now) {
     std::vector<Eigen::Vector3f> pts;
     for (const auto& kf : keyframes) {
-      if ((kf.T_odom_lidar.translation() - T_odom_lidar_now.translation()).norm() > cfg.map_radius) continue;
+      if ((kf.T_odom_lidar.translation() - T_odom_lidar_now.translation()).norm() > cfg.map_radius)
+        continue;
       const auto w = transform_points(kf.cloud, kf.T_odom_lidar.matrix());
       pts.insert(pts.end(), w.begin(), w.end());
     }
@@ -177,7 +191,9 @@ LidarFrontend::LidarFrontend(const LidarFrontendConfig& config, const gtsam::Pos
 LidarFrontend::~LidarFrontend() = default;
 
 TrackingQuality LidarFrontend::quality() const { return impl_->last_quality; }
-const std::vector<Eigen::Vector3f>& LidarFrontend::last_keyframe_cloud() const { return impl_->last_kf_cloud; }
+const std::vector<Eigen::Vector3f>& LidarFrontend::last_keyframe_cloud() const {
+  return impl_->last_kf_cloud;
+}
 
 void LidarFrontend::request_keyframe() { impl_->force_kf = true; }
 
@@ -196,10 +212,9 @@ void LidarFrontend::reset(const gtsam::Pose3& T_init) {
   s.last_kf_cloud.clear();
 }
 
-LidarFrontend::RegistrationOutput LidarFrontend::register_clouds(const std::vector<Eigen::Vector3f>& target,
-                                                                 const std::vector<Eigen::Vector3f>& source,
-                                                                 const gtsam::Pose3& init,
-                                                                 const LidarFrontendConfig& cfg) {
+LidarFrontend::RegistrationOutput LidarFrontend::register_clouds(
+    const std::vector<Eigen::Vector3f>& target, const std::vector<Eigen::Vector3f>& source,
+    const gtsam::Pose3& init, const LidarFrontendConfig& cfg) {
   RegistrationOutput out;
   out.T_target_source = init;
   if (target.size() < 50 || source.size() < 50) {
@@ -211,7 +226,8 @@ LidarFrontend::RegistrationOutput LidarFrontend::register_clouds(const std::vect
   small_gicp::PointCloud t_raw(t_h), s_raw(s_h);
   auto tp = preprocess(t_raw, cfg.scan_voxel * 0.5, cfg.num_neighbors, cfg.threads);
   auto sp = preprocess(s_raw, cfg.scan_voxel * 0.5, cfg.num_neighbors, cfg.threads);
-  const auto r = align_gicp(*tp.first, *sp.first, *tp.second, to_iso(init), cfg.max_correspondence, cfg.max_iterations, cfg.threads);
+  const auto r = align_gicp(*tp.first, *sp.first, *tp.second, to_iso(init), cfg.max_correspondence,
+                            cfg.max_iterations, cfg.threads);
   out.T_target_source = from_iso(r.T_target_source);
   out.converged = r.converged;
   out.hessian = r.H;
@@ -222,8 +238,9 @@ LidarFrontend::RegistrationOutput LidarFrontend::register_clouds(const std::vect
   Eigen::Matrix<double, 6, 6> Hn = r.H / std::max<double>(1.0, r.num_inliers);
   spectrum(Hn, &out.quality.min_eigenvalue, &out.quality.hessian_condition);
   out.quality.state = out.quality.fitness < cfg.min_fitness ? TrackingState::Lost
-                      : out.quality.min_eigenvalue < cfg.degeneracy_threshold ? TrackingState::Degraded
-                                                                               : TrackingState::Good;
+                      : out.quality.min_eigenvalue < cfg.degeneracy_threshold
+                          ? TrackingState::Degraded
+                          : TrackingState::Good;
   return out;
 }
 
@@ -286,8 +303,8 @@ FrontendResult LidarFrontend::process(const SensorFrame& frame) {
   const auto h = to_homogeneous(cloud);
   small_gicp::PointCloud raw(h);
   auto sp = preprocess(raw, s.cfg.scan_voxel * 0.5, s.cfg.num_neighbors, s.cfg.threads);
-  const auto r = align_gicp(*s.map_cloud, *sp.first, *s.map_tree, to_iso(pred_lidar), s.cfg.max_correspondence, s.cfg.max_iterations,
-                            s.cfg.threads);
+  const auto r = align_gicp(*s.map_cloud, *sp.first, *s.map_tree, to_iso(pred_lidar),
+                            s.cfg.max_correspondence, s.cfg.max_iterations, s.cfg.threads);
 
   TrackingQuality q;
   const double n_src = static_cast<double>(sp.first->size());
@@ -295,9 +312,9 @@ FrontendResult LidarFrontend::process(const SensorFrame& frame) {
   q.fitness = n_src > 0 ? r.num_inliers / n_src : 0.0;
   Eigen::Matrix<double, 6, 6> Hn = r.H / std::max<double>(1.0, r.num_inliers);
   spectrum(Hn, &q.min_eigenvalue, &q.hessian_condition);
-  q.state = q.fitness < s.cfg.min_fitness ? TrackingState::Lost
+  q.state = q.fitness < s.cfg.min_fitness                   ? TrackingState::Lost
             : q.min_eigenvalue < s.cfg.degeneracy_threshold ? TrackingState::Degraded
-                                                             : TrackingState::Good;
+                                                            : TrackingState::Good;
   s.last_quality = q;
   res.quality = q;
   s.last_stamp = frame.stamp;
@@ -324,14 +341,19 @@ FrontendResult LidarFrontend::process(const SensorFrame& frame) {
   if (s.recent.size() > 4) s.recent.pop_front();
   // Velocity over up to 3 scans: registration jitter is not extrapolated into the next prediction.
   const size_t n_base = s.recent.size() - 1;
-  s.velocity = n_base == 0 ? res.delta : gtsam::Pose3::Expmap(gtsam::Pose3::Logmap(s.recent.front().between(s.recent.back())) / static_cast<double>(n_base));
+  s.velocity =
+      n_base == 0
+          ? res.delta
+          : gtsam::Pose3::Expmap(gtsam::Pose3::Logmap(s.recent.front().between(s.recent.back())) /
+                                 static_cast<double>(n_base));
   s.T_odom_base = new_base;
   res.T_odom_base = new_base;
   res.valid = true;
 
   const gtsam::Pose3 rel = s.last_keyframe_pose.between(T_ol);
   const double rot = gtsam::Rot3::Logmap(rel.rotation()).norm() * 180.0 / M_PI;
-  if (rel.translation().norm() > s.cfg.keyframe_translation || rot > s.cfg.keyframe_rotation_deg || s.force_kf) {
+  if (rel.translation().norm() > s.cfg.keyframe_translation || rot > s.cfg.keyframe_rotation_deg ||
+      s.force_kf) {
     s.force_kf = false;
     Impl::Keyframe kf{T_ol, voxel_downsample(pts, s.cfg.keyframe_cloud_voxel)};
     s.keyframes.push_back(kf);

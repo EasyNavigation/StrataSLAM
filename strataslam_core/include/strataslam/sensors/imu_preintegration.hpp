@@ -1,10 +1,10 @@
 #pragma once
 
-#include <memory>
-
 #include <gtsam/navigation/CombinedImuFactor.h>
 #include <gtsam/navigation/ImuBias.h>
 #include <gtsam/navigation/NavState.h>
+
+#include <memory>
 
 #include "strataslam/config/config.hpp"
 #include "strataslam/sensors/measurements.hpp"
@@ -12,11 +12,13 @@
 namespace strataslam {
 
 /// On-manifold IMU preintegration (gtsam::PreintegratedCombinedMeasurements) between two instants,
-/// with the noise densities of the profile. World frame is z-up; the accelerometer reads +g at rest.
+/// with the noise densities of the profile. World frame is z-up; the accelerometer reads +g at
+/// rest.
 class ImuPreintegrator {
  public:
-  explicit ImuPreintegrator(const ImuNoise& noise, double gravity = 9.80665,
-                            const gtsam::imuBias::ConstantBias& bias = gtsam::imuBias::ConstantBias());
+  explicit ImuPreintegrator(
+      const ImuNoise& noise, double gravity = 9.80665,
+      const gtsam::imuBias::ConstantBias& bias = gtsam::imuBias::ConstantBias());
 
   /// Integrates one sample over `dt` seconds.
   void add(const ImuSample& s, double dt);
@@ -27,7 +29,9 @@ class ImuPreintegrator {
   double delta_t() const { return pim_->deltaTij(); }
   gtsam::Rot3 delta_rotation() const { return pim_->deltaRij(); }
   /// Predicted navigation state at the end of the window.
-  gtsam::NavState predict(const gtsam::NavState& at_start) const { return pim_->predict(at_start, bias_); }
+  gtsam::NavState predict(const gtsam::NavState& at_start) const {
+    return pim_->predict(at_start, bias_);
+  }
   const gtsam::PreintegratedCombinedMeasurements& measurements() const { return *pim_; }
 
  private:

@@ -19,16 +19,16 @@ struct SimConfig {
   int image_width = 320, image_height = 240;
   double hfov_deg = 70.0;
   int max_keypoints = 500;
-  double pixel_sigma = 0.5;       ///< px
-  double depth_coeff = 0.0015;    ///< depth noise sigma = coeff * z^2 (m)
-  double depth_max = 10.0;        ///< m, sensor limit
-  int desc_flip_bits = 6;         ///< descriptor bits flipped per observation
-  double outlier_ratio = 0.05;    ///< spurious keypoints relative to real ones
+  double pixel_sigma = 0.5;     ///< px
+  double depth_coeff = 0.0015;  ///< depth noise sigma = coeff * z^2 (m)
+  double depth_max = 10.0;      ///< m, sensor limit
+  int desc_flip_bits = 6;       ///< descriptor bits flipped per observation
+  double outlier_ratio = 0.05;  ///< spurious keypoints relative to real ones
   /// Time windows (s) in which the camera delivers empty frames (no keypoints, no depth).
   std::vector<std::pair<double, double>> camera_blackouts;
 
   // LiDAR.
-  int lidar_beams = 16;           ///< 16 / 32 / 64
+  int lidar_beams = 16;  ///< 16 / 32 / 64
   int lidar_columns = 360;
   double lidar_fov_deg = 30.0;
   double lidar_range_sigma = 0.02;
@@ -42,7 +42,7 @@ struct SimConfig {
 
   // Barometer.
   double baro_sigma_pa = 1.0;
-  double baro_drift_pa = 0.05;    ///< random-walk, Pa per sqrt(s)
+  double baro_drift_pa = 0.05;  ///< random-walk, Pa per sqrt(s)
   double temperature_k = 288.15;
   double base_pressure_pa = 101325.0;
 
@@ -53,9 +53,7 @@ struct SimConfig {
   uint64_t seed = 42;
   int64_t start_stamp_ns = 1'000'000'000'000LL;
 
-  SimConfig() {
-    extrinsics.T_base_camera = strataslam::Extrinsics::ForwardCamera();
-  }
+  SimConfig() { extrinsics.T_base_camera = strataslam::Extrinsics::ForwardCamera(); }
 };
 
 struct SensorEvent {
@@ -87,7 +85,9 @@ class Simulator {
   strataslam::LidarScan lidar(size_t i) const;
 
   // Ground truth.
-  int64_t stamp_at(double t) const { return cfg_.start_stamp_ns + static_cast<int64_t>(std::llround(t * 1e9)); }
+  int64_t stamp_at(double t) const {
+    return cfg_.start_stamp_ns + static_cast<int64_t>(std::llround(t * 1e9));
+  }
   double time_of(int64_t stamp) const { return (stamp - cfg_.start_stamp_ns) * 1e-9; }
   gtsam::Pose3 gt_pose(int64_t stamp) const { return trajectory_->pose_at(time_of(stamp)); }
   int true_floor(int64_t stamp) const { return trajectory_->state_at(time_of(stamp)).true_floor; }

@@ -1,9 +1,9 @@
+#include "strataslam_sim/building.hpp"
+
 #include <gtest/gtest.h>
 
 #include <cmath>
 #include <map>
-
-#include "strataslam_sim/building.hpp"
 
 using namespace strataslam_sim;
 using Eigen::Vector3d;
@@ -62,7 +62,8 @@ TEST(Building, IdenticalFloorsReplicateLandmarksExactly) {
     ++total;
     for (const auto& l0 : b.landmarks()) {
       if (l0.dynamic || l0.level != 0) continue;
-      if ((l0.position + Vector3d(0, 0, H) - l1.position).norm() < 1e-9 && l0.descriptor == l1.descriptor) {
+      if ((l0.position + Vector3d(0, 0, H) - l1.position).norm() < 1e-9 &&
+          l0.descriptor == l1.descriptor) {
         ++matched;
         break;
       }
@@ -92,7 +93,8 @@ TEST(Building, DistinctFloorsDifferInTextureAndFurniture) {
 
 TEST(Building, CabinMovesAndDoorBlocks) {
   const Building b(cfg());
-  // Inside the cabin looking out through the door: open door sees the lobby, closed door sees the leaf.
+  // Inside the cabin looking out through the door: open door sees the lobby, closed door sees the
+  // leaf.
   const Vector3d o(21.6, -1.1, 1.2);
   const auto open = b.raycast(o, {0, 1, 0}, 50, 0, false);
   const auto closed = b.raycast(o, {0, 1, 0}, 50, 0, true);
@@ -127,7 +129,8 @@ TEST(Building, LandmarksAreOnSurfaces) {
     bool inside = false, on_surface = false;
     for (const auto& box : b.boxes()) {
       if (box.dynamic != lm.dynamic) continue;
-      if (point_in_box(lm.position, box, 0.03) && !point_in_box(lm.position, box, -0.03)) on_surface = true;
+      if (point_in_box(lm.position, box, 0.03) && !point_in_box(lm.position, box, -0.03))
+        on_surface = true;
       if (point_in_box(lm.position, box, -0.03)) inside = true;
     }
     if (on_surface && !inside) ++near_surface;
@@ -135,28 +138,33 @@ TEST(Building, LandmarksAreOnSurfaces) {
   EXPECT_GT(near_surface, 0.95 * n);
 }
 
-// With identical floors the top floor's ceiling is the same slab, with the same textures, as every other floor's
-// ceiling (the floor slab of the level above): a sensor looking up cannot tell the top floor apart (audit AUD-024).
+// With identical floors the top floor's ceiling is the same slab, with the same textures, as every
+// other floor's ceiling (the floor slab of the level above): a sensor looking up cannot tell the
+// top floor apart (audit AUD-024).
 TEST(Building, TheTopFloorsCeilingIsLikeEveryOtherCeiling) {
   BuildingConfig c = cfg(true);
   const Building b(c);
   const double H = c.floor_height;
   int roof = 0, twins = 0;
   for (const auto& r : b.landmarks()) {
-    // The roof's upper face looks at the sky (an intermediate slab's is under the walls of the floor above): only
-    // what can be seen from inside counts.
+    // The roof's upper face looks at the sky (an intermediate slab's is under the walls of the
+    // floor above): only what can be seen from inside counts.
     if (r.dynamic || r.level != c.num_floors || r.position.z() > c.num_floors * H - 1e-6) continue;
     ++roof;
     for (const auto& l : b.landmarks()) {
       if (l.dynamic || l.level != c.num_floors - 1) continue;
-      if ((l.position + Vector3d(0, 0, H) - r.position).norm() < 1e-9 && l.descriptor == r.descriptor) {
+      if ((l.position + Vector3d(0, 0, H) - r.position).norm() < 1e-9 &&
+          l.descriptor == r.descriptor) {
         ++twins;
         break;
       }
     }
   }
   EXPECT_GT(roof, 100);
-  EXPECT_GE(twins, 0.99 * roof);  // as for the floors: a few landmarks on the slab's edges are buried differently
+  EXPECT_GE(
+      twins,
+      0.99 *
+          roof);  // as for the floors: a few landmarks on the slab's edges are buried differently
   // Floors that differ keep a roof of their own.
   BuildingConfig d = cfg(false);
   const Building bd(d);
@@ -165,27 +173,40 @@ TEST(Building, TheTopFloorsCeilingIsLikeEveryOtherCeiling) {
     if (r.dynamic || r.level != d.num_floors) continue;
     ++roof_d;
     for (const auto& l : bd.landmarks())
-      if (!l.dynamic && l.level == d.num_floors - 1 && (l.position + Vector3d(0, 0, H) - r.position).norm() < 1e-9 && l.descriptor == r.descriptor) ++twins_d;
+      if (!l.dynamic && l.level == d.num_floors - 1 &&
+          (l.position + Vector3d(0, 0, H) - r.position).norm() < 1e-9 &&
+          l.descriptor == r.descriptor)
+        ++twins_d;
   }
   EXPECT_GT(roof_d, 100);
   EXPECT_EQ(twins_d, 0);
 }
 
-// The roof closes the building wherever there is a floor below it, annexes included: with identical floors it is a
-// copy of the top slab, and that slab has openings where the stairs, the elevator and the ramp arrive from below.
+// The roof closes the building wherever there is a floor below it, annexes included: with identical
+// floors it is a copy of the top slab, and that slab has openings where the stairs, the elevator
+// and the ramp arrive from below.
 TEST(Building, TheRoofIsClosedOverTheTopFloorAndEveryAnnex) {
   for (const bool identical : {true, false}) {
     for (const bool atrium : {false, true}) {
       BuildingConfig c = cfg(identical, atrium);
       const Building b(c);
-      const double H = c.floor_height, z = (c.num_floors - 1) * H + 1.5;  // 1.5 m above the top floor
+      const double H = c.floor_height,
+                   z = (c.num_floors - 1) * H + 1.5;  // 1.5 m above the top floor
       const std::map<std::string, Vector3d> spots = {
-          {"main", {16, 3, z}},          {"atrium", {16, 11, z}},     {"stairs A", {11.0, -1.5, z}},
-          {"stairs B", {13.2, -1.5, z}}, {"stair landing", {12, -3.3, z}}, {"elevator", {21.6, -1.8, z}},
-          {"ramp A", {34, 9.1, z}},      {"ramp B", {34, 10.9, z}},   {"ramp landing", {b.ramp_land_x1() - 1.0, 10, z}}};
+          {"main", {16, 3, z}},
+          {"atrium", {16, 11, z}},
+          {"stairs A", {11.0, -1.5, z}},
+          {"stairs B", {13.2, -1.5, z}},
+          {"stair landing", {12, -3.3, z}},
+          {"elevator", {21.6, -1.8, z}},
+          {"ramp A", {34, 9.1, z}},
+          {"ramp B", {34, 10.9, z}},
+          {"ramp landing", {b.ramp_land_x1() - 1.0, 10, z}}};
       for (const auto& [name, o] : spots) {
         const auto up = b.raycast(o, {0, 0, 1}, 50, 0, false);
-        EXPECT_TRUE(up && *up < H) << name << (identical ? " (identical floors)" : " (distinct floors)") << (atrium ? ", atrium" : "");
+        EXPECT_TRUE(up && *up < H)
+            << name << (identical ? " (identical floors)" : " (distinct floors)")
+            << (atrium ? ", atrium" : "");
       }
     }
   }

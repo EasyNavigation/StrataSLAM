@@ -1,12 +1,11 @@
 #pragma once
 
+#include <Eigen/Core>
 #include <deque>
 #include <memory>
-#include <tuple>
 #include <optional>
+#include <tuple>
 #include <vector>
-
-#include <Eigen/Core>
 
 #include "strataslam/common/logging.hpp"
 #include "strataslam/common/types.hpp"
@@ -20,52 +19,60 @@ enum class FloorState { OnFloor, InTransition, Lost };
 /// Thresholds of the floor manager. All have documented defaults and are overridable.
 struct FloorManagerConfig {
   std::optional<double> floor_height_prior = 3.0;  ///< m
-  double min_vertical_change = 1.5;               ///< m, used when there is no prior
-  double level_tolerance_factor = 0.4;            ///< a level matches within this x prior (or x min change)
-  double depart_dz = 0.30;                        ///< m of odometry height change that opens a transition
-  double baro_depart = 0.50;                      ///< m of barometric height change that opens a transition
-  double settle_s = 2.0;                          ///< s of calm before a transition may close (x2.5 without prior)
-  double calm_vz = 0.06;                          ///< m/s
-  double calm_slope = 0.04;                       ///< climb per metre travelled (2.3 deg) above which the robot is not calm: a gentle ramp is slower than calm_vz
-  double slope_long_window_s = 8.0;               ///< s of the longer slope window that keeps a transition open through the flicker of a gentle ramp
-  double calm_slope_long = 0.025;                 ///< climb per metre over that window (>= 3 m travelled)
-  /// A level is also recognized by its plateau, whatever its height: calm for plateau_s while the robot
-  /// travels plateau_travel_m, after a change of at least plateau_min_change. A stair landing lasts a
-  /// few seconds; a floor is lived on. It is what accepts a mezzanine that is not a multiple of the prior.
+  double min_vertical_change = 1.5;                ///< m, used when there is no prior
+  double level_tolerance_factor = 0.4;  ///< a level matches within this x prior (or x min change)
+  double depart_dz = 0.30;              ///< m of odometry height change that opens a transition
+  double baro_depart = 0.50;            ///< m of barometric height change that opens a transition
+  double settle_s = 2.0;     ///< s of calm before a transition may close (x2.5 without prior)
+  double calm_vz = 0.06;     ///< m/s
+  double calm_slope = 0.04;  ///< climb per metre travelled (2.3 deg) above which the robot is not
+                             ///< calm: a gentle ramp is slower than calm_vz
+  double slope_long_window_s = 8.0;  ///< s of the longer slope window that keeps a transition open
+                                     ///< through the flicker of a gentle ramp
+  double calm_slope_long = 0.025;    ///< climb per metre over that window (>= 3 m travelled)
+  /// A level is also recognized by its plateau, whatever its height: calm for plateau_s while the
+  /// robot travels plateau_travel_m, after a change of at least plateau_min_change. A stair landing
+  /// lasts a few seconds; a floor is lived on. It is what accepts a mezzanine that is not a
+  /// multiple of the prior.
   double plateau_s = 20.0;
   double plateau_travel_m = 10.0;
   double plateau_min_change = 1.0;
-  double calm_slope_window_s = 2.0;               ///< s over which that slope is measured (only while moving >= 1 m)
-  double elevator_baro_min = 1.0;                 ///< m, barometric change that identifies an elevator
-  double elevator_static_ratio = 0.5;             ///< odometry change must be below this x the barometric change
-  double ramp_max_slope_deg = 15.0;               ///< stairs are steeper, ramps gentler
-  double slope_window_m = 1.0;                    ///< horizontal run over which slopes are measured
-  double aerial_max_horizontal = 0.5;             ///< horizontal run per metre climbed below which motion is "vertical"
-  double imu_depart_accel = 0.25;                 ///< m/s^2, 1 s mean of vertical acceleration that opens a transition
-  double imu_depart_s = 0.5;                      ///< s above the threshold before the transition opens
-  double imu_calm_accel = 0.10;                   ///< m/s^2
-  double elevator_imu_min = 1.0;                  ///< m, vertical change measured by the IMU that identifies an elevator
-  double max_transition_s = 120.0;                ///< forced close after this long
-  double tracking_loss_timeout = 2.0;             ///< s
-  bool aerial_platform = false;                   ///< robot.platform == aerial
+  double calm_slope_window_s =
+      2.0;  ///< s over which that slope is measured (only while moving >= 1 m)
+  double elevator_baro_min = 1.0;  ///< m, barometric change that identifies an elevator
+  double elevator_static_ratio =
+      0.5;                           ///< odometry change must be below this x the barometric change
+  double ramp_max_slope_deg = 15.0;  ///< stairs are steeper, ramps gentler
+  double slope_window_m = 1.0;       ///< horizontal run over which slopes are measured
+  double aerial_max_horizontal =
+      0.5;  ///< horizontal run per metre climbed below which motion is "vertical"
+  double imu_depart_accel =
+      0.25;                   ///< m/s^2, 1 s mean of vertical acceleration that opens a transition
+  double imu_depart_s = 0.5;  ///< s above the threshold before the transition opens
+  double imu_calm_accel = 0.10;  ///< m/s^2
+  double elevator_imu_min =
+      1.0;  ///< m, vertical change measured by the IMU that identifies an elevator
+  double max_transition_s = 120.0;     ///< forced close after this long
+  double tracking_loss_timeout = 2.0;  ///< s
+  bool aerial_platform = false;        ///< robot.platform == aerial
 };
 
 struct FloorSample {
   Timestamp stamp = 0;
-  bool tracking_ok = false;                       ///< odometry valid for this sample
+  bool tracking_ok = false;                            ///< odometry valid for this sample
   Eigen::Vector3d position = Eigen::Vector3d::Zero();  ///< odometry position (valid if tracking_ok)
-  /// Base z axis in the odometry frame (unit): how the robot is tilted. A real ramp tilts it by the slope; a
-  /// drift of the odometry in z does not.
+  /// Base z axis in the odometry frame (unit): how the robot is tilted. A real ramp tilts it by the
+  /// slope; a drift of the odometry in z does not.
   std::optional<Eigen::Vector3d> up_axis;
-  std::optional<double> baro_height;              ///< m, filtered, relative to boot
-  std::optional<double> imu_vertical_accel;       ///< m/s^2, gravity-free, world frame
+  std::optional<double> baro_height;         ///< m, filtered, relative to boot
+  std::optional<double> imu_vertical_accel;  ///< m/s^2, gravity-free, world frame
 };
 
 struct FloorEvent {
   enum class Kind { None, TransitionStarted, TransitionEnded, TrackingLost } kind = Kind::None;
   TransitionType type = TransitionType::Unknown;  ///< for TransitionEnded
   FloorId from = 0, to = 0;
-  double delta_z = 0;                             ///< m (barometric for elevators, odometric otherwise)
+  double delta_z = 0;  ///< m (barometric for elevators, odometric otherwise)
   bool continuous_tracking = false;
   /// Elevator or manual change: the odometry saw no vertical motion. The manager's altitude already
   /// includes `reset_dz`; the frontend should only restart (empty map), without shifting its z.
@@ -86,8 +93,8 @@ class FloorManager {
 
   FloorEvent update(const FloorSample& s);
   /// End of the run with a transition still open: decides it now, with the last sample, as when
-  /// max_transition_s runs out (a whole number of floors closes on a level, otherwise it stays on its floor).
-  /// Returns the TransitionEnded event, or nothing when no transition is open.
+  /// max_transition_s runs out (a whole number of floors closes on a level, otherwise it stays on
+  /// its floor). Returns the TransitionEnded event, or nothing when no transition is open.
   FloorEvent finish();
 
   /// Operator request (`~/mark_floor_change`): closes the current floor and opens the next one.
@@ -95,9 +102,13 @@ class FloorManager {
 
   FloorState state() const { return state_; }
   /// True while a transition opened by the barometer/IMU (not by the odometry) is in progress.
-  bool in_unobserved_transition() const { return state_ == FloorState::InTransition && acc_.unobserved; }
+  bool in_unobserved_transition() const {
+    return state_ == FloorState::InTransition && acc_.unobserved;
+  }
   /// True while a transition the odometry is measuring (stairs, ramp) is in progress.
-  bool in_observed_transition() const { return state_ == FloorState::InTransition && !acc_.unobserved; }
+  bool in_observed_transition() const {
+    return state_ == FloorState::InTransition && !acc_.unobserved;
+  }
   /// Vertical speed (m/s) over the last second of tracked odometry while a transition the odometry
   /// is measuring is in progress; 0 otherwise.
   double climb_rate() const;
@@ -107,13 +118,16 @@ class FloorManager {
   double altitude() const { return altitude_; }
   size_t num_floors() const { return levels_.size(); }
   double level_altitude(FloorId f) const { return levels_.at(static_cast<size_t>(f)); }
-  /// The odometry was restarted with its height shifted by `dz` (a correction, not motion): keeps the
-  /// altitude unchanged and forgets the vertical-speed history.
+  /// The odometry was restarted with its height shifted by `dz` (a correction, not motion): keeps
+  /// the altitude unchanged and forgets the vertical-speed history.
   void odometry_rebased(double dz);
   /// Creates a new level at the current altitude (used after an unobservable change).
   FloorId open_new_floor();
   /// Re-assigns the current floor (after a relocalization).
-  void set_floor(FloorId f) { floor_ = f; state_ = FloorState::OnFloor; }
+  void set_floor(FloorId f) {
+    floor_ = f;
+    state_ = FloorState::OnFloor;
+  }
 
  private:
   struct Acc {
@@ -126,8 +140,8 @@ class FloorManager {
     Timestamp calm_since = 0;
     Timestamp plateau_since = 0;  ///< start of the current uninterrupted calm
     double plateau_h0 = 0;        ///< s_h at that moment
-    bool unobserved = false;     ///< opened by baro/IMU while the odometry stayed put
-    Timestamp imu_onset = 0;     ///< start of the vertical-acceleration window that triggered it
+    bool unobserved = false;      ///< opened by baro/IMU while the odometry stayed put
+    Timestamp imu_onset = 0;      ///< start of the vertical-acceleration window that triggered it
   };
   struct Motion {
     double vz = 0;            ///< m/s, vertical speed of the odometry altitude (0 without odometry)
@@ -160,17 +174,22 @@ class FloorManager {
   std::optional<double> baro_ref_;
   // vertical speed estimation
   std::deque<std::pair<Timestamp, double>> alt_hist_;
-  std::deque<std::tuple<Timestamp, double, double>> slope_win_;  ///< (stamp, cumulative horizontal run, altitude)
+  std::deque<std::tuple<Timestamp, double, double>>
+      slope_win_;  ///< (stamp, cumulative horizontal run, altitude)
   double hrun_ = 0;
-  Timestamp settle_until_ = 0;  ///< after an elevator the restarted odometry keeps settling: the reference follows it until then
-  Timestamp last_ref_stamp_ = 0;  ///< previous OnFloor sample, for the time-based reference tracking
+  Timestamp settle_until_ = 0;  ///< after an elevator the restarted odometry keeps settling: the
+                                ///< reference follows it until then
+  Timestamp last_ref_stamp_ =
+      0;  ///< previous OnFloor sample, for the time-based reference tracking
   Eigen::Vector3d last_pos_dbg_ = Eigen::Vector3d::Zero();
   int alt_dbg_ = 0;  // debug print decimation
   std::shared_ptr<Logger> log_ = std::make_shared<NullLogger>();
   bool climbing_long_ = false;
-  bool climbing_ = false;  ///< sustained climb per metre travelled (a gentle ramp is slower than calm_vz)
+  bool climbing_ =
+      false;  ///< sustained climb per metre travelled (a gentle ramp is slower than calm_vz)
   std::deque<std::pair<Timestamp, double>> baro_hist_;
-  std::deque<std::pair<Timestamp, double>> az_hist_;   ///< recent vertical accelerations (bias removed)
+  std::deque<std::pair<Timestamp, double>>
+      az_hist_;  ///< recent vertical accelerations (bias removed)
   double az_bias_ = 0;
   Timestamp az_over_since_ = 0;
   double imu_delta_z(Timestamp onset, Timestamp end) const;

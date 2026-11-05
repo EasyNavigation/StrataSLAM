@@ -5,7 +5,8 @@
 
 namespace strataslam {
 
-ScanContext make_scan_context(const std::vector<Eigen::Vector3f>& points, const ScanContextConfig& cfg) {
+ScanContext make_scan_context(const std::vector<Eigen::Vector3f>& points,
+                              const ScanContextConfig& cfg) {
   ScanContext sc;
   sc.rings = cfg.rings;
   sc.sectors = cfg.sectors;
@@ -60,9 +61,12 @@ ScanContextMatch compare_scan_contexts(const ScanContext& q, const ScanContext& 
   return best;
 }
 
-void ScanContextDatabase::add(KeyframeId id, ScanContext sc) { entries_.push_back({id, std::move(sc)}); }
+void ScanContextDatabase::add(KeyframeId id, ScanContext sc) {
+  entries_.push_back({id, std::move(sc)});
+}
 
-std::vector<ScanContextDatabase::Candidate> ScanContextDatabase::query(const ScanContext& sc) const {
+std::vector<ScanContextDatabase::Candidate> ScanContextDatabase::query(
+    const ScanContext& sc) const {
   std::vector<Candidate> out;
   const int n = static_cast<int>(entries_.size()) - cfg_.exclude_recent;
   if (n <= 0) return out;
@@ -78,11 +82,14 @@ std::vector<ScanContextDatabase::Candidate> ScanContextDatabase::query(const Sca
     const ScanContextMatch m = compare_scan_contexts(sc, e.sc);
     if (m.distance < cfg_.distance_threshold) out.push_back({e.id, m});
   }
-  std::sort(out.begin(), out.end(), [](const Candidate& a, const Candidate& b) { return a.match.distance < b.match.distance; });
+  std::sort(out.begin(), out.end(), [](const Candidate& a, const Candidate& b) {
+    return a.match.distance < b.match.distance;
+  });
   return out;
 }
 
-LidarPayload ScanContextDatabase::to_payload(const ScanContext& sc, uint32_t num_points, float max_range) {
+LidarPayload ScanContextDatabase::to_payload(const ScanContext& sc, uint32_t num_points,
+                                             float max_range) {
   LidarPayload p;
   p.rings = sc.rings;
   p.sectors = sc.sectors;
@@ -90,7 +97,8 @@ LidarPayload ScanContextDatabase::to_payload(const ScanContext& sc, uint32_t num
   p.max_range = max_range;
   p.scan_context.resize(static_cast<size_t>(sc.rings) * sc.sectors);
   for (int i = 0; i < sc.rings; ++i)
-    for (int j = 0; j < sc.sectors; ++j) p.scan_context[static_cast<size_t>(i) * sc.sectors + j] = sc.matrix(i, j);
+    for (int j = 0; j < sc.sectors; ++j)
+      p.scan_context[static_cast<size_t>(i) * sc.sectors + j] = sc.matrix(i, j);
   p.ring_key.assign(sc.ring_key.data(), sc.ring_key.data() + sc.rings);
   return p;
 }
@@ -101,7 +109,8 @@ ScanContext ScanContextDatabase::from_payload(const LidarPayload& p) {
   sc.sectors = static_cast<int>(p.sectors);
   sc.matrix.resize(p.rings, p.sectors);
   for (uint32_t i = 0; i < p.rings; ++i)
-    for (uint32_t j = 0; j < p.sectors; ++j) sc.matrix(i, j) = p.scan_context[static_cast<size_t>(i) * p.sectors + j];
+    for (uint32_t j = 0; j < p.sectors; ++j)
+      sc.matrix(i, j) = p.scan_context[static_cast<size_t>(i) * p.sectors + j];
   sc.ring_key = Eigen::Map<const Eigen::VectorXf>(p.ring_key.data(), p.rings);
   return sc;
 }

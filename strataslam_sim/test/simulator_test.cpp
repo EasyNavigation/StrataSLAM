@@ -1,10 +1,11 @@
+#include "strataslam_sim/simulator.hpp"
+
 #include <gtest/gtest.h>
 
 #include <bitset>
 #include <cmath>
 
 #include "strataslam/sensors/imu_preintegration.hpp"
-#include "strataslam_sim/simulator.hpp"
 
 using namespace strataslam_sim;
 using Eigen::Vector3d;
@@ -21,7 +22,8 @@ struct Fixture {
     TrajectoryConfig tc;
     TrajectoryBuilder tb(*b, tc, 0, {3, 3}, 0.0);
     tb.hold(2.0).walk({{29, 3}, {29, 19}});
-    if (elevator) tb.walk({{21.6, 3.0}, {21.6, 0.5}, {21.6, -1.1}}).turn_in_place(M_PI / 2).elevator(0, 1);
+    if (elevator)
+      tb.walk({{21.6, 3.0}, {21.6, 0.5}, {21.6, -1.1}}).turn_in_place(M_PI / 2).elevator(0, 1);
     t = std::make_shared<Trajectory>(tb.build());
     (void)lidar;
   }
@@ -105,7 +107,8 @@ TEST(Simulator, CameraProducesConsistentKeypointsAndDepth) {
   const gtsam::Pose3 T_wc = sim.gt_pose(frame.stamp) * sc.extrinsics.T_base_camera;
   int good = 0, tested = 0;
   for (const auto& kp : frame.keypoints) {
-    const float z = frame.depth.at(static_cast<int>(std::round(kp.u)), static_cast<int>(std::round(kp.v)));
+    const float z =
+        frame.depth.at(static_cast<int>(std::round(kp.u)), static_cast<int>(std::round(kp.v)));
     if (z <= 0) continue;
     const Vector3d pc((kp.u - K.cx) / K.fx * z, (kp.v - K.cy) / K.fy * z, z);
     const Vector3d pw = T_wc.transformFrom(pc);
@@ -150,7 +153,10 @@ TEST(Simulator, ElevatorCabinSeenFromInsideIsStaticToLidar) {
   // A time in the middle of the ride: door closed and the cabin at cruising speed.
   double t_ride = 0;
   for (const auto& smp : f.t->samples()) {
-    if (smp.door_closed && std::abs(smp.v.z()) > 0.9) { t_ride = smp.t; break; }
+    if (smp.door_closed && std::abs(smp.v.z()) > 0.9) {
+      t_ride = smp.t;
+      break;
+    }
   }
   ASSERT_GT(t_ride, 0.0);
   const auto scan = sim.lidar(static_cast<size_t>(t_ride * sc.lidar_hz));

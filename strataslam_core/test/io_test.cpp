@@ -134,10 +134,10 @@ TEST(MapIo, FullRoundTripIsExact) {
 TEST(MapIo, LayoutMatchesSpec) {
   TempDir dir;
   ASSERT_TRUE(write_map(dir.str(), make_map(1)).ok());
-  for (const char* p : {"manifest.yaml", "profile.yaml", "transitions.yaml", "floor_000/metadata.yaml",
-                        "floor_000/keyframes.csv", "floor_000/edges.csv", "floor_000/clouds/0.pcd",
-                        "floor_000/visual/0.bin", "floor_000/lidar/1.bin", "floor_000/floor_cloud.pcd",
-                        "floor_001/metadata.yaml"}) {
+  for (const char* p : {"manifest.yaml", "profile.yaml", "transitions.yaml",
+                        "floor_000/metadata.yaml", "floor_000/keyframes.csv", "floor_000/edges.csv",
+                        "floor_000/clouds/0.pcd", "floor_000/visual/0.bin", "floor_000/lidar/1.bin",
+                        "floor_000/floor_cloud.pcd", "floor_001/metadata.yaml"}) {
     EXPECT_TRUE(fs::exists(dir.path() / p)) << p;
   }
 }
@@ -164,7 +164,8 @@ TEST(MapIo, MapsSavedBeforeTheRenameStillLoad) {
 TEST(MapIo, UnknownFormatVersionIsRejected) {
   TempDir dir;
   ASSERT_TRUE(write_map(dir.str(), make_map(1)).ok());
-  std::ofstream(dir.path() / "manifest.yaml") << "strataslam_version: x\nformat_version: 99\nfloors: []\n";
+  std::ofstream(dir.path() / "manifest.yaml")
+      << "strataslam_version: x\nformat_version: 99\nfloors: []\n";
   const auto r = read_map(dir.str());
   ASSERT_FALSE(r.ok());
   EXPECT_EQ(r.error().message, "unsupported map format version 99 (supported: 1)");
@@ -220,26 +221,32 @@ TEST(MapIo, HostileFilesAreErrorsNotCrashes) {
   std::getline(in, header);
   std::getline(in, row);
   in.close();
-  for (const std::string& bad : {row.substr(0, row.rfind(',') + 1), row.substr(0, row.rfind(',')) + ",x", row + ",1"}) {
+  for (const std::string& bad :
+       {row.substr(0, row.rfind(',') + 1), row.substr(0, row.rfind(',')) + ",x", row + ",1"}) {
     std::ofstream(kf) << header << "\n" << bad << "\n";
     const auto r = read_map(dir.str());
     EXPECT_FALSE(r.ok()) << bad;
   }
   const std::string pcd = dir.str() + "/huge.pcd";
-  std::ofstream(pcd) << "# .PCD v0.7\nVERSION 0.7\nFIELDS x y z\nSIZE 4 4 4\nTYPE F F F\nCOUNT 1 1 1\nWIDTH 4000000000\n"
+  std::ofstream(pcd) << "# .PCD v0.7\nVERSION 0.7\nFIELDS x y z\nSIZE 4 4 4\nTYPE F F F\nCOUNT 1 1 "
+                        "1\nWIDTH 4000000000\n"
                         "HEIGHT 1\nVIEWPOINT 0 0 0 1 0 0 0\nPOINTS 4000000000\nDATA binary\nabc";
   auto c = read_pcd(pcd);
   ASSERT_FALSE(c.ok());
   EXPECT_NE(c.error().message.find("truncated"), std::string::npos);
-  std::ofstream(pcd) << "# .PCD v0.7\nVERSION 0.7\nFIELDS x y z\nSIZE 8 8 8\nTYPE F F F\nCOUNT 1 1 1\nPOINTS 1\nDATA binary\n";
+  std::ofstream(pcd) << "# .PCD v0.7\nVERSION 0.7\nFIELDS x y z\nSIZE 8 8 8\nTYPE F F F\nCOUNT 1 1 "
+                        "1\nPOINTS 1\nDATA binary\n";
   EXPECT_FALSE(read_pcd(pcd).ok());  // doubles: not the layout this reader understands
   const std::string ply = dir.str() + "/huge.ply";
-  std::ofstream(ply) << "ply\nformat binary_little_endian 1.0\nelement vertex 4000000000\nproperty float x\n"
-                        "property float y\nproperty float z\nend_header\nabc";
+  std::ofstream(ply)
+      << "ply\nformat binary_little_endian 1.0\nelement vertex 4000000000\nproperty float x\n"
+         "property float y\nproperty float z\nend_header\nabc";
   EXPECT_FALSE(read_ply(ply).ok());
-  std::ofstream(ply) << "ply\nformat binary_little_endian 1.0\nelement vertex lots\nproperty float x\nend_header\n";
+  std::ofstream(ply) << "ply\nformat binary_little_endian 1.0\nelement vertex lots\nproperty float "
+                        "x\nend_header\n";
   EXPECT_FALSE(read_ply(ply).ok());  // a non-numeric count is an error, not an exception
-  std::ofstream(ply) << "ply\nformat binary_little_endian 1.0\nelement vertex 1\nproperty double x\nproperty double y\n"
+  std::ofstream(ply) << "ply\nformat binary_little_endian 1.0\nelement vertex 1\nproperty double "
+                        "x\nproperty double y\n"
                         "property double z\nend_header\n";
   EXPECT_FALSE(read_ply(ply).ok());
 }
@@ -283,8 +290,9 @@ TEST(Clouds, EmptyCloudAndMismatchedColors) {
   EXPECT_FALSE(write_ply(dir.str() + "/b.ply", bad).ok());
 }
 
-// A manifest is checked before any floor is read (audit AUD-035: 100 000 copies of one floor took the reader to
-// 11.9 GB and bad_alloc), and its version must be a number (A6-07: missing, -1 or "abc" read as "version 0").
+// A manifest is checked before any floor is read (audit AUD-035: 100 000 copies of one floor took
+// the reader to 11.9 GB and bad_alloc), and its version must be a number (A6-07: missing, -1 or
+// "abc" read as "version 0").
 TEST(MapIo, HostileManifestsAreRejectedBeforeReadingFloors) {
   TempDir dir;
   ASSERT_TRUE(write_map(dir.str(), make_map(2)).ok());
@@ -304,9 +312,12 @@ TEST(MapIo, HostileManifestsAreRejectedBeforeReadingFloors) {
   r = with_manifest(head + "floors: {a: 1}\n");
   EXPECT_FALSE(r.ok());
   for (const char* version : {"", "-1", "abc", "1.5"}) {
-    r = with_manifest(std::string("strataslam_version: x\n") + (*version ? std::string("format_version: ") + version + "\n" : "") + "floors: []\n");
+    r = with_manifest(std::string("strataslam_version: x\n") +
+                      (*version ? std::string("format_version: ") + version + "\n" : "") +
+                      "floors: []\n");
     ASSERT_FALSE(r.ok()) << version;
-    EXPECT_EQ(r.error().message.find("unsupported map format version 0"), std::string::npos) << r.error().message;
+    EXPECT_EQ(r.error().message.find("unsupported map format version 0"), std::string::npos)
+        << r.error().message;
   }
   // A floor whose metadata says id -1 (the writer never writes one; A6-02).
   ASSERT_TRUE(write_map(dir.str(), make_map(2)).ok());

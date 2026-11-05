@@ -1,10 +1,10 @@
 #pragma once
 
-#include <deque>
-#include <optional>
+#include <gtsam/geometry/Pose3.h>
 
 #include <Eigen/Core>
-#include <gtsam/geometry/Pose3.h>
+#include <deque>
+#include <optional>
 
 #include "strataslam/sensors/measurements.hpp"
 
@@ -15,10 +15,12 @@ enum class TrackingState { Good, Degraded, Lost };
 /// Quality report used by the floor manager and the backend.
 struct TrackingQuality {
   TrackingState state = TrackingState::Good;
-  int inliers = 0;               ///< visual: PnP inliers; LiDAR: correspondences
-  double fitness = 1.0;          ///< LiDAR: inlier fraction of the source points
-  double hessian_condition = 1.0;///< LiDAR: max/min eigenvalue of the normalized translation Hessian
-  double min_eigenvalue = 1.0;   ///< LiDAR: smallest normalized translation eigenvalue (0 = degenerate)
+  int inliers = 0;       ///< visual: PnP inliers; LiDAR: correspondences
+  double fitness = 1.0;  ///< LiDAR: inlier fraction of the source points
+  double hessian_condition =
+      1.0;  ///< LiDAR: max/min eigenvalue of the normalized translation Hessian
+  double min_eigenvalue =
+      1.0;  ///< LiDAR: smallest normalized translation eigenvalue (0 = degenerate)
 };
 
 /// One synchronized input for a frontend. Pointers are valid during `process` only.
@@ -26,13 +28,15 @@ struct SensorFrame {
   Timestamp stamp = 0;
   const RgbdFrame* rgbd = nullptr;
   const LidarScan* lidar = nullptr;
-  const OdomMeasurement* odom = nullptr;  ///< the robot's own odometry (wheels) at this stamp: a motion prior
-  std::optional<Eigen::Vector3d> up_base; ///< up in the base frame from the IMU's gravity: the pose's roll and pitch
+  const OdomMeasurement* odom =
+      nullptr;  ///< the robot's own odometry (wheels) at this stamp: a motion prior
+  std::optional<Eigen::Vector3d>
+      up_base;  ///< up in the base frame from the IMU's gravity: the pose's roll and pitch
 };
 
 struct FrontendResult {
-  bool valid = false;                 ///< a pose was produced
-  gtsam::Pose3 T_odom_base;           ///< base pose in the (continuous) odometry frame
+  bool valid = false;        ///< a pose was produced
+  gtsam::Pose3 T_odom_base;  ///< base pose in the (continuous) odometry frame
   bool is_keyframe = false;
   TrackingQuality quality;
   /// Pose increment since the previous result, expressed in the base frame.

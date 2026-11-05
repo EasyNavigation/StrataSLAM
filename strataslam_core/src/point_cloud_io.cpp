@@ -15,9 +15,7 @@ uint32_t pack_rgb(const std::array<uint8_t, 3>& c) {
   return (uint32_t(c[0]) << 16) | (uint32_t(c[1]) << 8) | uint32_t(c[2]);
 }
 
-Error bad(const std::string& path, const std::string& what) {
-  return Error{path + ": " + what};
-}
+Error bad(const std::string& path, const std::string& what) { return Error{path + ": " + what}; }
 
 }  // namespace
 
@@ -32,8 +30,7 @@ Result<void> write_pcd(const std::string& path, const PointCloud& cloud) {
   out << "# .PCD v0.7 - Point Cloud Data file format\nVERSION 0.7\n"
       << (rgb ? "FIELDS x y z rgb\nSIZE 4 4 4 4\nTYPE F F F U\nCOUNT 1 1 1 1\n"
               : "FIELDS x y z\nSIZE 4 4 4\nTYPE F F F\nCOUNT 1 1 1\n")
-      << "WIDTH " << n << "\nHEIGHT 1\nVIEWPOINT 0 0 0 1 0 0 0\nPOINTS " << n
-      << "\nDATA binary\n";
+      << "WIDTH " << n << "\nHEIGHT 1\nVIEWPOINT 0 0 0 1 0 0 0\nPOINTS " << n << "\nDATA binary\n";
   for (size_t i = 0; i < n; ++i) {
     out.write(reinterpret_cast<const char*>(cloud.points[i].data()), 12);
     if (rgb) {
@@ -65,7 +62,8 @@ Result<PointCloud> read_pcd(const std::string& path) {
       while (ls >> f) fields.push_back(f);
       nfields = static_cast<int>(fields.size());
       if (nfields == 3 && fields[0] == "x" && fields[1] == "y" && fields[2] == "z") {
-      } else if (nfields == 4 && fields[0] == "x" && fields[1] == "y" && fields[2] == "z" && fields[3] == "rgb") {
+      } else if (nfields == 4 && fields[0] == "x" && fields[1] == "y" && fields[2] == "z" &&
+                 fields[3] == "rgb") {
         rgb = true;
       } else {
         return bad(path, "unsupported PCD fields");
@@ -86,7 +84,8 @@ Result<PointCloud> read_pcd(const std::string& path) {
     }
   }
   if (!binary || nfields == 0 || !have_points) return bad(path, "invalid PCD header");
-  if (size != (rgb ? "4 4 4 4" : "4 4 4") || type != (rgb ? "F F F U" : "F F F") || count != (rgb ? "1 1 1 1" : "1 1 1")) {
+  if (size != (rgb ? "4 4 4 4" : "4 4 4") || type != (rgb ? "F F F U" : "F F F") ||
+      count != (rgb ? "1 1 1 1" : "1 1 1")) {
     return bad(path, "unsupported PCD field layout (SIZE/TYPE/COUNT)");
   }
   const uint64_t stride = rgb ? 16 : 12;
@@ -94,7 +93,8 @@ Result<PointCloud> read_pcd(const std::string& path) {
   in.seekg(0, std::ios::end);
   const uint64_t available = static_cast<uint64_t>(in.tellg() - start);
   in.seekg(start);
-  if (n > available / stride) return bad(path, "truncated PCD data (" + std::to_string(n) + " points declared)");
+  if (n > available / stride)
+    return bad(path, "truncated PCD data (" + std::to_string(n) + " points declared)");
   PointCloud cloud;
   cloud.points.resize(n);
   if (rgb) cloud.colors.resize(n);
@@ -168,7 +168,8 @@ Result<PointCloud> read_ply(const std::string& path) {
   in.seekg(0, std::ios::end);
   const uint64_t available = static_cast<uint64_t>(in.tellg() - start);
   in.seekg(start);
-  if (n > available / stride) return bad(path, "truncated PLY data (" + std::to_string(n) + " vertices declared)");
+  if (n > available / stride)
+    return bad(path, "truncated PLY data (" + std::to_string(n) + " vertices declared)");
   PointCloud cloud;
   cloud.points.resize(n);
   if (rgb) cloud.colors.resize(n);

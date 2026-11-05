@@ -1,8 +1,8 @@
+#include "strataslam_sim/trajectory.hpp"
+
 #include <gtest/gtest.h>
 
 #include <cmath>
-
-#include "strataslam_sim/trajectory.hpp"
 
 using namespace strataslam_sim;
 using Eigen::Vector2d;
@@ -46,8 +46,8 @@ TEST(Trajectory, WalkSpeedAndSmoothness) {
   }
   EXPECT_NEAR(vmax, 1.0, 0.01);
   EXPECT_GT(cruise, 0.8 * tr.samples().size());
-  EXPECT_LT(amax, 2.0);   // centripetal at 1 m/s on 0.8 m fillets is 1.25 m/s^2
-  EXPECT_LT(wmax, 1.8);   // rad/s
+  EXPECT_LT(amax, 2.0);  // centripetal at 1 m/s on 0.8 m fillets is 1.25 m/s^2
+  EXPECT_LT(wmax, 1.8);  // rad/s
   // Closed loop: ends where it started.
   EXPECT_LT((tr.samples().back().p - tr.samples().front().p).head<2>().norm(), 0.01);
 }

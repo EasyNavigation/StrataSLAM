@@ -1,8 +1,8 @@
-#include <cstdio>
 #include "strataslam_sim/trajectory.hpp"
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <iomanip>
 #include <sstream>
 
@@ -66,7 +66,10 @@ class PlanarPath {
     s = std::clamp(s, 0.0, length_);
     const Seg* seg = &segs_.back();
     for (const auto& g : segs_) {
-      if (s <= g.s0 + g.len) { seg = &g; break; }
+      if (s <= g.s0 + g.len) {
+        seg = &g;
+        break;
+      }
     }
     const double u = std::min(s - seg->s0, seg->len);
     const double h0 = std::atan2(seg->dir.y(), seg->dir.x());
@@ -82,7 +85,11 @@ class PlanarPath {
   }
 
  private:
-  struct Seg { double s0, len; Vector2d p0, dir; double curv; };
+  struct Seg {
+    double s0, len;
+    Vector2d p0, dir;
+    double curv;
+  };
   std::vector<Seg> segs_;
   double length_ = 0;
 };
@@ -122,7 +129,8 @@ gtsam::Pose3 Trajectory::pose_at(double t) const {
   const auto& s0 = samples_[i];
   const auto& s1 = samples_[i + 1];
   const Eigen::Quaterniond q = Eigen::Quaterniond(s0.R).slerp(a, Eigen::Quaterniond(s1.R));
-  return gtsam::Pose3(gtsam::Rot3(q.normalized().toRotationMatrix()), Vector3d((1 - a) * s0.p + a * s1.p));
+  return gtsam::Pose3(gtsam::Rot3(q.normalized().toRotationMatrix()),
+                      Vector3d((1 - a) * s0.p + a * s1.p));
 }
 
 TrajectorySample Trajectory::state_at(double t) const {
@@ -143,17 +151,22 @@ std::string Trajectory::to_tum(double t0_s) const {
     const Eigen::Quaterniond q(s.R);
     char stamp[48];
     std::snprintf(stamp, sizeof stamp, "%.9f", s.t + t0_s);
-    os << stamp << ' ' << s.p.x() << ' ' << s.p.y() << ' ' << s.p.z() << ' ' << q.x() << ' ' << q.y()
-       << ' ' << q.z() << ' ' << q.w() << '\n';
+    os << stamp << ' ' << s.p.x() << ' ' << s.p.y() << ' ' << s.p.z() << ' ' << q.x() << ' '
+       << q.y() << ' ' << q.z() << ' ' << q.w() << '\n';
   }
   return os.str();
 }
 
 // ---------------- Builder ----------------
 
-TrajectoryBuilder::TrajectoryBuilder(const Building& b, const TrajectoryConfig& cfg, int start_level,
-                                     const Vector2d& start_xy, double start_yaw)
-    : building_(b), cfg_(cfg), level_(start_level), x_(start_xy.x()), y_(start_xy.y()), yaw_(start_yaw) {
+TrajectoryBuilder::TrajectoryBuilder(const Building& b, const TrajectoryConfig& cfg,
+                                     int start_level, const Vector2d& start_xy, double start_yaw)
+    : building_(b),
+      cfg_(cfg),
+      level_(start_level),
+      x_(start_xy.x()),
+      y_(start_xy.y()),
+      yaw_(start_yaw) {
   surface_z_ = b.level_height(level_);
   cabin_level_ = 0;
   cabin_z_ = 0;
@@ -167,13 +180,17 @@ TrajectoryBuilder& TrajectoryBuilder::set_cabin_level(int level) {
 
 Matrix3d TrajectoryBuilder::attitude(double yaw, double t, double wobble_scale) const {
   const double w = cfg_.wobble_deg * M_PI / 180.0 * wobble_scale;
-  const double roll = w * std::sin(2 * M_PI * 0.8 * t + 0.3) + 0.3 * w * std::sin(2 * M_PI * 1.9 * t);
-  const double pitch = w * std::sin(2 * M_PI * 1.1 * t + 1.1) + 0.3 * w * std::sin(2 * M_PI * 2.3 * t + 0.5);
+  const double roll =
+      w * std::sin(2 * M_PI * 0.8 * t + 0.3) + 0.3 * w * std::sin(2 * M_PI * 1.9 * t);
+  const double pitch =
+      w * std::sin(2 * M_PI * 1.1 * t + 1.1) + 0.3 * w * std::sin(2 * M_PI * 2.3 * t + 0.5);
   return (Eigen::AngleAxisd(yaw, Vector3d::UnitZ()) * Eigen::AngleAxisd(pitch, Vector3d::UnitY()) *
-          Eigen::AngleAxisd(roll, Vector3d::UnitX())).toRotationMatrix();
+          Eigen::AngleAxisd(roll, Vector3d::UnitX()))
+      .toRotationMatrix();
 }
 
-void TrajectoryBuilder::emit(const Vector3d& p, double yaw, int label, double cabin_z, bool door_closed) {
+void TrajectoryBuilder::emit(const Vector3d& p, double yaw, int label, double cabin_z,
+                             bool door_closed) {
   TrajectorySample s;
   s.t = t_;
   s.p = p;
@@ -214,7 +231,8 @@ TrajectoryBuilder& TrajectoryBuilder::turn_in_place(double target) {
   return *this;
 }
 
-void TrajectoryBuilder::walk_path(const std::vector<Vector2d>& points, const std::function<double(double, double)>& surface,
+void TrajectoryBuilder::walk_path(const std::vector<Vector2d>& points,
+                                  const std::function<double(double, double)>& surface,
                                   const std::function<int(double, double, double)>& label) {
   std::vector<Vector2d> pts{{x_, y_}};
   pts.insert(pts.end(), points.begin(), points.end());
@@ -261,8 +279,11 @@ TrajectoryBuilder& TrajectoryBuilder::walk(const std::vector<Vector2d>& points) 
   const double z = surface_z_;
   const int level = level_;
   const double lz = building_.level_height(level_);
-  walk_path(points, [z](double, double) { return z; },
-            [level, lz, z](double, double, double s) { return std::abs(s - lz) < 0.05 && std::abs(z - lz) < 0.05 ? level : -1; });
+  walk_path(
+      points, [z](double, double) { return z; },
+      [level, lz, z](double, double, double s) {
+        return std::abs(s - lz) < 0.05 && std::abs(z - lz) < 0.05 ? level : -1;
+      });
   return *this;
 }
 
@@ -293,8 +314,10 @@ TrajectoryBuilder& TrajectoryBuilder::stairs(int level, bool up) {
   const Building& b = building_;
   const double xa = 0.5 * (10.2 + 11.8), xb = 0.5 * (12.4 + 14.0);
   std::vector<Vector2d> pts;
-  if (up) pts = {{xa, 0.8}, {xa, -3.4}, {xb, -3.4}, {xb, 0.8}};
-  else pts = {{xb, 0.8}, {xb, -3.4}, {xa, -3.4}, {xa, 0.8}};
+  if (up)
+    pts = {{xa, 0.8}, {xa, -3.4}, {xb, -3.4}, {xb, 0.8}};
+  else
+    pts = {{xb, 0.8}, {xb, -3.4}, {xa, -3.4}, {xa, 0.8}};
   // The robot must be at the start point, facing the annex, on level (up) or level+1 (down).
   const double H = b.config().floor_height;
   const auto surface = [&b, level, H](double x, double y) {
@@ -308,7 +331,8 @@ TrajectoryBuilder& TrajectoryBuilder::stairs(int level, bool up) {
     return -1;
   };
   // Force transition labelling inside the annex (y < 0) even when standing on a landing level.
-  walk_path(pts, surface, [&](double x, double y, double s) { return y >= 0 ? label(x, y, s) : -1; });
+  walk_path(pts, surface,
+            [&](double x, double y, double s) { return y >= 0 ? label(x, y, s) : -1; });
   level_ = up ? level + 1 : level;
   return *this;
 }
@@ -317,8 +341,10 @@ TrajectoryBuilder& TrajectoryBuilder::ramp(int level, bool up) {
   const Building& b = building_;
   const double ya = 9.1, yb = 10.9, xe = b.ramp_x1() + 0.8;
   std::vector<Vector2d> pts;
-  if (up) pts = {{33.0, ya}, {xe, ya}, {xe, yb}, {33.0, yb}, {31.0, yb}};
-  else pts = {{33.0, yb}, {xe, yb}, {xe, ya}, {33.0, ya}, {31.0, ya}};
+  if (up)
+    pts = {{33.0, ya}, {xe, ya}, {xe, yb}, {33.0, yb}, {31.0, yb}};
+  else
+    pts = {{33.0, yb}, {xe, yb}, {xe, ya}, {33.0, ya}, {31.0, ya}};
   const double H = b.config().floor_height;
   const auto surface = [&b, level, H](double x, double y) {
     if (x < 32.4 || y < 8.4 || y > 11.6) return b.level_height(level) + (y > 10.0 ? H : 0.0);
@@ -346,7 +372,9 @@ TrajectoryBuilder& TrajectoryBuilder::elevator(int from_level, int to_level) {
   const int n_pre = static_cast<int>(pre / cfg_.dt), n_post = static_cast<int>(post / cfg_.dt);
   const int n = static_cast<int>(std::ceil(dur / cfg_.dt));
   // The label is "in transit" from the moment the door starts closing until it has opened again.
-  for (int i = 0; i < n_pre; ++i) emit({x_, y_, zf + h}, yaw_, i > static_cast<int>(0.5 / cfg_.dt) ? -1 : from_level, zf, i > static_cast<int>(0.5 / cfg_.dt));
+  for (int i = 0; i < n_pre; ++i)
+    emit({x_, y_, zf + h}, yaw_, i > static_cast<int>(0.5 / cfg_.dt) ? -1 : from_level, zf,
+         i > static_cast<int>(0.5 / cfg_.dt));
   for (int i = 0; i <= n; ++i) {
     double d2;
     const double s = trapezoid(i * cfg_.dt, dist, cfg_.elevator_speed, cfg_.elevator_accel, &d2);
@@ -354,7 +382,9 @@ TrajectoryBuilder& TrajectoryBuilder::elevator(int from_level, int to_level) {
     emit({x_, y_, z + h}, yaw_, -1, z, true);
   }
   // The door opens 1 s after the cabin stops; the robot keeps standing for the rest of `post`.
-  for (int i = 0; i < n_post; ++i) emit({x_, y_, zt + h}, yaw_, i < static_cast<int>(1.0 / cfg_.dt) ? -1 : to_level, zt, i < static_cast<int>(1.0 / cfg_.dt));
+  for (int i = 0; i < n_post; ++i)
+    emit({x_, y_, zt + h}, yaw_, i < static_cast<int>(1.0 / cfg_.dt) ? -1 : to_level, zt,
+         i < static_cast<int>(1.0 / cfg_.dt));
   surface_z_ = zt;
   cabin_z_ = zt;
   cabin_level_ = to_level;
@@ -378,7 +408,8 @@ TrajectoryBuilder& TrajectoryBuilder::fly_to_level(int target_level, double agl,
     const double s = trapezoid(i * cfg_.dt, dist, 0.5, 0.5, &d2);
     const double z = z0 + std::copysign(s, z1 - z0);
     const int label = std::abs(z - z1) < 0.05 || std::abs(z - z0) < 0.05
-                          ? (std::abs(z - z1) < 0.05 ? target_level : level_) : -1;
+                          ? (std::abs(z - z1) < 0.05 ? target_level : level_)
+                          : -1;
     emit({x_, y_, z + agl_}, y0 + yaw_rate * i * cfg_.dt, label, cabin_z_, false);
     yaw_ = y0 + yaw_rate * i * cfg_.dt;
   }
@@ -395,8 +426,10 @@ Trajectory TrajectoryBuilder::build() const {
     const size_t a = i == 0 ? 0 : i - 1, c = i + 1 >= n ? n - 1 : i + 1;
     const double span = (c - a) * dt;
     s[i].v = (samples_[c].p - samples_[a].p) / span;
-    if (i > 0 && i + 1 < n) s[i].a = (samples_[i + 1].p - 2 * samples_[i].p + samples_[i - 1].p) / (dt * dt);
-    else s[i].a.setZero();
+    if (i > 0 && i + 1 < n)
+      s[i].a = (samples_[i + 1].p - 2 * samples_[i].p + samples_[i - 1].p) / (dt * dt);
+    else
+      s[i].a.setZero();
     const Matrix3d dR = samples_[a].R.transpose() * samples_[c].R;
     const Eigen::AngleAxisd aa(dR);
     s[i].omega_body = aa.axis() * (aa.angle() / span);

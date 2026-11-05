@@ -1,5 +1,6 @@
-#include <gtest/gtest.h>
+#include "strataslam/fusion/fusion.hpp"
 
+#include <gtest/gtest.h>
 #include <gtsam/inference/Symbol.h>
 #include <gtsam/linear/NoiseModel.h>
 #include <gtsam/nonlinear/Values.h>
@@ -10,7 +11,6 @@
 #include <random>
 
 #include "strataslam/fusion/factors4.hpp"
-#include "strataslam/fusion/fusion.hpp"
 #include "strataslam/fusion/registration4.hpp"
 
 using namespace strataslam;
@@ -19,7 +19,8 @@ using gtsam::Symbol;
 
 namespace {
 double pose4_err(const Pose4& a, const Pose4& b) {
-  return std::max(std::abs(Pose4::WrapAngle(a.theta() - b.theta())), (a.translation() - b.translation()).norm());
+  return std::max(std::abs(Pose4::WrapAngle(a.theta() - b.theta())),
+                  (a.translation() - b.translation()).norm());
 }
 }  // namespace
 
@@ -36,7 +37,8 @@ TEST(FusionFactors, ZeroErrorAtExactMeasurementAndCorrectJacobians) {
   TransitionFactor tf_exact(Symbol('f', 1), Symbol('f', 2), Xa.between(Xb), n4);
   EXPECT_LT(tf_exact.unwhitenedError(v).norm(), 1e-12);
   TransitionFactor tf(Symbol('f', 1), Symbol('f', 2), Pose4(0.9, Vector3d(0.3, -1, 2.5)), n4);
-  EXPECT_TRUE(gtsam::internal::testFactorJacobians("TransitionFactor", tf, v, 1e-5, 1e-6));  // exact even at non-zero error
+  EXPECT_TRUE(gtsam::internal::testFactorJacobians("TransitionFactor", tf, v, 1e-5,
+                                                   1e-6));  // exact even at non-zero error
   CrossFloorMatchFactor cf(Symbol('f', 1), Symbol('f', 2), Pose4(-0.3, Vector3d(1, 1, 1)), n4);
   EXPECT_TRUE(gtsam::internal::testFactorJacobians("CrossFloorMatchFactor", cf, v, 1e-5, 1e-6));
 
@@ -91,7 +93,8 @@ TEST(Registration4, GncRecoversTheTransformWithFiftyPercentOutliers) {
     std::mt19937 rng(seed);
     std::uniform_real_distribution<double> u(-5, 5);
     std::normal_distribution<double> n(0, 0.01);
-    const Pose4 X(std::uniform_real_distribution<double>(-3, 3)(rng), Vector3d(u(rng), u(rng), u(rng)));
+    const Pose4 X(std::uniform_real_distribution<double>(-3, 3)(rng),
+                  Vector3d(u(rng), u(rng), u(rng)));
     std::vector<PointPair> pairs;
     for (int i = 0; i < 40; ++i) {
       const Vector3d p(u(rng), u(rng), u(rng));
@@ -153,9 +156,12 @@ struct Synthetic {
     t.kf_before = 10 * a + 1;
     t.kf_after = 10 * b;
     const Pose4 rel = map_pose(a, 1).between(map_pose(b, 0));
-    t.relative = std::array<double, 4>{rel.theta(), rel.translation().x(), rel.translation().y(), rel.translation().z()};
+    t.relative = std::array<double, 4>{rel.theta(), rel.translation().x(), rel.translation().y(),
+                                       rel.translation().z()};
     t.continuous_tracking = true;
-    if (baro) t.delta_z = truth.at(b).translation().z() - truth.at(a).translation().z() + 1.2 - 1.2 + (base_in_floor[a][1].translation().z() - base_in_floor[b][0].translation().z());
+    if (baro)
+      t.delta_z = truth.at(b).translation().z() - truth.at(a).translation().z() + 1.2 - 1.2 +
+                  (base_in_floor[a][1].translation().z() - base_in_floor[b][0].translation().z());
     t.covariance = Eigen::Matrix4d::Identity() * 1e-4;
     map.transitions.push_back(t);
   }
@@ -174,11 +180,13 @@ TEST(Fusion, AllThreeFormulationsRecoverTheFloorTransformsFromTransitions) {
     ASSERT_TRUE(r.value().finite());
     EXPECT_TRUE(r.value().converged);
     for (const auto& [floor, X] : s.truth) {
-      EXPECT_LT(pose4_err(r.value().floor_to_map.at(floor), X), 2e-3) << to_string(f) << " floor " << floor;
+      EXPECT_LT(pose4_err(r.value().floor_to_map.at(floor), X), 2e-3)
+          << to_string(f) << " floor " << floor;
     }
     EXPECT_EQ(r.value().covariance.size(), 3u);
-    // The ablation compares formulations by the time of their own part: graph and optimization, a part of the whole
-    // (audit AUD-053: the published time was the whole of fuse(), dominated by the stacking common to all three).
+    // The ablation compares formulations by the time of their own part: graph and optimization, a
+    // part of the whole (audit AUD-053: the published time was the whole of fuse(), dominated by
+    // the stacking common to all three).
     EXPECT_GT(r.value().optimize_seconds, 0.0);
     EXPECT_LE(r.value().optimize_seconds, r.value().seconds);
   }
@@ -197,7 +205,8 @@ TEST(Fusion, ElevatorHeightComesFromTheBarometerFactor) {
   }
   EXPECT_TRUE(saw_baro);
   EXPECT_TRUE(saw_transition);
-  EXPECT_NEAR(r.value().floor_to_map.at(2).translation().z(), s.truth.at(2).translation().z(), 2e-3);
+  EXPECT_NEAR(r.value().floor_to_map.at(2).translation().z(), s.truth.at(2).translation().z(),
+              2e-3);
 }
 
 TEST(Fusion, GncRejectsAFalseFiveMeterConstraintAmongThreeCorrectOnes) {
@@ -215,8 +224,9 @@ TEST(Fusion, GncRejectsAFalseFiveMeterConstraintAmongThreeCorrectOnes) {
     a.name = "door" + std::to_string(i);
     for (int k = 0; k < 4; ++k) {
       const Vector3d w(u(rng), u(rng), 1.0 + k * 0.4);
-      Vector3d p0 = w, p1 = X1.inverse().act(w + Vector3d(0, 0, 3.0));  // the structure repeats 3 m higher
-      if (i == 3) p1 += Vector3d(5.0, 0.0, 0.0);                          // the false constraint
+      Vector3d p0 = w,
+               p1 = X1.inverse().act(w + Vector3d(0, 0, 3.0));  // the structure repeats 3 m higher
+      if (i == 3) p1 += Vector3d(5.0, 0.0, 0.0);                // the false constraint
       a.points[0].push_back(p0);
       a.points[1].push_back(p1);
     }
@@ -241,7 +251,8 @@ TEST(Fusion, AFloorWithoutConstraintsIsReportedNotInvented) {
   const auto r = fuse(s.map, FusionOptions{});
   ASSERT_TRUE(r.ok());
   int unconnected = 0;
-  for (const auto& w : r.value().warnings) unconnected += w.find("not connected") != std::string::npos;
+  for (const auto& w : r.value().warnings)
+    unconnected += w.find("not connected") != std::string::npos;
   EXPECT_EQ(unconnected, 2);
 }
 
@@ -257,7 +268,8 @@ TEST(Fusion, ReportAndOutputsAreWritten) {
   for (auto& f : m.floors) f.floor_cloud = pc;
   const std::string dir = ::testing::TempDir() + "/strataslam_fused";
   ASSERT_TRUE(write_fusion_outputs(dir, m, r.value()).ok());
-  for (const char* f : {"floor_transforms.yaml", "fusion_report.yaml", "global_cloud.pcd"}) EXPECT_TRUE(std::filesystem::exists(dir + "/" + f)) << f;
+  for (const char* f : {"floor_transforms.yaml", "fusion_report.yaml", "global_cloud.pcd"})
+    EXPECT_TRUE(std::filesystem::exists(dir + "/" + f)) << f;
   const auto cloud = read_pcd(dir + "/global_cloud.pcd");
   ASSERT_TRUE(cloud.ok());
   EXPECT_EQ(cloud.value().points.size(), 6u);
@@ -269,7 +281,9 @@ TEST(Fusion, ReportAndOutputsAreWritten) {
 
 TEST(Fusion, AnchorsLoadFromYaml) {
   const std::string path = ::testing::TempDir() + "/anchors.yaml";
-  std::ofstream(path) << "anchors:\n  - name: door\n    use_z: false\n    sigma: 0.02\n    points:\n      0: [[1, 2, 0], [3, 4, 0]]\n      1: [[0.5, 1, 0], [2.5, 3, 0]]\n";
+  std::ofstream(path)
+      << "anchors:\n  - name: door\n    use_z: false\n    sigma: 0.02\n    points:\n      0: [[1, "
+         "2, 0], [3, 4, 0]]\n      1: [[0.5, 1, 0], [2.5, 3, 0]]\n";
   const auto a = load_anchors(path);
   ASSERT_TRUE(a.ok()) << a.error().message;
   ASSERT_EQ(a.value().size(), 1u);
@@ -296,7 +310,9 @@ namespace {
 void wall_pts(PointCloud& c, double x0, double y0, double x1, double y1) {
   const double len = std::hypot(x1 - x0, y1 - y0);
   for (double s = 0; s <= len; s += 0.05)
-    for (double z = 0.5; z <= 2.5; z += 0.5) c.points.emplace_back(static_cast<float>(x0 + (x1 - x0) * s / len), static_cast<float>(y0 + (y1 - y0) * s / len), static_cast<float>(z));
+    for (double z = 0.5; z <= 2.5; z += 0.5)
+      c.points.emplace_back(static_cast<float>(x0 + (x1 - x0) * s / len),
+                            static_cast<float>(y0 + (y1 - y0) * s / len), static_cast<float>(z));
 }
 
 PointCloud asymmetric_building() {
@@ -310,7 +326,8 @@ PointCloud asymmetric_building() {
   return c;
 }
 
-/// Two floors joined by one ramp that the odometry measured as `dz` m high; floor 1 sees the same structure.
+/// Two floors joined by one ramp that the odometry measured as `dz` m high; floor 1 sees the same
+/// structure.
 MapData two_floors(double dz) {
   MapData map;
   const Pose4 rel(0.05, Vector3d(2.0, -1.0, dz));
@@ -319,7 +336,9 @@ MapData two_floors(double dz) {
   const Pose4 inv = rel.inverse();
   const double cs = std::cos(inv.theta()), sn = std::sin(inv.theta());
   for (const auto& p : a.points)
-    b.points.emplace_back(static_cast<float>(cs * p.x() - sn * p.y() + inv.translation().x()), static_cast<float>(sn * p.x() + cs * p.y() + inv.translation().y()), p.z());
+    b.points.emplace_back(static_cast<float>(cs * p.x() - sn * p.y() + inv.translation().x()),
+                          static_cast<float>(sn * p.x() + cs * p.y() + inv.translation().y()),
+                          p.z());
   for (int f = 0; f < 2; ++f) {
     FloorData fd;
     fd.metadata.id = f;
@@ -337,7 +356,8 @@ MapData two_floors(double dz) {
   t.to = 1;
   t.kf_before = 0;
   t.kf_after = 1;
-  t.relative = std::array<double, 4>{rel.theta(), rel.translation().x(), rel.translation().y(), rel.translation().z()};
+  t.relative = std::array<double, 4>{rel.theta(), rel.translation().x(), rel.translation().y(),
+                                     rel.translation().z()};
   t.continuous_tracking = true;
   t.covariance = Eigen::Matrix4d::Identity() * 1e-4;
   map.transitions.push_back(t);
@@ -347,7 +367,8 @@ MapData two_floors(double dz) {
 }  // namespace
 
 TEST(Fusion, ADeclaredSameLevelBringsTheTwoFloorsToTheSameHeight) {
-  const MapData map = two_floors(1.7);  // the odometry drifted: the ramp reads 1.7 m, both floors are one level
+  const MapData map =
+      two_floors(1.7);  // the odometry drifted: the ramp reads 1.7 m, both floors are one level
   FusionOptions opt;
   opt.floor_height_prior = std::nullopt;
   opt.auto_stacking = false;

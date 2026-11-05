@@ -1,8 +1,8 @@
+#include "strataslam/floors/floor_manager.hpp"
+
 #include <gtest/gtest.h>
 
 #include <cmath>
-
-#include "strataslam/floors/floor_manager.hpp"
 
 using namespace strataslam;
 using Eigen::Vector3d;
@@ -23,7 +23,8 @@ struct Rig {
 
   explicit Rig(FloorManagerConfig c = {}) : mgr(c) {}
 
-  void step(const Vector3d& p, std::optional<double> baro_h = std::nullopt, std::optional<double> az = std::nullopt, bool ok = true) {
+  void step(const Vector3d& p, std::optional<double> baro_h = std::nullopt,
+            std::optional<double> az = std::nullopt, bool ok = true) {
     FloorSample s;
     s.stamp = t;
     s.tracking_ok = ok;
@@ -37,12 +38,14 @@ struct Rig {
     t += static_cast<Timestamp>(kDt * 1e9);
   }
   void stand(double seconds) {
-    for (int i = 0; i < static_cast<int>(seconds / kDt); ++i) step(pos, use_baro ? std::optional<double>(baro) : std::nullopt);
+    for (int i = 0; i < static_cast<int>(seconds / kDt); ++i)
+      step(pos, use_baro ? std::optional<double>(baro) : std::nullopt);
   }
   /// Walks horizontally for `dist` m at 1 m/s on the current height.
   void walk(double dist) {
     const int n = static_cast<int>(dist / (1.0 * kDt));
-    for (int i = 0; i < n; ++i) step(pos + Vector3d(1.0 * kDt, 0, 0), use_baro ? std::optional<double>(baro) : std::nullopt);
+    for (int i = 0; i < n; ++i)
+      step(pos + Vector3d(1.0 * kDt, 0, 0), use_baro ? std::optional<double>(baro) : std::nullopt);
   }
   /// Climbs `rise` m while walking `run` m horizontally; `stepped` mimics a stair (tread/riser).
   void climb(double rise, double run, bool stepped, double tread = 0.27) {
@@ -55,7 +58,8 @@ struct Rig {
         const double riser = tread * rise / run;
         const double k = std::floor((x - x0) / tread);
         const double frac = (x - x0) / tread - k;
-        z = z0 + riser * (k + std::min(1.0, frac * 2.5));  // rise during the first 40 % of each tread
+        z = z0 +
+            riser * (k + std::min(1.0, frac * 2.5));  // rise during the first 40 % of each tread
       }
       step({x, pos.y(), z}, use_baro ? std::optional<double>(baro) : std::nullopt);
     }
@@ -167,10 +171,10 @@ TEST(FloorManager, KeyframesDuringATransitionHaveNoFloor) {
 TEST(FloorManager, MidLandingIsNotMistakenForAFloor) {
   Rig r;
   r.stand(2);
-  r.climb(1.5, 2.2, true);   // first flight
-  r.walk(2.5);               // the mid landing: calm vertical speed for 2.5 s
+  r.climb(1.5, 2.2, true);  // first flight
+  r.walk(2.5);              // the mid landing: calm vertical speed for 2.5 s
   EXPECT_EQ(r.count(FloorEvent::Kind::TransitionEnded), 0);
-  r.climb(1.5, 2.2, true);   // second flight
+  r.climb(1.5, 2.2, true);  // second flight
   r.stand(4);
   ASSERT_EQ(r.count(FloorEvent::Kind::TransitionEnded), 1);
   EXPECT_EQ(r.ended()->to, 1);
@@ -184,7 +188,7 @@ TEST(FloorManager, GentleRampSlowerThanTheCalmSpeedStillMeasuresTheWholeClimb) {
   r.stand(3);
   const double run = 1.5 / std::tan(2.9 * M_PI / 180.0);
   r.climb(1.5, run, false);
-  r.walk(3.0);               // mid landing
+  r.walk(3.0);  // mid landing
   EXPECT_EQ(r.count(FloorEvent::Kind::TransitionEnded), 0);
   r.climb(1.5, run, false);
   r.stand(4);
@@ -196,18 +200,21 @@ TEST(FloorManager, GentleRampSlowerThanTheCalmSpeedStillMeasuresTheWholeClimb) {
 }
 
 TEST(FloorManager, RampWhoseSlopeFlickersAroundTheThresholdIsOneTransition) {
-  // Summit prueba_00: a ramp of about 3 degrees whose odometry z alternates 1.5 and 3.5 degrees every
-  // 3 m. The short slope window drops below calm_slope on the flat parts; the long one keeps it open.
+  // Summit prueba_00: a ramp of about 3 degrees whose odometry z alternates 1.5 and 3.5 degrees
+  // every 3 m. The short slope window drops below calm_slope on the flat parts; the long one keeps
+  // it open.
   Rig r;
   r.stand(3);
   for (int i = 0; i < 12; ++i) {
     r.climb(3.0 * std::tan(1.5 * M_PI / 180.0), 3.0, false);
     r.climb(3.0 * std::tan(3.5 * M_PI / 180.0), 3.0, false);
-    EXPECT_EQ(r.count(FloorEvent::Kind::TransitionEnded), 0) << "closed in the middle of the ramp, pair " << i;
+    EXPECT_EQ(r.count(FloorEvent::Kind::TransitionEnded), 0)
+        << "closed in the middle of the ramp, pair " << i;
   }
   r.stand(6);
   ASSERT_EQ(r.count(FloorEvent::Kind::TransitionEnded), 1);
-  EXPECT_NEAR(r.ended()->delta_z, 12 * 3.0 * (std::tan(1.5 * M_PI / 180.0) + std::tan(3.5 * M_PI / 180.0)), 0.25);
+  EXPECT_NEAR(r.ended()->delta_z,
+              12 * 3.0 * (std::tan(1.5 * M_PI / 180.0) + std::tan(3.5 * M_PI / 180.0)), 0.25);
 }
 
 TEST(FloorManager, GentleSlopeThatReturnsToTheSameLevelIsNotAFloor) {
@@ -240,9 +247,10 @@ TEST(FloorManager, ForcedCloseOfAnInvalidHeightStaysOnTheFloor) {
 }
 
 TEST(FloorManager, ASlowSustainedClimbIsNotFollowedByTheFloorReference) {
-  // Summit prueba_00: right after a ramp, a second one rises 0.03 m per metre travelled (1.9 m in 63 m): under
-  // the 0.04 of the short slope window. A reference that tracks the altitude with a 5 s time constant lags
-  // only 0.15 m behind it, under the 0.30 m that opens a transition, so the climb would pass for drift.
+  // Summit prueba_00: right after a ramp, a second one rises 0.03 m per metre travelled (1.9 m in
+  // 63 m): under the 0.04 of the short slope window. A reference that tracks the altitude with a 5
+  // s time constant lags only 0.15 m behind it, under the 0.30 m that opens a transition, so the
+  // climb would pass for drift.
   FloorManagerConfig cfg;
   cfg.floor_height_prior = std::nullopt;
   Rig r(cfg);
@@ -298,7 +306,8 @@ TEST(FloorManager, SmallExcursionsDoNotChangeFloor) {
   r.climb(0.5, 2.0, false);
   r.climb(-0.5, 2.0, false);
   r.stand(5);
-  // At most a close on the same floor (which puts the keyframes taken meanwhile back on it), never a change.
+  // At most a close on the same floor (which puts the keyframes taken meanwhile back on it), never
+  // a change.
   for (const auto& e : r.events) {
     if (e.kind == FloorEvent::Kind::TransitionEnded) {
       EXPECT_EQ(e.from, e.to);
@@ -313,7 +322,8 @@ TEST(FloorManager, AerialPlatformVerticalFlightIsAerial) {
   c.aerial_platform = true;
   Rig r(c);
   r.stand(2);
-  for (int i = 0; i < 70; ++i) r.step(Vector3d(0, 0, 1.5 + 3.0 * (0.5 - 0.5 * std::cos(M_PI * i / 69.0))));
+  for (int i = 0; i < 70; ++i)
+    r.step(Vector3d(0, 0, 1.5 + 3.0 * (0.5 - 0.5 * std::cos(M_PI * i / 69.0))));
   r.stand(4);
   const FloorEvent* e = r.ended();
   ASSERT_NE(e, nullptr);
@@ -352,9 +362,10 @@ TEST(FloorManager, WithoutAPriorTheMinimumVerticalChangeDecides) {
   EXPECT_EQ(r.mgr.floor(), 1);
 }
 
-// The run ends on the stairs, before the height settles: `finish` decides the transition now (audit AUD-022: an open
-// transition at the end left its keyframes out of the map). A whole floor climbed closes on the new level; a
-// climb that is not a whole floor stays on its floor; with nothing open there is nothing to say.
+// The run ends on the stairs, before the height settles: `finish` decides the transition now (audit
+// AUD-022: an open transition at the end left its keyframes out of the map). A whole floor climbed
+// closes on the new level; a climb that is not a whole floor stays on its floor; with nothing open
+// there is nothing to say.
 TEST(FloorManager, FinishDecidesATransitionStillOpenAtTheEndOfTheRun) {
   {
     Rig r;
@@ -385,8 +396,8 @@ TEST(FloorManager, FinishDecidesATransitionStillOpenAtTheEndOfTheRun) {
   EXPECT_EQ(idle.mgr.finish().kind, FloorEvent::Kind::None);
 }
 
-// A climb that comes back down to where it started ends on its own floor, and says so: the pipeline puts the
-// keyframes taken meanwhile on that floor instead of leaving them out.
+// A climb that comes back down to where it started ends on its own floor, and says so: the pipeline
+// puts the keyframes taken meanwhile on that floor instead of leaving them out.
 TEST(FloorManager, AClimbThatComesBackDownEndsOnItsOwnFloor) {
   Rig r;
   r.stand(3);
@@ -403,13 +414,14 @@ TEST(FloorManager, AClimbThatComesBackDownEndsOnItsOwnFloor) {
   EXPECT_EQ(r.mgr.floor(), 0);
 }
 
-// The odometry drifts up 0.3 m while walking 30 m on the ground floor (1 cm per metre, below what reads as a climb),
-// then the stairs climb 3 m: the first floor is 3 m above the ground floor, as the stairs measured, not 3.3 m
-// (audit AUD-007: S03, seed 7014).
+// The odometry drifts up 0.3 m while walking 30 m on the ground floor (1 cm per metre, below what
+// reads as a climb), then the stairs climb 3 m: the first floor is 3 m above the ground floor, as
+// the stairs measured, not 3.3 m (audit AUD-007: S03, seed 7014).
 TEST(FloorManager, ANewLevelIsPlacedByTheClimbNotByTheDriftedAltitude) {
   Rig r;
   r.stand(3);
-  for (int i = 0; i < 300; ++i) r.step(r.pos + Vector3d(0.1, 0, 0.001));  // 30 m at 1 m/s, +0.3 m of drift
+  for (int i = 0; i < 300; ++i)
+    r.step(r.pos + Vector3d(0.1, 0, 0.001));  // 30 m at 1 m/s, +0.3 m of drift
   r.stand(2);
   r.climb(3.0, 4.05 * 2 + 1.0, /*stepped=*/true);
   r.stand(6);
@@ -424,8 +436,9 @@ TEST(FloorManager, ANewLevelIsPlacedByTheClimbNotByTheDriftedAltitude) {
   EXPECT_EQ(r.mgr.num_floors(), 2u);
 }
 
-// Without a floor height prior, `min_vertical_change` (1.5 m) decides what is a floor: a 1 m climb that settles is a
-// raised part of the same floor, a 2 m one is a new level (audit AUD-031: the default could change unseen).
+// Without a floor height prior, `min_vertical_change` (1.5 m) decides what is a floor: a 1 m climb
+// that settles is a raised part of the same floor, a 2 m one is a new level (audit AUD-031: the
+// default could change unseen).
 TEST(FloorManager, WithoutAHeightPriorTheMinimumVerticalChangeDecides) {
   FloorManagerConfig c;
   c.floor_height_prior.reset();
@@ -436,8 +449,8 @@ TEST(FloorManager, WithoutAHeightPriorTheMinimumVerticalChangeDecides) {
     r.climb(1.0, 4.0, /*stepped=*/true);
     r.walk(3);
     r.stand(8);
-    // No level is opened (the manager may still be waiting: a change that is not a floor closes as terrain when
-    // max_transition_s runs out).
+    // No level is opened (the manager may still be waiting: a change that is not a floor closes as
+    // terrain when max_transition_s runs out).
     EXPECT_EQ(r.mgr.num_floors(), 1u);
     for (const auto& e : r.events) {
       if (e.kind == FloorEvent::Kind::TransitionEnded) {

@@ -1,12 +1,13 @@
 #include "strataslam/common/logging.hpp"
 
+#include <unistd.h>
+
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <map>
 #include <mutex>
 #include <string>
-#include <unistd.h>
 
 namespace strataslam {
 

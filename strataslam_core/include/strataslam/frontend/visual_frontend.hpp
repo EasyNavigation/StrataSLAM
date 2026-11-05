@@ -13,19 +13,20 @@ namespace strataslam {
 struct VisualKeyframeData {
   std::vector<RgbKeypoint> keypoints;
   std::vector<std::optional<Eigen::Vector3d>> p_cam;  ///< camera-frame 3D point per keypoint
-  std::vector<Eigen::Vector3f> cloud;                  ///< subsampled depth cloud, optical frame
+  std::vector<Eigen::Vector3f> cloud;                 ///< subsampled depth cloud, optical frame
   CameraIntrinsics K;
 };
 
 struct VisualFrontendConfig {
   VisualTrackerConfig tracker;
   int cloud_stride = 8;  ///< pixels between depth samples in the keyframe cloud
-  /// With an IMU: largest roll/pitch difference from its gravity that the tracking may keep (about the gravity
-  /// error of an IMU on a moving body).
+  /// With an IMU: largest roll/pitch difference from its gravity that the tracking may keep (about
+  /// the gravity error of an IMU on a moving body).
   double max_tilt_error_deg = 2.0;
-  /// With an external odometry: a frame whose motion differs from the odometry's by more than `veto_m` plus
-  /// `veto_ratio` of the step, or by more than `veto_deg` of rotation, is a wrong solution (about what wheel
-  /// odometry can err in one frame, plus the PnP noise): the odometry carries it.
+  /// With an external odometry: a frame whose motion differs from the odometry's by more than
+  /// `veto_m` plus `veto_ratio` of the step, or by more than `veto_deg` of rotation, is a wrong
+  /// solution (about what wheel odometry can err in one frame, plus the PnP noise): the odometry
+  /// carries it.
   double veto_m = 0.02, veto_ratio = 0.1, veto_deg = 1.0;
 };
 

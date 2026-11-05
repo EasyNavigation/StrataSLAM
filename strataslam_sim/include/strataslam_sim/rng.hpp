@@ -12,8 +12,12 @@ inline uint64_t splitmix64(uint64_t x) {
   return x ^ (x >> 31);
 }
 
-inline uint64_t hash_combine(uint64_t a, uint64_t b) { return splitmix64(a ^ (splitmix64(b) + 0x517cc1b727220a95ULL)); }
-inline uint64_t hash_combine(uint64_t a, uint64_t b, uint64_t c) { return hash_combine(hash_combine(a, b), c); }
+inline uint64_t hash_combine(uint64_t a, uint64_t b) {
+  return splitmix64(a ^ (splitmix64(b) + 0x517cc1b727220a95ULL));
+}
+inline uint64_t hash_combine(uint64_t a, uint64_t b, uint64_t c) {
+  return hash_combine(hash_combine(a, b), c);
+}
 inline uint64_t hash_combine(uint64_t a, uint64_t b, uint64_t c, uint64_t d) {
   return hash_combine(hash_combine(a, b, c), d);
 }

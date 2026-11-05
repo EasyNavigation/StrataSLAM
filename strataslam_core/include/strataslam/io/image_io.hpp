@@ -15,11 +15,13 @@ struct Image16 {
   std::vector<uint16_t> data;  ///< row-major, width * height
 };
 
-/// Reads an 8-bit grayscale image from a PNG (colour converted by libpng with the weights 0.299, 0.587, 0.114, as
-/// OpenCV's IMREAD_GRAYSCALE asks it to), a JPEG (converted by libjpeg) or a binary 8-bit PGM (P5).
+/// Reads an 8-bit grayscale image from a PNG (colour converted by libpng with the weights 0.299,
+/// 0.587, 0.114, as OpenCV's IMREAD_GRAYSCALE asks it to), a JPEG (converted by libjpeg) or a
+/// binary 8-bit PGM (P5).
 ///
-/// Lives in its own library, `strataslam::image_io` (libpng and libjpeg), and not in OpenCV's imgcodecs, which on
-/// Ubuntu loads GDAL and poppler (GPL) into every process that links it (ADR-0047).
+/// Lives in its own library, `strataslam::image_io` (libpng and libjpeg), and not in OpenCV's
+/// imgcodecs, which on Ubuntu loads GDAL and poppler (GPL) into every process that links it
+/// (ADR-0047).
 Result<GrayImage> read_gray_image(const std::string& path);
 
 /// Reads a 16-bit single-channel PNG (8-bit grayscale PNGs are widened).

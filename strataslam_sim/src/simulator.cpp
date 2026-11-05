@@ -8,17 +8,20 @@
 
 namespace strataslam_sim {
 
-using strataslam::Descriptor;
 using Eigen::Vector3d;
+using strataslam::Descriptor;
 using Type = SensorEvent::Type;
 
 namespace {
 constexpr double kRd = 287.05;
 
-uint64_t stream_seed(uint64_t seed, int stream, uint64_t idx) { return hash_combine(seed, 1000 + stream, idx); }
+uint64_t stream_seed(uint64_t seed, int stream, uint64_t idx) {
+  return hash_combine(seed, 1000 + stream, idx);
+}
 }  // namespace
 
-Simulator::Simulator(std::shared_ptr<const Building> b, std::shared_ptr<const Trajectory> tr, const SimConfig& cfg)
+Simulator::Simulator(std::shared_ptr<const Building> b, std::shared_ptr<const Trajectory> tr,
+                     const SimConfig& cfg)
     : building_(std::move(b)), trajectory_(std::move(tr)), cfg_(cfg) {
   const double T = trajectory_->duration();
   const auto add = [&](Type type, bool enabled, double hz) {
@@ -80,7 +83,8 @@ Simulator::Simulator(std::shared_ptr<const Building> b, std::shared_ptr<const Tr
                     cfg_.odom_trans_sigma * rng.normal());
         Vector3d rn(cfg_.odom_rot_sigma * rng.normal(), cfg_.odom_rot_sigma * rng.normal(),
                     cfg_.odom_rot_sigma * rng.normal());
-        d = gtsam::Pose3(d.rotation() * gtsam::Rot3::Expmap(rn), Vector3d(scale * d.translation() + tn));
+        d = gtsam::Pose3(d.rotation() * gtsam::Rot3::Expmap(rn),
+                         Vector3d(scale * d.translation() + tn));
         pose = pose * d;
       }
       odom_poses_[i] = pose;
@@ -107,14 +111,17 @@ strataslam::ImuSample Simulator::imu(size_t i) const {
   const double t = i / cfg_.imu_hz;
   const TrajectorySample s = trajectory_->state_at(t);
   Rng rng(stream_seed(cfg_.seed, 1, i));
-  const double sa = cfg_.accel_noise_density * std::sqrt(cfg_.imu_hz), sg = cfg_.gyro_noise_density * std::sqrt(cfg_.imu_hz);
+  const double sa = cfg_.accel_noise_density * std::sqrt(cfg_.imu_hz),
+               sg = cfg_.gyro_noise_density * std::sqrt(cfg_.imu_hz);
   // Sample's R / omega come from the nearest 200 Hz sample; use the extrinsic for non-base IMUs.
   const Eigen::Matrix3d Rib = cfg_.extrinsics.T_base_imu.rotation().matrix();
   strataslam::ImuSample m;
   m.stamp = stamp_at(t);
   const Vector3d f_base = s.R.transpose() * (s.a + Vector3d(0, 0, cfg_.gravity));
-  m.accel = Rib.transpose() * f_base + accel_bias_[i] + sa * Vector3d(rng.normal(), rng.normal(), rng.normal());
-  m.gyro = Rib.transpose() * s.omega_body + gyro_bias_[i] + sg * Vector3d(rng.normal(), rng.normal(), rng.normal());
+  m.accel = Rib.transpose() * f_base + accel_bias_[i] +
+            sa * Vector3d(rng.normal(), rng.normal(), rng.normal());
+  m.gyro = Rib.transpose() * s.omega_body + gyro_bias_[i] +
+           sg * Vector3d(rng.normal(), rng.normal(), rng.normal());
   return m;
 }
 
@@ -125,7 +132,9 @@ strataslam::BaroSample Simulator::baro(size_t i) const {
   return {stamp_at(t), pressure_at(z) + baro_drift_[i] + cfg_.baro_sigma_pa * rng.normal()};
 }
 
-strataslam::OdomMeasurement Simulator::odom(size_t i) const { return {stamp_at(i / cfg_.odom_hz), odom_poses_[i]}; }
+strataslam::OdomMeasurement Simulator::odom(size_t i) const {
+  return {stamp_at(i / cfg_.odom_hz), odom_poses_[i]};
+}
 
 strataslam::RgbdFrame Simulator::rgbd(size_t idx) const {
   const double t = idx / cfg_.camera_hz;
@@ -164,14 +173,21 @@ strataslam::RgbdFrame Simulator::rgbd(size_t idx) const {
       const auto hit = scene.raycast(oc, dw, cfg_.depth_max * norm);
       if (!hit) continue;
       const double z = *hit / norm;
-      Rng rng(stream_seed(cfg_.seed, 3, (static_cast<uint64_t>(idx) << 20) ^ (static_cast<uint64_t>(v) * K.width + u)));
+      Rng rng(stream_seed(
+          cfg_.seed, 3,
+          (static_cast<uint64_t>(idx) << 20) ^ (static_cast<uint64_t>(v) * K.width + u)));
       const double zn = z + cfg_.depth_coeff * z * z * rng.normal();
-      if (zn > 0.1 && zn < cfg_.depth_max) f.depth.meters[static_cast<size_t>(v) * K.width + u] = static_cast<float>(zn);
+      if (zn > 0.1 && zn < cfg_.depth_max)
+        f.depth.meters[static_cast<size_t>(v) * K.width + u] = static_cast<float>(zn);
     }
   }
 
   // Keypoints: visible landmarks, strongest first (strength is a fixed per-landmark hash).
-  struct Obs { float strength; size_t lm; float u, v; };
+  struct Obs {
+    float strength;
+    size_t lm;
+    float u, v;
+  };
   std::vector<Obs> obs;
   const auto& lms = building_->landmarks();
   for (size_t li = 0; li < lms.size(); ++li) {
@@ -180,14 +196,16 @@ strataslam::RgbdFrame Simulator::rgbd(size_t idx) const {
     const Vector3d pw = building_->landmark_position(lm, st.cabin_z);
     const Vector3d pc = T_cw.transformFrom(pw);
     if (pc.z() < 0.3 || pc.z() > cfg_.depth_max) continue;
-    if (lm.max_dist > 0 && pc.norm() > lm.max_dist) continue;  // fine texture is only resolvable close up
+    if (lm.max_dist > 0 && pc.norm() > lm.max_dist)
+      continue;  // fine texture is only resolvable close up
     const double u = K.fx * pc.x() / pc.z() + K.cx, v = K.fy * pc.y() / pc.z() + K.cy;
     if (u < 4 || v < 4 || u > K.width - 5 || v > K.height - 5) continue;
     if (!scene.visible(oc, pw)) continue;
     const float strength = static_cast<float>(Rng(hash_combine(cfg_.seed, 55, li)).uniform());
     obs.push_back({strength, li, static_cast<float>(u), static_cast<float>(v)});
   }
-  std::sort(obs.begin(), obs.end(), [](const Obs& a, const Obs& b) { return a.strength > b.strength; });
+  std::sort(obs.begin(), obs.end(),
+            [](const Obs& a, const Obs& b) { return a.strength > b.strength; });
   if (static_cast<int>(obs.size()) > cfg_.max_keypoints) obs.resize(cfg_.max_keypoints);
   Rng rng(stream_seed(cfg_.seed, 4, idx));
   for (const auto& o : obs) {
@@ -230,15 +248,20 @@ strataslam::LidarScan Simulator::lidar(size_t idx) const {
     const double dt = sweep * c / cols;
     const TrajectorySample st = trajectory_->state_at(t0 + dt);
     const gtsam::Pose3 T_ws = trajectory_->pose_at(t0 + dt) * cfg_.extrinsics.T_base_lidar;
-    const RayScene scene(*building_, st.cabin_z, st.door_closed, T_ws.translation(), cfg_.lidar_max_range + 1.0);
+    const RayScene scene(*building_, st.cabin_z, st.door_closed, T_ws.translation(),
+                         cfg_.lidar_max_range + 1.0);
     const Eigen::Matrix3d R = T_ws.rotation().matrix();
     const double az = 2 * M_PI * c / cols;
     for (int b = 0; b < beams; ++b) {
-      const double el = (beams == 1 ? 0.0 : (-0.5 + static_cast<double>(b) / (beams - 1)) * cfg_.lidar_fov_deg) * M_PI / 180.0;
+      const double el =
+          (beams == 1 ? 0.0 : (-0.5 + static_cast<double>(b) / (beams - 1)) * cfg_.lidar_fov_deg) *
+          M_PI / 180.0;
       const Vector3d ds(std::cos(el) * std::cos(az), std::cos(el) * std::sin(az), std::sin(el));
       const auto hit = scene.raycast(T_ws.translation(), R * ds, cfg_.lidar_max_range);
       if (!hit || *hit < cfg_.lidar_min_range) continue;
-      Rng rng(stream_seed(cfg_.seed, 5, (static_cast<uint64_t>(idx) << 24) ^ (static_cast<uint64_t>(c) * beams + b)));
+      Rng rng(
+          stream_seed(cfg_.seed, 5,
+                      (static_cast<uint64_t>(idx) << 24) ^ (static_cast<uint64_t>(c) * beams + b)));
       const double r = *hit + cfg_.lidar_range_sigma * rng.normal();
       const Vector3d p = r * ds;
       col_pts[c].push_back({p.cast<float>(), static_cast<float>(dt)});

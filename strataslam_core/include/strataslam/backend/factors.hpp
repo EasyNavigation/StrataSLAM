@@ -13,7 +13,8 @@ class BaroDeltaZFactor : public gtsam::NoiseModelFactor2<gtsam::Pose3, gtsam::Po
   BaroDeltaZFactor(gtsam::Key i, gtsam::Key j, double delta_h, const gtsam::SharedNoiseModel& model)
       : gtsam::NoiseModelFactor2<gtsam::Pose3, gtsam::Pose3>(model, i, j), delta_h_(delta_h) {}
 
-  gtsam::Vector evaluateError(const gtsam::Pose3& Xi, const gtsam::Pose3& Xj, boost::optional<gtsam::Matrix&> Hi = boost::none,
+  gtsam::Vector evaluateError(const gtsam::Pose3& Xi, const gtsam::Pose3& Xj,
+                              boost::optional<gtsam::Matrix&> Hi = boost::none,
                               boost::optional<gtsam::Matrix&> Hj = boost::none) const override {
     // t' = t + R * rho under X.retract(xi): d z / d rho = R.row(2); rotations do not move t.
     if (Hi) {
@@ -29,7 +30,8 @@ class BaroDeltaZFactor : public gtsam::NoiseModelFactor2<gtsam::Pose3, gtsam::Po
 
   double delta_h() const { return delta_h_; }
   gtsam::NonlinearFactor::shared_ptr clone() const override {
-    return boost::static_pointer_cast<gtsam::NonlinearFactor>(gtsam::NonlinearFactor::shared_ptr(new BaroDeltaZFactor(*this)));
+    return boost::static_pointer_cast<gtsam::NonlinearFactor>(
+        gtsam::NonlinearFactor::shared_ptr(new BaroDeltaZFactor(*this)));
   }
 
  private:

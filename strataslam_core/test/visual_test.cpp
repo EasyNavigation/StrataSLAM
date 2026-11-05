@@ -2,10 +2,10 @@
 
 #include <algorithm>
 #include <bitset>
-#include <cstring>
-#include <fstream>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <fstream>
 #include <random>
 
 #include "strataslam/frontend/depth_utils.hpp"
@@ -89,7 +89,8 @@ TEST(Pnp, RecoversPoseWithOutliersAndPixelNoise) {
     std::mt19937 rng(seed);
     std::uniform_real_distribution<double> u(-1, 1);
     std::normal_distribution<double> n(0, 1.0);  // 1 px noise
-    const gtsam::Pose3 T_cam_world(gtsam::Rot3::RzRyRx(0.1 * u(rng), 0.3 * u(rng), 0.3 * u(rng)), Vector3d(u(rng), u(rng), 0.5 * u(rng)));
+    const gtsam::Pose3 T_cam_world(gtsam::Rot3::RzRyRx(0.1 * u(rng), 0.3 * u(rng), 0.3 * u(rng)),
+                                   Vector3d(u(rng), u(rng), 0.5 * u(rng)));
     std::vector<PnPCorrespondence> corr;
     while (corr.size() < 500) {  // the simulator emits up to 500 keypoints per frame
       // A landmark in front of the camera, 2-6 m away, inside the field of view.
@@ -99,22 +100,27 @@ TEST(Pnp, RecoversPoseWithOutliersAndPixelNoise) {
       PnPCorrespondence c;
       c.point = T_cam_world.transformTo(pc);
       c.pixel = Eigen::Vector2d(px + n(rng), py + n(rng));
-      if (corr.size() % 5 == 0) c.pixel = Eigen::Vector2d(5 + 310 * (0.5 + 0.5 * u(rng)), 5 + 230 * (0.5 + 0.5 * u(rng)));  // 20 % outliers
+      if (corr.size() % 5 == 0)
+        c.pixel = Eigen::Vector2d(5 + 310 * (0.5 + 0.5 * u(rng)),
+                                  5 + 230 * (0.5 + 0.5 * u(rng)));  // 20 % outliers
       corr.push_back(c);
     }
-    const gtsam::Pose3 init = T_cam_world.compose(gtsam::Pose3(gtsam::Rot3::Yaw(0.05), Vector3d(0.2, -0.1, 0.1)));
+    const gtsam::Pose3 init =
+        T_cam_world.compose(gtsam::Pose3(gtsam::Rot3::Yaw(0.05), Vector3d(0.2, -0.1, 0.1)));
     const auto r = solve_pnp(corr, K, &init, 3.0, 200);
     ASSERT_TRUE(r.ok) << seed;
     const gtsam::Pose3 err = r.T_cam_obj.between(T_cam_world);
-    if (std::getenv("STRATASLAM_PNP_DEBUG")) std::printf("seed %d t=%.4f r=%.4f inl=%zu\n", seed, err.translation().norm(), gtsam::Rot3::Logmap(err.rotation()).norm() * 180 / M_PI, r.inliers.size());
+    if (std::getenv("STRATASLAM_PNP_DEBUG"))
+      std::printf("seed %d t=%.4f r=%.4f inl=%zu\n", seed, err.translation().norm(),
+                  gtsam::Rot3::Logmap(err.rotation()).norm() * 180 / M_PI, r.inliers.size());
     worst_t = std::max(worst_t, err.translation().norm());
     sum_t2 += err.translation().squaredNorm();
     sum_r2 += std::pow(gtsam::Rot3::Logmap(err.rotation()).norm() * 180 / M_PI, 2);
     worst_r = std::max(worst_r, gtsam::Rot3::Logmap(err.rotation()).norm() * 180 / M_PI);
     EXPECT_GE(r.inliers.size(), 350u);
   }
-  // RMS over 50 random geometries/noise draws: translation below 1 cm and rotation below 0.2 degrees
-  // (ADR-0009), with hard bounds on every single draw (2 cm, 0.5 degrees).
+  // RMS over 50 random geometries/noise draws: translation below 1 cm and rotation below 0.2
+  // degrees (ADR-0009), with hard bounds on every single draw (2 cm, 0.5 degrees).
   EXPECT_LT(std::sqrt(sum_t2 / n_seeds), 0.01);
   EXPECT_LT(worst_t, 0.02) << "worst translation error " << worst_t;
   EXPECT_LT(std::sqrt(sum_r2 / n_seeds), 0.2);
@@ -148,22 +154,27 @@ TEST(VisualLoop, CandidateBelowThirtyPnpInliersIsRejectedWithTheDefaultTuning) {
   const double px = tuning.visual.tracker.ransac_reprojection_px;
   for (size_t n : {10u, 20u, 29u}) {
     const auto corr = make(n);
-    EXPECT_FALSE(verify_loop_pnp(corr, K, tuning.visual_loop_min_inliers, px, 300)) << n << " inliers";
-    EXPECT_TRUE(verify_loop_pnp(corr, K, static_cast<int>(n), px, 300)) << n << " inliers, threshold " << n;
+    EXPECT_FALSE(verify_loop_pnp(corr, K, tuning.visual_loop_min_inliers, px, 300))
+        << n << " inliers";
+    EXPECT_TRUE(verify_loop_pnp(corr, K, static_cast<int>(n), px, 300))
+        << n << " inliers, threshold " << n;
   }
   const auto r = verify_loop_pnp(make(30), K, tuning.visual_loop_min_inliers, px, 300);
   ASSERT_TRUE(r);
   EXPECT_LT(r->between(T_cam_world).translation().norm(), 1e-3);
   // 30 matches of which 10 are outliers: 20 inliers, below the threshold.
   auto mixed = make(20);
-  for (int i = 0; i < 10; ++i) mixed.push_back({Vector3d(u(rng), u(rng), 3.0 + u(rng)), Eigen::Vector2d(160 + 150 * u(rng), 120 + 110 * u(rng))});
+  for (int i = 0; i < 10; ++i)
+    mixed.push_back({Vector3d(u(rng), u(rng), 3.0 + u(rng)),
+                     Eigen::Vector2d(160 + 150 * u(rng), 120 + 110 * u(rng))});
   EXPECT_FALSE(verify_loop_pnp(mixed, K, tuning.visual_loop_min_inliers, px, 300));
 }
 
 // ---------------- ORB extractor ----------------
 
 TEST(Orb, DepthMaskKeepsKeypointsWhereThereIsADepth) {
-  // A textured image whose right half has no depth (beyond the sensor's range): keypoints only on the left.
+  // A textured image whose right half has no depth (beyond the sensor's range): keypoints only on
+  // the left.
   GrayImage img;
   img.width = 320;
   img.height = 240;
@@ -181,7 +192,8 @@ TEST(Orb, DepthMaskKeepsKeypointsWhereThereIsADepth) {
   const auto all = ex->extract(img), masked = ex->extract(img, &mask);
   ASSERT_GT(masked.size(), 100u);
   for (const auto& k : masked) EXPECT_LT(k.u, 160.f);
-  EXPECT_TRUE(std::any_of(all.begin(), all.end(), [](const RgbKeypoint& k) { return k.u > 160.f; }));
+  EXPECT_TRUE(
+      std::any_of(all.begin(), all.end(), [](const RgbKeypoint& k) { return k.u > 160.f; }));
   EXPECT_EQ(valid_depth_mask(depth, 2.5, 6.0)[0], 0);  // 2 m is outside [2.5, 6]
 }
 
@@ -247,7 +259,8 @@ TEST(Bow, VocabularyTrainsAndScoresSimilarPlacesHigher) {
   const auto vocab = BowVocabulary::train(random_descriptors(60000, 1), cfg);
   EXPECT_GT(vocab.words(), 3000u);
   const auto place_a = random_descriptors(300, 10), place_b = random_descriptors(300, 11);
-  const BowVector a = vocab.transform(place_a), a2 = vocab.transform(noisy(place_a, 6, 5)), b = vocab.transform(place_b);
+  const BowVector a = vocab.transform(place_a), a2 = vocab.transform(noisy(place_a, 6, 5)),
+                  b = vocab.transform(place_b);
   float sum = 0;
   for (const auto& p : a) sum += p.second;
   EXPECT_NEAR(sum, 1.0f, 1e-5);
@@ -260,12 +273,14 @@ TEST(Bow, DatabaseRanksTheRevisitAndHonoursTemporalExclusion) {
   BowConfig cfg;
   cfg.branching = 10;
   cfg.levels = 4;
-  auto vocab = std::make_shared<const BowVocabulary>(BowVocabulary::train(random_descriptors(60000, 1), cfg));
+  auto vocab = std::make_shared<const BowVocabulary>(
+      BowVocabulary::train(random_descriptors(60000, 1), cfg));
   BowDatabase db(vocab);
   std::vector<std::vector<Descriptor>> places;
   for (int i = 0; i < 10; ++i) {
     places.push_back(random_descriptors(300, 100 + i));
-    db.add(i, /*session=*/0, /*stamp=*/static_cast<Timestamp>(i) * 1000000000LL, vocab->transform(places.back()));
+    db.add(i, /*session=*/0, /*stamp=*/static_cast<Timestamp>(i) * 1000000000LL,
+           vocab->transform(places.back()));
   }
   const BowVector q = vocab->transform(noisy(places[3], 6, 9));
   const Timestamp now = 30LL * 1000000000LL;
@@ -377,7 +392,8 @@ TEST(Tracker, SystemReportsKeypointUseOnlyWithCameraOdometry) {
   lidar.sensors.camera.depth_max = 6.0;
   lidar.fusion.odometry_from = OdometryFrom::Lidar;
   const SlamSystem with_lidar(lidar, Extrinsics());
-  EXPECT_FALSE(with_lidar.keypoint_use().has_value());  // the camera keypoints only serve loop closures
+  EXPECT_FALSE(
+      with_lidar.keypoint_use().has_value());  // the camera keypoints only serve loop closures
   Config camera = lidar;
   camera.sensors.lidar.enabled = false;
   camera.fusion.odometry_from = OdometryFrom::Camera;

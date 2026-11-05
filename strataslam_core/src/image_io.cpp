@@ -1,14 +1,14 @@
 #include "strataslam/io/image_io.hpp"
 
-#include <csetjmp>
+#include <jpeglib.h>
+#include <png.h>
+
 #include <cctype>
+#include <csetjmp>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
 #include <memory>
-
-#include <jpeglib.h>
-#include <png.h>
 
 namespace strataslam {
 
@@ -16,7 +16,9 @@ namespace {
 
 using FilePtr = std::unique_ptr<FILE, int (*)(FILE*)>;
 
-FilePtr open_file(const std::string& path) { return FilePtr(std::fopen(path.c_str(), "rb"), &std::fclose); }
+FilePtr open_file(const std::string& path) {
+  return FilePtr(std::fopen(path.c_str(), "rb"), &std::fclose);
+}
 
 std::string lower_extension(const std::string& path) {
   const auto dot = path.find_last_of('.');
@@ -40,13 +42,15 @@ void png_error_fn(png_structp png, png_const_charp msg) {
 }
 void png_warning_fn(png_structp, png_const_charp) {}
 
-// The two phases that libpng may abort with longjmp run in functions holding no C++ object that changes after
-// setjmp (only raw pointers and PODs), so a jump back never leaves a vector or string in an indeterminate state.
+// The two phases that libpng may abort with longjmp run in functions holding no C++ object that
+// changes after setjmp (only raw pointers and PODs), so a jump back never leaves a vector or string
+// in an indeterminate state.
 
-/// Reads the header and sets up the conversion to one channel of `bit_depth` bits. Colour is converted to gray by
-/// libpng with the BT.601 weights (what OpenCV asks libpng for when reading with IMREAD_GRAYSCALE); alpha is dropped.
-bool png_header(png_structp png, png_infop info, FILE* f, int bit_depth, size_t sample_bytes, png_uint_32* w, png_uint_32* h,
-                const char** problem) {
+/// Reads the header and sets up the conversion to one channel of `bit_depth` bits. Colour is
+/// converted to gray by libpng with the BT.601 weights (what OpenCV asks libpng for when reading
+/// with IMREAD_GRAYSCALE); alpha is dropped.
+bool png_header(png_structp png, png_infop info, FILE* f, int bit_depth, size_t sample_bytes,
+                png_uint_32* w, png_uint_32* h, const char** problem) {
   if (setjmp(png_jmpbuf(png))) return false;
   png_init_io(png, f);
   png_set_sig_bytes(png, 8);
@@ -64,7 +68,8 @@ bool png_header(png_structp png, png_infop info, FILE* f, int bit_depth, size_t 
   if (color == PNG_COLOR_TYPE_GRAY && depth < 8) png_set_expand_gray_1_2_4_to_8(png);
   if (trns) png_set_tRNS_to_alpha(png);
   if ((color & PNG_COLOR_MASK_ALPHA) || trns) png_set_strip_alpha(png);
-  if ((color & PNG_COLOR_MASK_COLOR) || color == PNG_COLOR_TYPE_PALETTE) png_set_rgb_to_gray(png, 1, 0.299, 0.587);
+  if ((color & PNG_COLOR_MASK_COLOR) || color == PNG_COLOR_TYPE_PALETTE)
+    png_set_rgb_to_gray(png, 1, 0.299, 0.587);
   if (bit_depth == 8 && depth == 16) png_set_strip_16(png);
   if (bit_depth == 16 && depth < 16) png_set_expand_16(png);
   if (bit_depth == 16) png_set_swap(png);  // PNG stores 16-bit samples big-endian
@@ -88,7 +93,8 @@ Result<std::vector<T>> decode_png(const std::string& path, int bit_depth, int* w
   FilePtr f = open_file(path);
   if (!f) return Error{path + ": cannot open"};
   unsigned char sig[8];
-  if (std::fread(sig, 1, 8, f.get()) != 8 || png_sig_cmp(sig, 0, 8) != 0) return Error{path + ": not a PNG file"};
+  if (std::fread(sig, 1, 8, f.get()) != 8 || png_sig_cmp(sig, 0, 8) != 0)
+    return Error{path + ": not a PNG file"};
   std::string err;
   PngRead r;
   r.png = png_create_read_struct(PNG_LIBPNG_VER_STRING, &err, png_error_fn, png_warning_fn);
@@ -98,11 +104,16 @@ Result<std::vector<T>> decode_png(const std::string& path, int bit_depth, int* w
   png_uint_32 w = 0, h = 0;
   const char* problem = nullptr;
   if (!png_header(r.png, r.info, f.get(), bit_depth, sizeof(T), &w, &h, &problem))
-    return Error{path + ": " + (problem ? std::string(problem) : err.empty() ? std::string("invalid PNG") : err)};
+    return Error{path + ": " +
+                 (problem       ? std::string(problem)
+                  : err.empty() ? std::string("invalid PNG")
+                                : err)};
   std::vector<T> data(static_cast<size_t>(w) * h);
   std::vector<png_bytep> rows(h);
-  for (png_uint_32 y = 0; y < h; ++y) rows[y] = reinterpret_cast<png_bytep>(data.data() + static_cast<size_t>(y) * w);
-  if (!png_rows(r.png, rows.data())) return Error{path + ": " + (err.empty() ? std::string("invalid PNG") : err)};
+  for (png_uint_32 y = 0; y < h; ++y)
+    rows[y] = reinterpret_cast<png_bytep>(data.data() + static_cast<size_t>(y) * w);
+  if (!png_rows(r.png, rows.data()))
+    return Error{path + ": " + (err.empty() ? std::string("invalid PNG") : err)};
   *width = static_cast<int>(w);
   *height = static_cast<int>(h);
   return data;
@@ -126,7 +137,8 @@ bool jpeg_header(jpeg_decompress_struct* cinfo, JpegError* jerr, FILE* f) {
   if (setjmp(jerr->jump)) return false;
   jpeg_stdio_src(cinfo, f);
   jpeg_read_header(cinfo, TRUE);
-  cinfo->out_color_space = JCS_GRAYSCALE;  // libjpeg converts (as OpenCV's IMREAD_GRAYSCALE asks it to)
+  cinfo->out_color_space =
+      JCS_GRAYSCALE;  // libjpeg converts (as OpenCV's IMREAD_GRAYSCALE asks it to)
   jpeg_start_decompress(cinfo);
   return cinfo->output_components == 1;
 }
@@ -155,7 +167,9 @@ Result<GrayImage> read_jpeg_gray(const std::string& path) {
     ~Destroy() { jpeg_destroy_decompress(c); }
   } destroy{&cinfo};
   if (!jpeg_header(&cinfo, &jerr, f.get()))
-    return Error{path + ": " + std::string(jerr.message[0] ? jerr.message : "the JPEG could not be decoded to grayscale")};
+    return Error{
+        path + ": " +
+        std::string(jerr.message[0] ? jerr.message : "the JPEG could not be decoded to grayscale")};
   GrayImage img;
   img.width = static_cast<int>(cinfo.output_width);
   img.height = static_cast<int>(cinfo.output_height);
@@ -183,14 +197,16 @@ Result<GrayImage> read_pgm(const std::string& path) {
     }
     in >> vals[got++];
   }
-  if (got < 3 || vals[0] <= 0 || vals[1] <= 0 || vals[2] != 255) return Error{path + ": unsupported PGM header (8-bit P5 only)"};
+  if (got < 3 || vals[0] <= 0 || vals[1] <= 0 || vals[2] != 255)
+    return Error{path + ": unsupported PGM header (8-bit P5 only)"};
   in.get();  // the single whitespace after maxval
   GrayImage img;
   img.width = vals[0];
   img.height = vals[1];
   img.data.resize(static_cast<size_t>(img.width) * img.height);
   in.read(reinterpret_cast<char*>(img.data.data()), static_cast<std::streamsize>(img.data.size()));
-  if (in.gcount() != static_cast<std::streamsize>(img.data.size())) return Error{path + ": truncated PGM"};
+  if (in.gcount() != static_cast<std::streamsize>(img.data.size()))
+    return Error{path + ": truncated PGM"};
   return img;
 }
 

@@ -8,11 +8,11 @@
 #include <thread>
 
 #include "strataslam/common/version.hpp"
-#include "strataslam/mapping/colorize.hpp"
 #include "strataslam/geometry/gravity.hpp"
+#include "strataslam/mapping/colorize.hpp"
+#include "strataslam/mapping/voxel_grid.hpp"
 #include "strataslam/sensors/barometer.hpp"
 #include "strataslam/sensors/imu_mount.hpp"
-#include "strataslam/mapping/voxel_grid.hpp"
 
 namespace strataslam {
 
@@ -29,20 +29,24 @@ struct SlamSystem::Impl {
   Backend backend;
   FloorManager mgr;
   std::unique_ptr<BaroFilter> baro_filter;
-  std::deque<OdomMeasurement> ext_odom;  // the robot's own odometry (wheels), the last seconds of it
+  std::deque<OdomMeasurement>
+      ext_odom;  // the robot's own odometry (wheels), the last seconds of it
   std::optional<double> baro_h;
-  std::deque<ImuSample> imu_buf;         // recent IMU samples (last ~3 s), corrected (sign, scale)
-  std::unique_ptr<ImuMount> imu_mount;   // learns how the IMU is really mounted
-  GravityTracker gravity;                // up in the base frame, from the IMU
-  bool imu_checked = false;              // the start-up check of gravity against the TF has run
-  bool imu_trusted = false;              // its samples are used: the TF agreed, or the mounting was learned
-  bool imu_learned = false;              // the mounting was learned from the motion (no more checks)
+  std::deque<ImuSample> imu_buf;        // recent IMU samples (last ~3 s), corrected (sign, scale)
+  std::unique_ptr<ImuMount> imu_mount;  // learns how the IMU is really mounted
+  GravityTracker gravity;               // up in the base frame, from the IMU
+  bool imu_checked = false;             // the start-up check of gravity against the TF has run
+  bool imu_trusted = false;  // its samples are used: the TF agreed, or the mounting was learned
+  bool imu_learned = false;  // the mounting was learned from the motion (no more checks)
   double imu_sign = 1.0, imu_scale = 1.0;
-  Timestamp last_fe_stamp = 0;           // stamp of the last valid frontend pose (rotations for the IMU mounting)
-  Timestamp turn_start = 0;              // the rotations are paired with the gyroscope over windows of about 1 s
+  Timestamp last_fe_stamp =
+      0;  // stamp of the last valid frontend pose (rotations for the IMU mounting)
+  Timestamp turn_start =
+      0;  // the rotations are paired with the gyroscope over windows of about 1 s
   Eigen::Vector3d turn_sum = Eigen::Vector3d::Zero();
   std::vector<ImuSample> imu_since_update;
-  std::optional<RgbdFrame> last_cam;     // newest camera frame (when the odometry comes from the LiDAR)
+  std::optional<RgbdFrame>
+      last_cam;  // newest camera frame (when the odometry comes from the LiDAR)
   std::map<KeyframeId, std::shared_ptr<const RgbdFrame>> keyframe_images;  // only when colorizing
   bool gravity_done = false;
   // The frame being processed, so that a frontend restart can re-level on it.
@@ -62,16 +66,19 @@ struct SlamSystem::Impl {
 
   KeyframeId next_kf = 0;
   SessionId session = 0;
-  std::optional<KeyframeId> last_kf;               // last keyframe of the current session
-  std::optional<KeyframeId> bridge_from;           // keyframe of the target floor to link the next keyframe to
+  std::optional<KeyframeId> last_kf;  // last keyframe of the current session
+  std::optional<KeyframeId>
+      bridge_from;  // keyframe of the target floor to link the next keyframe to
   std::map<FloorId, KeyframeId> last_kf_on_floor;
-  std::vector<KeyframeId> transit_kfs;             // keyframes created while a transition was open (no floor yet)
-  std::map<FloorId, KeyframeId> last_kf_in_graph;  // keyed like the backend's graphs (all floors share one in the control mode)
+  std::vector<KeyframeId>
+      transit_kfs;  // keyframes created while a transition was open (no floor yet)
+  std::map<FloorId, KeyframeId> last_kf_in_graph;  // keyed like the backend's graphs (all floors
+                                                   // share one in the control mode)
   std::optional<gtsam::Pose3> last_pose;
   std::optional<gtsam::Pose3> last_kf_pose;
   Timestamp lost_since = 0;
-  // Last pose the frontend tracked as Good: a loss is usually preceded by a few Degraded frames whose
-  // pose (in particular the attitude) is the least reliable one to restart from.
+  // Last pose the frontend tracked as Good: a loss is usually preceded by a few Degraded frames
+  // whose pose (in particular the attitude) is the least reliable one to restart from.
   std::optional<std::pair<Timestamp, gtsam::Pose3>> last_good;
   int since_loop = 1000;
   size_t cross_floor_seen = 0;
@@ -83,8 +90,9 @@ struct SlamSystem::Impl {
     FloorId from = 0, to = 0;
     double dz = 0;
     bool continuous = false;
-    bool dz_from_sensor = false;   ///< the odometry did not see the height change: use `dz` in the relative pose
-    bool tracking_gap = false;     ///< tracking was lost and restarted during the climb
+    bool dz_from_sensor =
+        false;  ///< the odometry did not see the height change: use `dz` in the relative pose
+    bool tracking_gap = false;  ///< tracking was lost and restarted during the climb
     std::optional<KeyframeId> kf_before;
   } open_tr;
   // A session whose floor is not known yet (after a tracking loss): placed by relocalization, or
@@ -106,10 +114,18 @@ struct SlamSystem::Impl {
   }
 
   Impl(const Config& c, const Extrinsics& e, const SystemTuning& t, std::shared_ptr<Logger> l)
-      : cfg(c), ext(e), tuning(t), log(std::move(l)), backend(t.backend, log), mgr(floor_config(c, t.floors)) {
+      : cfg(c),
+        ext(e),
+        tuning(t),
+        log(std::move(l)),
+        backend(t.backend, log),
+        mgr(floor_config(c, t.floors)) {
     mgr.set_logger(log);
     modes = resolve_modes(cfg);
-    const int threads = cfg.runtime.threads > 0 ? cfg.runtime.threads : static_cast<int>(std::max(1u, std::thread::hardware_concurrency() / 2));
+    const int threads =
+        cfg.runtime.threads > 0
+            ? cfg.runtime.threads
+            : static_cast<int>(std::max(1u, std::thread::hardware_concurrency() / 2));
     LidarFrontendConfig lc = tuning.lidar;
     lc.min_range = cfg.sensors.lidar.min_range;
     lc.max_range = cfg.sensors.lidar.max_range;
@@ -126,24 +142,33 @@ struct SlamSystem::Impl {
     vc.tracker.keyframe_translation = cfg.output.keyframe_translation;
     vc.tracker.keyframe_rotation_deg = cfg.output.keyframe_rotation_deg;
     tuning.visual = vc;
-    if (cfg.sensors.camera.enabled) visual_fe = std::make_unique<VisualFrontend>(vc, ext.T_base_camera);
+    if (cfg.sensors.camera.enabled)
+      visual_fe = std::make_unique<VisualFrontend>(vc, ext.T_base_camera);
 
     if (cfg.sensors.imu.enabled) imu_mount = std::make_unique<ImuMount>(ext.T_base_imu.rotation());
-    if (cfg.sensors.barometer.enabled) baro_filter = std::make_unique<BaroFilter>(cfg.sensors.barometer.temperature_k, cfg.sensors.barometer.settle_time_s);
-    odom_fe = modes.odometry == OdometrySource::Camera ? static_cast<OdometryFrontend*>(visual_fe.get())
-                                                       : static_cast<OdometryFrontend*>(lidar_fe.get());
+    if (cfg.sensors.barometer.enabled)
+      baro_filter = std::make_unique<BaroFilter>(cfg.sensors.barometer.temperature_k,
+                                                 cfg.sensors.barometer.settle_time_s);
+    odom_fe = modes.odometry == OdometrySource::Camera
+                  ? static_cast<OdometryFrontend*>(visual_fe.get())
+                  : static_cast<OdometryFrontend*>(lidar_fe.get());
   }
 
-  /// The external odometry at `t`, interpolated between its two samples around it; nullopt outside them (a
-  /// stamp up to kTolerance after the last sample takes the last one: the odometry may trail the camera).
+  /// The external odometry at `t`, interpolated between its two samples around it; nullopt outside
+  /// them (a stamp up to kTolerance after the last sample takes the last one: the odometry may
+  /// trail the camera).
   std::optional<OdomMeasurement> ext_odom_at(Timestamp t) const {
     constexpr Timestamp kTolerance = 50'000'000;  // ns
-    if (ext_odom.empty() || t < ext_odom.front().stamp || t > ext_odom.back().stamp + kTolerance) return std::nullopt;
+    if (ext_odom.empty() || t < ext_odom.front().stamp || t > ext_odom.back().stamp + kTolerance)
+      return std::nullopt;
     if (t >= ext_odom.back().stamp) return OdomMeasurement{t, ext_odom.back().pose};
-    const auto b = std::lower_bound(ext_odom.begin(), ext_odom.end(), t, [](const OdomMeasurement& m, Timestamp v) { return m.stamp < v; });
+    const auto b =
+        std::lower_bound(ext_odom.begin(), ext_odom.end(), t,
+                         [](const OdomMeasurement& m, Timestamp v) { return m.stamp < v; });
     if (b->stamp == t || b == ext_odom.begin()) return OdomMeasurement{t, b->pose};
     const auto a = std::prev(b);
-    const double alpha = static_cast<double>(t - a->stamp) / static_cast<double>(b->stamp - a->stamp);
+    const double alpha =
+        static_cast<double>(t - a->stamp) / static_cast<double>(b->stamp - a->stamp);
     return OdomMeasurement{t, a->pose.interpolateRt(b->pose, alpha)};
   }
 
@@ -152,7 +177,8 @@ struct SlamSystem::Impl {
 
   ScanContextDatabase& sc_for(FloorId f) {
     auto it = sc_db.find(key_floor(f));
-    if (it == sc_db.end()) it = sc_db.emplace(key_floor(f), ScanContextDatabase(tuning.scan_context)).first;
+    if (it == sc_db.end())
+      it = sc_db.emplace(key_floor(f), ScanContextDatabase(tuning.scan_context)).first;
     return it->second;
   }
   BowDatabase& bow_for(FloorId f) {
@@ -165,17 +191,17 @@ struct SlamSystem::Impl {
 
   bool planar() const { return cfg.multifloor.mode == LevelMode::Planar; }
 
-  /// Planar mode: up in the base frame, from the IMU's gravity (a base on suspension tilts as it accelerates), else
-  /// the base's own z (a level base).
+  /// Planar mode: up in the base frame, from the IMU's gravity (a base on suspension tilts as it
+  /// accelerates), else the base's own z (a level base).
   Eigen::Vector3d plane_up() const {
     if (imu_trusted)
       if (const auto u = gravity.up()) return *u;
     return Eigen::Vector3d::UnitZ();
   }
 
-  /// Planar mode: the frontend's pose moved onto the plane of the floor (the odometry frame's z = 0, where the run
-  /// started): x, y and heading kept, height and attitude imposed. The frontend's own drift in z and in roll and
-  /// pitch never reaches the map.
+  /// Planar mode: the frontend's pose moved onto the plane of the floor (the odometry frame's z =
+  /// 0, where the run started): x, y and heading kept, height and attitude imposed. The frontend's
+  /// own drift in z and in roll and pitch never reaches the map.
   void to_plane(FrontendResult& r) const {
     if (!planar() || !r.valid) return;
     const gtsam::Pose3 p(level_to(r.T_odom_base.rotation(), plane_up()),
@@ -186,8 +212,9 @@ struct SlamSystem::Impl {
 
   // ---------------- IMU, gravity, barometer ----------------
 
-  /// Up in the base frame as the platform defines it (a ground robot's base is parallel to the floor), else from the
-  /// odometry's attitude: the reference for the IMU's gravity before its mounting is known.
+  /// Up in the base frame as the platform defines it (a ground robot's base is parallel to the
+  /// floor), else from the odometry's attitude: the reference for the IMU's gravity before its
+  /// mounting is known.
   Eigen::Vector3d reference_up(const gtsam::Pose3& T_odom_base) const {
     if (cfg.robot.platform == Platform::Ground) return Eigen::Vector3d::UnitZ();
     return T_odom_base.rotation().matrix().transpose() * Eigen::Vector3d::UnitZ();
@@ -204,8 +231,9 @@ struct SlamSystem::Impl {
     gravity.add(m.stamp, R * m.accel, R * m.gyro);
   }
 
-  /// After the first second: does gravity, through the TF, point up? On a ground robot it must; if it does not, the
-  /// TF or the driver's sign convention is wrong and the IMU waits until its mounting is learned from the motion.
+  /// After the first second: does gravity, through the TF, point up? On a ground robot it must; if
+  /// it does not, the TF or the driver's sign convention is wrong and the IMU waits until its
+  /// mounting is learned from the motion.
   void check_imu_against_tf() {
     const auto& recent = imu_mount->recent();
     if (recent.size() < 10 || (recent.back().stamp - recent.front().stamp) * 1e-9 < 1.0) return;
@@ -214,16 +242,19 @@ struct SlamSystem::Impl {
     const double angle = std::acos(std::clamp(g.normalized().z(), -1.0, 1.0)) * 180.0 / M_PI;
     imu_trusted = cfg.robot.platform != Platform::Ground || angle < 30.0;
     if (!imu_trusted) {
-      log->log(LogLevel::Warn, strprintf("IMU: gravity is %.0f deg away from up by the TF (the TF or the driver's sign convention is "
-                                         "wrong); not used until its mounting is learned from the motion (the robot must turn)", angle));
+      log->log(LogLevel::Warn, strprintf("IMU: gravity is %.0f deg away from up by the TF (the TF "
+                                         "or the driver's sign convention is "
+                                         "wrong); not used until its mounting is learned from the "
+                                         "motion (the robot must turn)",
+                                         angle));
       return;
     }
     for (const auto& m : recent) use_imu(m);
   }
 
-  /// The odometry turned the base between the last valid pose and this one: summed over about a second (where the
-  /// rotation stands out of the per-frame noise and a small time offset between the sensors does not matter) and
-  /// paired with the gyroscope for the IMU mounting.
+  /// The odometry turned the base between the last valid pose and this one: summed over about a
+  /// second (where the rotation stands out of the per-frame noise and a small time offset between
+  /// the sensors does not matter) and paired with the gyroscope for the IMU mounting.
   void learn_imu_mounting(const FrontendResult& r, Timestamp stamp) {
     if (!imu_mount || imu_learned) return;
     constexpr Timestamp kWindow = 1'000'000'000;  // ns
@@ -241,14 +272,22 @@ struct SlamSystem::Impl {
     const auto e = imu_mount->estimate();
     if (!e) return;
     imu_learned = true;
-    const bool wrong = e->tf_error_deg > 10.0 || e->accel_sign < 0 || std::abs(e->accel_scale - 1.0) > 0.03;
+    const bool wrong =
+        e->tf_error_deg > 10.0 || e->accel_sign < 0 || std::abs(e->accel_scale - 1.0) > 0.03;
     if (imu_trusted && !wrong) {
-      log->log(LogLevel::Info, strprintf("IMU: mounting confirmed by the motion (TF within %.1f deg, %.0f deg of turning)", e->tf_error_deg, e->turned_deg));
+      log->log(
+          LogLevel::Info,
+          strprintf(
+              "IMU: mounting confirmed by the motion (TF within %.1f deg, %.0f deg of turning)",
+              e->tf_error_deg, e->turned_deg));
       return;
     }
-    log->log(LogLevel::Warn, strprintf("IMU: mounting learned from %.0f deg of turning: %.1f deg from the TF%s, gravity scaled by %.3f; used from now on",
-                                       e->turned_deg, e->tf_error_deg, e->accel_sign < 0 ? ", accelerometer reports gravity pointing down" : "",
-                                       e->accel_scale));
+    log->log(LogLevel::Warn,
+             strprintf("IMU: mounting learned from %.0f deg of turning: %.1f deg from the TF%s, "
+                       "gravity scaled by %.3f; used from now on",
+                       e->turned_deg, e->tf_error_deg,
+                       e->accel_sign < 0 ? ", accelerometer reports gravity pointing down" : "",
+                       e->accel_scale));
     ext.T_base_imu = gtsam::Pose3(e->R_base_imu, ext.T_base_imu.translation());
     imu_sign = e->accel_sign;
     imu_scale = e->accel_scale;
@@ -275,15 +314,18 @@ struct SlamSystem::Impl {
     std::optional<Eigen::Vector3d> up_base;
     if (cfg.sensors.imu.enabled && imu_buf.size() >= 100) {
       const std::vector<ImuSample> w(imu_buf.begin(), imu_buf.end());
-      if (const auto g = estimate_gravity_from_imu(w, 0.05, 0.5)) up_base = ext.T_base_imu.rotation().matrix() * g->up_body;
+      if (const auto g = estimate_gravity_from_imu(w, 0.05, 0.5))
+        up_base = ext.T_base_imu.rotation().matrix() * g->up_body;
     }
     if (!up_base && !cloud.empty()) {
       const Eigen::Matrix3d R_bs = T_base_sensor.rotation().matrix();
-      const auto up_sensor = estimate_up_from_ground_plane(cloud, R_bs.transpose() * Eigen::Vector3d::UnitZ(), cfg.runtime.seed);
-      // Applied however small: the start has no attitude of its own to keep, and one cloud measures the vertical
-      // within about 0.03 deg (a LiDAR sweep, about 0.15 deg: it averages the attitude over 0.1 s of motion). Rounding a sub-degree tilt to level (a 0.5-degree threshold, as the
-      // re-levelling has) left the simulator's 0.43-degree start tilt in every keyframe: S13 lost 0.14 m of floor
-      // height on average and S07 3 seeds in 20.
+      const auto up_sensor = estimate_up_from_ground_plane(
+          cloud, R_bs.transpose() * Eigen::Vector3d::UnitZ(), cfg.runtime.seed);
+      // Applied however small: the start has no attitude of its own to keep, and one cloud measures
+      // the vertical within about 0.03 deg (a LiDAR sweep, about 0.15 deg: it averages the attitude
+      // over 0.1 s of motion). Rounding a sub-degree tilt to level (a 0.5-degree threshold, as the
+      // re-levelling has) left the simulator's 0.43-degree start tilt in every keyframe: S13 lost
+      // 0.14 m of floor height on average and S07 3 seeds in 20.
       if (up_sensor) up_base = (R_bs * *up_sensor).normalized();
     }
     if (!up_base || !odom_fe) return;
@@ -295,9 +337,11 @@ struct SlamSystem::Impl {
   /// Gravity-free vertical acceleration (world), averaged over the IMU samples since the last
   /// update, using the current orientation estimate.
   std::optional<double> take_vertical_accel() {
-    if (!cfg.sensors.imu.floor_changes) imu_since_update.clear();  // the IMU gives the attitude only
+    if (!cfg.sensors.imu.floor_changes)
+      imu_since_update.clear();  // the IMU gives the attitude only
     if (imu_since_update.empty()) return std::nullopt;
-    const Eigen::Matrix3d R_wb = last_pose ? last_pose->rotation().matrix() : Eigen::Matrix3d::Identity();
+    const Eigen::Matrix3d R_wb =
+        last_pose ? last_pose->rotation().matrix() : Eigen::Matrix3d::Identity();
     const Eigen::Matrix3d R_bi = ext.T_base_imu.rotation().matrix();
     double sum = 0;
     for (const auto& m : imu_since_update) sum += (R_wb * R_bi * m.accel).z() - kStandardGravity;
@@ -305,7 +349,11 @@ struct SlamSystem::Impl {
     if (debug_channel("IMU") && std::abs(az) > 0.5) {
       const auto& m0 = imu_since_update.front();
       const Eigen::Vector3d w = R_wb * R_bi * m0.accel;
-      log->log(LogLevel::Debug, strprintf("imu az=%.2f n=%zu first a=(%.2f %.2f %.2f) world=(%.2f %.2f %.2f) pose z-row=(%.2f %.2f %.2f) last_pose=%d", az, imu_since_update.size(), m0.accel.x(), m0.accel.y(), m0.accel.z(), w.x(), w.y(), w.z(), R_wb(2, 0), R_wb(2, 1), R_wb(2, 2), last_pose.has_value()));
+      log->log(LogLevel::Debug, strprintf("imu az=%.2f n=%zu first a=(%.2f %.2f %.2f) world=(%.2f "
+                                          "%.2f %.2f) pose z-row=(%.2f %.2f %.2f) last_pose=%d",
+                                          az, imu_since_update.size(), m0.accel.x(), m0.accel.y(),
+                                          m0.accel.z(), w.x(), w.y(), w.z(), R_wb(2, 0), R_wb(2, 1),
+                                          R_wb(2, 2), last_pose.has_value()));
     }
     imu_since_update.clear();
     return az;
@@ -313,8 +361,9 @@ struct SlamSystem::Impl {
 
   // ---------------- keyframes ----------------
 
-  void insert_keyframe(const FrontendResult& r, std::vector<Eigen::Vector3f> cloud, const gtsam::Pose3& T_base_sensor,
-                       Timestamp stamp, std::optional<VisualKf> vis) {
+  void insert_keyframe(const FrontendResult& r, std::vector<Eigen::Vector3f> cloud,
+                       const gtsam::Pose3& T_base_sensor, Timestamp stamp,
+                       std::optional<VisualKf> vis) {
     KeyframeInput in;
     in.id = next_kf++;
     in.stamp = stamp;
@@ -336,7 +385,8 @@ struct SlamSystem::Impl {
     // Every keyframe entering an existing graph must be connected: without an odometry predecessor
     // it is linked to the previous keyframe of that graph with the weak bridge factor.
     std::optional<KeyframeId> link = bridge_from;
-    if (in.floor >= 0 && !odom_from && !link && last_kf_in_graph.count(key_floor(in.floor))) link = last_kf_in_graph[key_floor(in.floor)];
+    if (in.floor >= 0 && !odom_from && !link && last_kf_in_graph.count(key_floor(in.floor)))
+      link = last_kf_in_graph[key_floor(in.floor)];
     auto added = backend.add_keyframe(in, odom_from, rel, link);
     if (!added) log->log(LogLevel::Error, added.error().message);
     kfs.push_back({in.id, stamp, session, in.floor, r.T_odom_base});
@@ -349,16 +399,19 @@ struct SlamSystem::Impl {
     if (in.floor >= 0) {
       last_kf_on_floor[in.floor] = in.id;
       last_kf_in_graph[key_floor(in.floor)] = in.id;
-      const bool arrived_continuously = open_tr.active && open_tr.continuous && open_tr.to == in.floor && open_tr.from != open_tr.to;
+      const bool arrived_continuously = open_tr.active && open_tr.continuous &&
+                                        open_tr.to == in.floor && open_tr.from != open_tr.to;
       finish_open_transition(in);
       if (arrived_continuously) place_transit_keyframes(in);
       if (since_loop >= tuning.loop_cooldown_keyframes) {
         // `both`: the LiDAR first, then the camera if no LiDAR loop was accepted (until this fix
         // `both` behaved as `lidar`: the camera was never tried).
         const bool lidar_loops = modes.loop_closure != LoopSource::Camera && lidar_fe;
-        const bool camera_loops = modes.loop_closure == LoopSource::Camera || modes.loop_closure == LoopSource::Both || !lidar_fe;
+        const bool camera_loops = modes.loop_closure == LoopSource::Camera ||
+                                  modes.loop_closure == LoopSource::Both || !lidar_fe;
         if (lidar_loops) try_lidar_loop(in);
-        if (camera_loops && vis && since_loop >= tuning.loop_cooldown_keyframes) try_visual_loop(in, *vis);
+        if (camera_loops && vis && since_loop >= tuning.loop_cooldown_keyframes)
+          try_visual_loop(in, *vis);
       }
       register_place(in.id);
     } else if (pending.active) {
@@ -370,16 +423,18 @@ struct SlamSystem::Impl {
   }
 
   /// A transition that closed on the floor it started on, with continuous tracking, was not a floor
-  /// change (a slope of the terrain, a curb): its keyframes belong to that floor and are chained to the
-  /// last keyframe before it by the odometry they were tracked with.
+  /// change (a slope of the terrain, a curb): its keyframes belong to that floor and are chained to
+  /// the last keyframe before it by the odometry they were tracked with.
   void absorb_transit_keyframes(FloorId floor) {
     if (transit_kfs.empty()) return;
     std::optional<KeyframeId> before;
     if (last_kf_on_floor.count(floor)) before = last_kf_on_floor[floor];
-    const auto r = backend.promote_to_floor(transit_kfs, floor, before, /*bridge_is_odometry=*/true);
+    const auto r =
+        backend.promote_to_floor(transit_kfs, floor, before, /*bridge_is_odometry=*/true);
     if (!r) log->log(LogLevel::Error, r.error().message);
     for (KeyframeId id : transit_kfs) {
-      for (auto& k : kfs) if (k.id == id) k.floor = floor;
+      for (auto& k : kfs)
+        if (k.id == id) k.floor = floor;
       register_place(id);
       last_kf_on_floor[floor] = id;
       last_kf_in_graph[key_floor(floor)] = id;
@@ -392,17 +447,23 @@ struct SlamSystem::Impl {
   /// rest go to the floor it arrived at (`first` is its first keyframe, already in its graph),
   /// chained backwards from it.
   void place_transit_keyframes(const KeyframeInput& first) {
-    if (transit_kfs.empty() || tuning.backend.debug_disable_floor_gating) return;  // the control mode keeps them in its single graph
+    if (transit_kfs.empty() || tuning.backend.debug_disable_floor_gating)
+      return;  // the control mode keeps them in its single graph
     const FloorId from = open_tr.from, to = first.floor;
-    const double z_from = open_tr.kf_before ? backend.keyframe(*open_tr.kf_before).T_odom_base.z() : first.T_odom_base.z();
+    const double z_from = open_tr.kf_before ? backend.keyframe(*open_tr.kf_before).T_odom_base.z()
+                                            : first.T_odom_base.z();
     const double z_mid = 0.5 * (z_from + first.T_odom_base.z());
     const bool rising = first.T_odom_base.z() >= z_from;
     std::size_t split = 0;  // transit_kfs[0, split) leave on `from`
     // A climb broken by a tracking loss splits at the restart: each part is chained by its own
     // odometry to the floor it touches (the motion during the loss is unknown).
-    const auto session_change = open_tr.kf_before
-        ? std::find_if(transit_kfs.begin(), transit_kfs.end(), [&](KeyframeId id) { return backend.keyframe(id).session != backend.keyframe(*open_tr.kf_before).session; })
-        : transit_kfs.end();
+    const auto session_change =
+        open_tr.kf_before ? std::find_if(transit_kfs.begin(), transit_kfs.end(),
+                                         [&](KeyframeId id) {
+                                           return backend.keyframe(id).session !=
+                                                  backend.keyframe(*open_tr.kf_before).session;
+                                         })
+                          : transit_kfs.end();
     if (session_change != transit_kfs.end()) {
       split = static_cast<std::size_t>(session_change - transit_kfs.begin());
     } else {
@@ -416,19 +477,26 @@ struct SlamSystem::Impl {
     const std::vector<KeyframeId> low(transit_kfs.begin(), mid), high(mid, transit_kfs.end());
     auto mark = [&](const std::vector<KeyframeId>& ids, FloorId floor) {
       for (KeyframeId id : ids) {
-        for (auto& k : kfs) if (k.id == id) k.floor = floor;  // not a loop candidate: a scan taken mid-climb makes a poor place
+        for (auto& k : kfs)
+          if (k.id == id)
+            k.floor = floor;  // not a loop candidate: a scan taken mid-climb makes a poor place
       }
     };
     if (!low.empty() && open_tr.kf_before) {
-      const auto r = backend.promote_to_floor(low, from, open_tr.kf_before, /*bridge_is_odometry=*/true);
-      if (!r) log->log(LogLevel::Error, r.error().message);
-      else mark(low, from);
+      const auto r =
+          backend.promote_to_floor(low, from, open_tr.kf_before, /*bridge_is_odometry=*/true);
+      if (!r)
+        log->log(LogLevel::Error, r.error().message);
+      else
+        mark(low, from);
     }
     const std::vector<KeyframeId>& rest = open_tr.kf_before ? high : transit_kfs;
     if (!rest.empty()) {
       const auto r = backend.promote_transit_before(rest, to, first.id);
-      if (!r) log->log(LogLevel::Error, r.error().message);
-      else mark(rest, to);
+      if (!r)
+        log->log(LogLevel::Error, r.error().message);
+      else
+        mark(rest, to);
     }
     transit_kfs.clear();
   }
@@ -443,20 +511,23 @@ struct SlamSystem::Impl {
     t.kf_after = first_on_new_floor.id;
     t.delta_z = open_tr.dz;
     // A gap in the tracking leaves the climb measured (the frontend restarted at the last pose) but
-    // the horizontal motion during the loss unknown: the relative pose is kept, with a wide covariance.
+    // the horizontal motion during the loss unknown: the relative pose is kept, with a wide
+    // covariance.
     t.continuous_tracking = open_tr.continuous && !open_tr.tracking_gap;
     t.covariance = transition_covariance(open_tr.type, t.continuous_tracking);
     if (open_tr.continuous && open_tr.kf_before) {
-      // In the gravity-aligned (yaw only) frames, which is what Pose4 and the fusion assume: expressed in
-      // the tilted body frame of a keyframe that already stands on the foot of a ramp, the climb would
-      // leak into x and the height come out wrong.
+      // In the gravity-aligned (yaw only) frames, which is what Pose4 and the fusion assume:
+      // expressed in the tilted body frame of a keyframe that already stands on the foot of a ramp,
+      // the climb would leak into x and the height come out wrong.
       const auto yaw_frame = [](const gtsam::Pose3& T) {
         const auto R = T.rotation().matrix();
         return gtsam::Pose3(gtsam::Rot3::Yaw(std::atan2(R(1, 0), R(0, 0))), T.translation());
       };
-      const gtsam::Pose3 rel = yaw_frame(backend.keyframe(*open_tr.kf_before).T_odom_base).between(yaw_frame(first_on_new_floor.T_odom_base));
+      const gtsam::Pose3 rel = yaw_frame(backend.keyframe(*open_tr.kf_before).T_odom_base)
+                                   .between(yaw_frame(first_on_new_floor.T_odom_base));
       const auto R = rel.rotation().matrix();
-      t.relative = std::array<double, 4>{std::atan2(R(1, 0), R(0, 0)), rel.x(), rel.y(), open_tr.dz_from_sensor ? open_tr.dz : rel.z()};
+      t.relative = std::array<double, 4>{std::atan2(R(1, 0), R(0, 0)), rel.x(), rel.y(),
+                                         open_tr.dz_from_sensor ? open_tr.dz : rel.z()};
     }
     transitions.push_back(t);
     open_tr.active = false;
@@ -467,12 +538,31 @@ struct SlamSystem::Impl {
     double sy = 0.05, sx = 0.10, sz = 0.10;
     switch (type) {
       case TransitionType::Stairs:  // z: LiDAR drifts in stairwells
-      case TransitionType::Ramp: sy = 0.03; sx = 0.10; sz = 0.15; break;
-      case TransitionType::Elevator: sy = 0.03; sx = 0.05; sz = 0.20; break;  // z from the barometer / IMU
-      case TransitionType::Aerial: sy = 0.05; sx = 0.15; sz = 0.15; break;
-      case TransitionType::Unknown: sy = 3.14; sx = 50.0; sz = 1.0; break;
+      case TransitionType::Ramp:
+        sy = 0.03;
+        sx = 0.10;
+        sz = 0.15;
+        break;
+      case TransitionType::Elevator:
+        sy = 0.03;
+        sx = 0.05;
+        sz = 0.20;
+        break;  // z from the barometer / IMU
+      case TransitionType::Aerial:
+        sy = 0.05;
+        sx = 0.15;
+        sz = 0.15;
+        break;
+      case TransitionType::Unknown:
+        sy = 3.14;
+        sx = 50.0;
+        sz = 1.0;
+        break;
     }
-    if (!continuous && type != TransitionType::Unknown) { sy *= 5; sx *= 5; }
+    if (!continuous && type != TransitionType::Unknown) {
+      sy *= 5;
+      sx *= 5;
+    }
     Eigen::Matrix4d C = Eigen::Matrix4d::Zero();
     C(0, 0) = sy * sy;
     C(1, 1) = sx * sx;
@@ -510,16 +600,24 @@ struct SlamSystem::Impl {
       int best = -1, best_d = 1 << 20, second = 1 << 20;
       for (size_t j = 0; j < cand.keypoints.size(); ++j) {
         if (!cand.p_cam[j]) continue;
-        const int dist = hamming_distance(vis.keypoints[i].descriptor, cand.keypoints[j].descriptor);
-        if (dist < best_d) { second = best_d; best_d = dist; best = static_cast<int>(j); }
-        else if (dist < second) second = dist;
+        const int dist =
+            hamming_distance(vis.keypoints[i].descriptor, cand.keypoints[j].descriptor);
+        if (dist < best_d) {
+          second = best_d;
+          best_d = dist;
+          best = static_cast<int>(j);
+        } else if (dist < second)
+          second = dist;
       }
-      if (best < 0 || best_d > tuning.visual.tracker.max_hamming || best_d > tuning.visual.tracker.ratio * second) continue;
+      if (best < 0 || best_d > tuning.visual.tracker.max_hamming ||
+          best_d > tuning.visual.tracker.ratio * second)
+        continue;
       const std::optional<Eigen::Vector3d>& p_best = cand.p_cam[best];
       if (!p_best) continue;
       corr.push_back({*p_best, Eigen::Vector2d(vis.keypoints[i].u, vis.keypoints[i].v)});
     }
-    const auto T_cam_obj = verify_loop_pnp(corr, vis.K, tuning.visual_loop_min_inliers, tuning.visual.tracker.ransac_reprojection_px, 300);
+    const auto T_cam_obj = verify_loop_pnp(corr, vis.K, tuning.visual_loop_min_inliers,
+                                           tuning.visual.tracker.ransac_reprojection_px, 300);
     if (!T_cam_obj) return std::nullopt;
     // T_cam_obj maps candidate-camera points to the current camera: T_curcam_candcam.
     const gtsam::Pose3 T_candcam_curcam = T_cam_obj->inverse();
@@ -536,21 +634,31 @@ struct SlamSystem::Impl {
   /// Visual loop closure: BoW candidates (current floor only), PnP verification with >= 30 inliers.
   void try_visual_loop(const KeyframeInput& cur, const VisualKf& vis) {
     if (!tuning.vocabulary) return;
-    const auto cands = bow_for(cur.floor).query(bow_of(vis), cur.session, cur.stamp, tuning.bow_exclude_recent_s, tuning.bow_min_score,
+    const auto cands = bow_for(cur.floor).query(bow_of(vis), cur.session, cur.stamp,
+                                                tuning.bow_exclude_recent_s, tuning.bow_min_score,
                                                 static_cast<size_t>(tuning.bow_max_candidates));
-    if (debug_channel("LOOPS") && !cands.empty()) log->log(LogLevel::Debug, strprintf("visual loop kf %lu: %zu BoW candidates, best score %.3f", static_cast<unsigned long>(cur.id), cands.size(), cands.front().score));
+    if (debug_channel("LOOPS") && !cands.empty())
+      log->log(LogLevel::Debug,
+               strprintf("visual loop kf %lu: %zu BoW candidates, best score %.3f",
+                         static_cast<unsigned long>(cur.id), cands.size(), cands.front().score));
     for (const auto& c : cands) {
       if (!backend.has_keyframe(c.id)) continue;
       if (backend.floor_of(c.id) != cur.floor) {
         ++cross_floor_seen;
-        if (!tuning.backend.debug_disable_floor_gating) continue;  // belt and braces (the control mode removes it)
+        if (!tuning.backend.debug_disable_floor_gating)
+          continue;  // belt and braces (the control mode removes it)
       }
       auto rel = verify_visual(vis, c.id);
-      if (debug_channel("LOOPS")) log->log(LogLevel::Debug, strprintf("visual loop kf %lu -> %lu: PnP %s", static_cast<unsigned long>(cur.id), static_cast<unsigned long>(c.id), rel ? "verified" : "rejected"));
+      if (debug_channel("LOOPS"))
+        log->log(LogLevel::Debug,
+                 strprintf("visual loop kf %lu -> %lu: PnP %s", static_cast<unsigned long>(cur.id),
+                           static_cast<unsigned long>(c.id), rel ? "verified" : "rejected"));
       if (!rel) continue;
       if (modes.verify_loop_with_lidar && lidar_fe && !cur.cloud.empty()) {
         // Camera loop candidates are verified (and refined) with LiDAR registration.
-        const FloorGraph* fg = cur.floor >= 0 && backend.floor_of(c.id) == cur.floor ? &backend.floor(cur.floor) : nullptr;
+        const FloorGraph* fg = cur.floor >= 0 && backend.floor_of(c.id) == cur.floor
+                                   ? &backend.floor(cur.floor)
+                                   : nullptr;
         const auto refined = verify_lidar(cur, c.id, 0.0, fg, &*rel);
         if (!refined) continue;
         rel = refined;
@@ -565,7 +673,8 @@ struct SlamSystem::Impl {
 
   /// GICP verification of a LiDAR candidate against a submap around it.
   std::optional<gtsam::Pose3> verify_lidar(const KeyframeInput& cur, KeyframeId cand_id, double yaw,
-                                           const FloorGraph* fg, const gtsam::Pose3* init_rel_base = nullptr) const {
+                                           const FloorGraph* fg,
+                                           const gtsam::Pose3* init_rel_base = nullptr) const {
     const gtsam::Pose3 T_lc = ext.T_base_lidar;
     std::vector<Eigen::Vector3f> submap;
     gtsam::Pose3 init_graph;
@@ -576,7 +685,9 @@ struct SlamSystem::Impl {
       const auto it = std::find(ids.begin(), ids.end(), cand_id);
       if (it == ids.end()) return std::nullopt;
       const long pos = it - ids.begin();
-      for (long k = std::max<long>(0, pos - tuning.loop_submap_radius); k <= std::min<long>(static_cast<long>(ids.size()) - 1, pos + tuning.loop_submap_radius); ++k) {
+      for (long k = std::max<long>(0, pos - tuning.loop_submap_radius);
+           k <= std::min<long>(static_cast<long>(ids.size()) - 1, pos + tuning.loop_submap_radius);
+           ++k) {
         const auto* cl = backend.cloud(ids[k]);
         if (!cl || backend.floor_of(ids[k]) != backend.floor_of(cand_id)) continue;
         const gtsam::Pose3 T_cand_k_lidar = (Xc * T_lc).between(fg->pose(ids[k]) * T_lc);
@@ -595,13 +706,26 @@ struct SlamSystem::Impl {
     bool have = false;
     std::vector<gtsam::Pose3> inits{init_yaw};
     if (have_graph_init) inits.insert(inits.begin(), init_graph);
-    if (init_rel_base) inits = {T_lc.inverse() * (*init_rel_base) * T_lc};  // the visual estimate as the only guess
+    if (init_rel_base)
+      inits = {T_lc.inverse() * (*init_rel_base) * T_lc};  // the visual estimate as the only guess
     for (const gtsam::Pose3& init : inits) {
       auto out = LidarFrontend::register_clouds(submap, cur.cloud, init, tuning.lidar);
-      if (!have || out.quality.fitness > best.quality.fitness) { best = out; have = true; }
+      if (!have || out.quality.fitness > best.quality.fitness) {
+        best = out;
+        have = true;
+      }
     }
-    if (debug_channel("LOOPS")) log->log(LogLevel::Debug, strprintf("loop verify kf %lu -> %lu: fitness=%.3f (min %.3f) mean_error=%.3f (max %.3f) degraded=%d", static_cast<unsigned long>(cur.id), static_cast<unsigned long>(cand_id), have ? best.quality.fitness : -1.0, tuning.loop_min_fitness, have ? best.mean_error : -1.0, tuning.loop_max_mean_error, have && best.quality.state == TrackingState::Degraded));
-    if (!have || best.quality.fitness < tuning.loop_min_fitness || best.mean_error > tuning.loop_max_mean_error) return std::nullopt;
+    if (debug_channel("LOOPS"))
+      log->log(LogLevel::Debug,
+               strprintf("loop verify kf %lu -> %lu: fitness=%.3f (min %.3f) mean_error=%.3f (max "
+                         "%.3f) degraded=%d",
+                         static_cast<unsigned long>(cur.id), static_cast<unsigned long>(cand_id),
+                         have ? best.quality.fitness : -1.0, tuning.loop_min_fitness,
+                         have ? best.mean_error : -1.0, tuning.loop_max_mean_error,
+                         have && best.quality.state == TrackingState::Degraded));
+    if (!have || best.quality.fitness < tuning.loop_min_fitness ||
+        best.mean_error > tuning.loop_max_mean_error)
+      return std::nullopt;
     if (best.quality.state == TrackingState::Degraded) return std::nullopt;  // ambiguous geometry
     return T_lc * best.T_target_source * T_lc.inverse();
   }
@@ -611,7 +735,9 @@ struct SlamSystem::Impl {
     const ScanContext sc = make_scan_context(cur.cloud, tuning.scan_context);
     const auto cands = sc_for(cur.floor).query(sc);
     const FloorGraph& fg = backend.floor(cur.floor);
-    if (debug_channel("LOOPS") && !cands.empty()) log->log(LogLevel::Debug, strprintf("loop kf %lu: %zu scan-context candidates", static_cast<unsigned long>(cur.id), cands.size()));
+    if (debug_channel("LOOPS") && !cands.empty())
+      log->log(LogLevel::Debug, strprintf("loop kf %lu: %zu scan-context candidates",
+                                          static_cast<unsigned long>(cur.id), cands.size()));
     for (const auto& c : cands) {
       if (!backend.has_keyframe(c.id)) continue;
       if (backend.floor_of(c.id) != cur.floor) {
@@ -621,7 +747,10 @@ struct SlamSystem::Impl {
       const auto rel = verify_lidar(cur, c.id, c.match.yaw, &fg);
       if (!rel) continue;
       const bool accepted = backend.add_loop(c.id, cur.id, *rel).ok();
-      if (debug_channel("LOOPS")) log->log(LogLevel::Debug, strprintf("loop kf %lu -> %lu: backend %s", static_cast<unsigned long>(cur.id), static_cast<unsigned long>(c.id), accepted ? "accepted" : "rejected"));
+      if (debug_channel("LOOPS"))
+        log->log(LogLevel::Debug,
+                 strprintf("loop kf %lu -> %lu: backend %s", static_cast<unsigned long>(cur.id),
+                           static_cast<unsigned long>(c.id), accepted ? "accepted" : "rejected"));
       if (accepted) {
         since_loop = 0;
         log->log(LogLevel::Info, "loop closure accepted");
@@ -636,7 +765,9 @@ struct SlamSystem::Impl {
     pending = Pending{};
     pending.active = true;
     pending.from_floor = from_floor;
-    pending.kf_before = last_kf_on_floor.count(from_floor) ? std::optional<KeyframeId>(last_kf_on_floor[from_floor]) : std::nullopt;
+    pending.kf_before = last_kf_on_floor.count(from_floor)
+                            ? std::optional<KeyframeId>(last_kf_on_floor[from_floor])
+                            : std::nullopt;
     pending.in_transition = mgr.in_observed_transition();
   }
 
@@ -649,16 +780,19 @@ struct SlamSystem::Impl {
     // Relocalizing here would snap a half-way keyframe onto the floor it looks like.
     if (mgr.in_observed_transition()) return;
     // With a barometer or an IMU a floor change cannot go unnoticed, so a tracking loss is not one:
-    // the session stays on its floor; with `multifloor.enabled: false` there is no other floor to go to.
-    // Otherwise the change is unobservable and every floor is a relocalization candidate (and a failure
-    // to relocalize opens a new floor).
-    const bool height_sensors = cfg.sensors.barometer.enabled || (cfg.sensors.imu.enabled && cfg.sensors.imu.floor_changes) ||
+    // the session stays on its floor; with `multifloor.enabled: false` there is no other floor to
+    // go to. Otherwise the change is unobservable and every floor is a relocalization candidate
+    // (and a failure to relocalize opens a new floor).
+    const bool height_sensors = cfg.sensors.barometer.enabled ||
+                                (cfg.sensors.imu.enabled && cfg.sensors.imu.floor_changes) ||
                                 !cfg.multifloor.enabled;
-    // Relocalization may legitimately look at every floor: it decides which floor this session is on.
+    // Relocalization may legitimately look at every floor: it decides which floor this session is
+    // on.
     if (vis && tuning.vocabulary) {
       const BowVector q = bow_of(*vis);
       for (auto& [floor_key, db] : bow_db) {
-        const auto cands = db.query(q, cur.session, cur.stamp, 0.0, tuning.bow_min_score, static_cast<size_t>(tuning.bow_max_candidates));
+        const auto cands = db.query(q, cur.session, cur.stamp, 0.0, tuning.bow_min_score,
+                                    static_cast<size_t>(tuning.bow_max_candidates));
         for (const auto& c : cands) {
           const auto rel = verify_visual(*vis, c.id);
           if (!rel) continue;
@@ -681,21 +815,27 @@ struct SlamSystem::Impl {
         }
       }
     }
-    if (static_cast<int>(pending.kfs.size()) >= tuning.pending_keyframes_for_new_floor) give_up_pending();
+    if (static_cast<int>(pending.kfs.size()) >= tuning.pending_keyframes_for_new_floor)
+      give_up_pending();
   }
 
-  /// Relocalization gave up (enough keyframes without a match, or the end of the run): with height sensors the
-  /// session stays on its floor, otherwise the change was unobservable and it gets a new floor.
+  /// Relocalization gave up (enough keyframes without a match, or the end of the run): with height
+  /// sensors the session stays on its floor, otherwise the change was unobservable and it gets a
+  /// new floor.
   void give_up_pending() {
-    const bool height_sensors = cfg.sensors.barometer.enabled || (cfg.sensors.imu.enabled && cfg.sensors.imu.floor_changes) ||
+    const bool height_sensors = cfg.sensors.barometer.enabled ||
+                                (cfg.sensors.imu.enabled && cfg.sensors.imu.floor_changes) ||
                                 !cfg.multifloor.enabled;
     if (height_sensors) {
       // Not relocalized, but the height sensors saw no change: a new session of the same floor.
       const FloorId f = pending.from_floor;
       mgr.set_floor(f);
-      commit_pending(f, last_kf_on_floor.count(f) ? std::optional<KeyframeId>(last_kf_on_floor[f]) : std::nullopt);
-      log->log(LogLevel::Info, cfg.multifloor.enabled ? "relocalization failed with height sensors active: session kept on its floor"
-                                                      : "relocalization failed: session kept on the only level (multifloor disabled)");
+      commit_pending(f, last_kf_on_floor.count(f) ? std::optional<KeyframeId>(last_kf_on_floor[f])
+                                                  : std::nullopt);
+      log->log(LogLevel::Info,
+               cfg.multifloor.enabled
+                   ? "relocalization failed with height sensors active: session kept on its floor"
+                   : "relocalization failed: session kept on the only level (multifloor disabled)");
       return;
     }
     {
@@ -715,16 +855,18 @@ struct SlamSystem::Impl {
     }
   }
 
-  /// End of the run: nothing is left undecided, so that every keyframe ends in the map (audit AUD-022: a transition
-  /// still open when the run ended left 307 of 328 keyframes out). An open transition is decided as when its time
-  /// limit runs out; a session still pending is given up on as when relocalization gives up.
+  /// End of the run: nothing is left undecided, so that every keyframe ends in the map (audit
+  /// AUD-022: a transition still open when the run ended left 307 of 328 keyframes out). An open
+  /// transition is decided as when its time limit runs out; a session still pending is given up on
+  /// as when relocalization gives up.
   void resolve_at_end() {
     if (mgr.state() == FloorState::InTransition) {
       const FloorEvent ev = mgr.finish();
       if (ev.kind == FloorEvent::Kind::TransitionEnded) {
         log->log(LogLevel::Info, "end of the run with a floor transition open: decided now");
         on_floor_event(ev);
-        // No keyframe of the arrival floor will come: the keyframes of the climb are its first ones.
+        // No keyframe of the arrival floor will come: the keyframes of the climb are its first
+        // ones.
         if (!transit_kfs.empty() && ev.from != ev.to) {
           const KeyframeId first = transit_kfs.front();
           absorb_transit_keyframes(ev.to);
@@ -740,7 +882,8 @@ struct SlamSystem::Impl {
 
   void place_pending_on(FloorId target, KeyframeId cand, KeyframeId cur, const gtsam::Pose3& rel) {
     mgr.set_floor(target);
-    commit_pending(target, last_kf_on_floor.count(target) ? std::optional<KeyframeId>(cand) : std::nullopt);
+    commit_pending(target,
+                   last_kf_on_floor.count(target) ? std::optional<KeyframeId>(cand) : std::nullopt);
     if (backend.add_loop(cand, cur, rel)) {
       since_loop = 0;
       log->log(LogLevel::Info, "relocalized: session placed on its floor");
@@ -751,7 +894,8 @@ struct SlamSystem::Impl {
     const auto r = backend.promote_to_floor(pending.kfs, floor, bridge);
     if (!r) log->log(LogLevel::Error, r.error().message);
     for (KeyframeId id : pending.kfs) {
-      for (auto& k : kfs) if (k.id == id) k.floor = floor;
+      for (auto& k : kfs)
+        if (k.id == id) k.floor = floor;
       register_place(id);
       last_kf_on_floor[floor] = id;
       last_kf_in_graph[key_floor(floor)] = id;
@@ -763,12 +907,13 @@ struct SlamSystem::Impl {
 
   /// Restarts the active frontend at the corrected pose and tells the floor manager that the height
   /// jump of the restart is a correction, not motion.
-  /// `pose` with its roll and pitch replaced by the measured gravity, yaw and position kept: from the
-  /// IMU when it is at rest, else (if `ground_plane`) from the horizontal plane of the current frame.
-  /// Unchanged when neither is available. A restarted frontend otherwise keeps the attitude error of
-  /// the pose it restarts from, and every keyframe of the new floor inherits it as a tilt that the
-  /// 4-DoF fusion cannot remove (ADR-0033).
-  static constexpr double kMinGroundRelevelDeg = 0.5;  ///< below this a ground-plane correction is noise
+  /// `pose` with its roll and pitch replaced by the measured gravity, yaw and position kept: from
+  /// the IMU when it is at rest, else (if `ground_plane`) from the horizontal plane of the current
+  /// frame. Unchanged when neither is available. A restarted frontend otherwise keeps the attitude
+  /// error of the pose it restarts from, and every keyframe of the new floor inherits it as a tilt
+  /// that the 4-DoF fusion cannot remove (ADR-0033).
+  static constexpr double kMinGroundRelevelDeg =
+      0.5;  ///< below this a ground-plane correction is noise
 
   gtsam::Pose3 relevel(const gtsam::Pose3& pose, bool ground_plane) const {
     std::optional<Eigen::Vector3d> up_base;
@@ -778,7 +923,9 @@ struct SlamSystem::Impl {
       // The last second of IMU, if the robot was really at rest (strict: a robot that just stopped
       // walking or a cabin that starts moving still accelerates by a few tenths of m/s^2).
       std::vector<ImuSample> w;
-      for (auto it = imu_buf.rbegin(); it != imu_buf.rend() && (imu_buf.back().stamp - it->stamp) * 1e-9 <= 1.0; ++it) w.push_back(*it);
+      for (auto it = imu_buf.rbegin();
+           it != imu_buf.rend() && (imu_buf.back().stamp - it->stamp) * 1e-9 <= 1.0; ++it)
+        w.push_back(*it);
       if (w.size() >= 20 && (imu_buf.back().stamp - w.back().stamp) * 1e-9 >= 0.9)
         if (const auto g = estimate_gravity_from_imu(w, 0.02, 0.15)) {
           up_base = ext.T_base_imu.rotation().matrix() * g->up_body;
@@ -787,29 +934,40 @@ struct SlamSystem::Impl {
     }
     if (!up_base && ground_plane && (cur_rgbd || cur_scan)) {
       const gtsam::Pose3& T_bs = cur_rgbd ? ext.T_base_camera : ext.T_base_lidar;
-      const std::vector<Eigen::Vector3f> cloud = cur_rgbd ? depth_to_cloud(cur_rgbd->depth, cur_rgbd->K, 4, tuning.visual.tracker.depth) : cur_scan->points;
+      const std::vector<Eigen::Vector3f> cloud =
+          cur_rgbd ? depth_to_cloud(cur_rgbd->depth, cur_rgbd->K, 4, tuning.visual.tracker.depth)
+                   : cur_scan->points;
       const Eigen::Matrix3d R_bs = T_bs.rotation().matrix();
       // Up as currently estimated, in the sensor frame; the plane must be within 10 deg of it.
-      const Eigen::Vector3d up_sensor_now = R_bs.transpose() * pose.rotation().matrix().transpose() * Eigen::Vector3d::UnitZ();
-      if (const auto u = estimate_up_from_ground_plane(cloud, up_sensor_now, cfg.runtime.seed, 10.0)) up_base = R_bs * *u;
+      const Eigen::Vector3d up_sensor_now =
+          R_bs.transpose() * pose.rotation().matrix().transpose() * Eigen::Vector3d::UnitZ();
+      if (const auto u =
+              estimate_up_from_ground_plane(cloud, up_sensor_now, cfg.runtime.seed, 10.0))
+        up_base = R_bs * *u;
       source = "the ground plane";
     }
     if (!up_base) return pose;
     const gtsam::Rot3 R = level_to(pose.rotation(), *up_base);
-    const double correction_deg = gtsam::Rot3::Logmap(pose.rotation().between(R)).norm() * 180.0 / M_PI;
-    // A ground plane can be the wrong surface (a slanted one taken for the floor): its correction is
-    // bounded by a plausible attitude drift. The IMU, strictly at rest, is trusted further (a LiDAR
-    // odometry inside an elevator cabin can drift several degrees).
+    const double correction_deg =
+        gtsam::Rot3::Logmap(pose.rotation().between(R)).norm() * 180.0 / M_PI;
+    // A ground plane can be the wrong surface (a slanted one taken for the floor): its correction
+    // is bounded by a plausible attitude drift. The IMU, strictly at rest, is trusted further (a
+    // LiDAR odometry inside an elevator cabin can drift several degrees).
     const double bound = up_from_imu ? tuning.max_relevel_imu_deg : tuning.max_relevel_deg;
-    // One cloud gives the vertical within 0.1-0.3 deg: a smaller correction is the fit's own noise, and applying it
-    // would replace a good attitude by a slightly worse one at every restart (S11 lost 3 of 20 seeds that way once the
-    // ground was found reliably below the sensor). Only a real drift is corrected.
+    // One cloud gives the vertical within 0.1-0.3 deg: a smaller correction is the fit's own noise,
+    // and applying it would replace a good attitude by a slightly worse one at every restart (S11
+    // lost 3 of 20 seeds that way once the ground was found reliably below the sensor). Only a real
+    // drift is corrected.
     if (!up_from_imu && correction_deg < kMinGroundRelevelDeg) return pose;
     if (correction_deg > bound) {
-      log->log(LogLevel::Info, strprintf("frontend restart: gravity from %s %.1f deg away from the attitude, not used", source, correction_deg));
+      log->log(
+          LogLevel::Info,
+          strprintf("frontend restart: gravity from %s %.1f deg away from the attitude, not used",
+                    source, correction_deg));
       return pose;
     }
-    log->log(LogLevel::Info, strprintf("frontend restart re-levelled by %.2f deg (gravity from %s)", correction_deg, source));
+    log->log(LogLevel::Info, strprintf("frontend restart re-levelled by %.2f deg (gravity from %s)",
+                                       correction_deg, source));
     return gtsam::Pose3(R, pose.translation());
   }
 
@@ -819,9 +977,12 @@ struct SlamSystem::Impl {
   void restart_frontend(double climb_dz = 0.0, bool level = true) {
     if (!odom_fe || !last_pose) return;
     // On stairs or a ramp the visible "ground" is the slope: only the IMU may re-level there.
-    const gtsam::Pose3 corrected = level ? relevel(corrected_last_pose(), !mgr.in_observed_transition()) : corrected_last_pose();
+    const gtsam::Pose3 corrected =
+        level ? relevel(corrected_last_pose(), !mgr.in_observed_transition())
+              : corrected_last_pose();
     mgr.odometry_rebased(corrected.z() - last_pose->z());
-    const gtsam::Pose3 restart(corrected.rotation(), corrected.translation() + gtsam::Point3(0, 0, climb_dz));
+    const gtsam::Pose3 restart(corrected.rotation(),
+                               corrected.translation() + gtsam::Point3(0, 0, climb_dz));
     odom_fe->reset(restart);
     last_pose = restart;
   }
@@ -837,7 +998,12 @@ struct SlamSystem::Impl {
     const gtsam::Pose3 c = backend.pose_odom(*last_kf) * k.T_odom_base.between(*last_pose);
     if (debug_channel("TRACK")) {
       const auto rpy = c.rotation().rpy();
-      log->log(LogLevel::Debug, strprintf("restart raw=(%.2f %.2f %.2f) corrected=(%.2f %.2f %.2f) rpy_deg=(%.2f %.2f %.2f)", last_pose->x(), last_pose->y(), last_pose->z(), c.x(), c.y(), c.z(), rpy.x() * 57.3, rpy.y() * 57.3, rpy.z() * 57.3));
+      log->log(
+          LogLevel::Debug,
+          strprintf(
+              "restart raw=(%.2f %.2f %.2f) corrected=(%.2f %.2f %.2f) rpy_deg=(%.2f %.2f %.2f)",
+              last_pose->x(), last_pose->y(), last_pose->z(), c.x(), c.y(), c.z(), rpy.x() * 57.3,
+              rpy.y() * 57.3, rpy.z() * 57.3));
     }
     return c;
   }
@@ -846,14 +1012,18 @@ struct SlamSystem::Impl {
     last_fe_stamp = 0;  // the next rotation for the IMU mounting starts at the next valid pose
     if (lost_since == 0) lost_since = stamp;
     const double lost_s = (stamp - lost_since) * 1e-9;
-    if (mgr.in_unobserved_transition()) return;  // the lift explains the loss; the frontend restarts when it ends
-    if (cfg.multifloor.split_on_tracking_loss && lost_s > cfg.multifloor.tracking_loss_timeout && last_pose && odom_fe) {
+    if (mgr.in_unobserved_transition())
+      return;  // the lift explains the loss; the frontend restarts when it ends
+    if (cfg.multifloor.split_on_tracking_loss && lost_s > cfg.multifloor.tracking_loss_timeout &&
+        last_pose && odom_fe) {
       // New session, restarting at the last known pose; its floor is decided by relocalization. A
       // further loss while a session is already pending restarts the frontend but keeps the list.
       if (!pending.active) start_pending(mgr.last_floor());
-      // Restart from the last Good pose (the degraded frames before a loss drift, mostly in attitude).
+      // Restart from the last Good pose (the degraded frames before a loss drift, mostly in
+      // attitude).
       Timestamp blind_since = lost_since;
-      if (last_good && (lost_since - last_good->first) * 1e-9 < cfg.multifloor.tracking_loss_timeout) {
+      if (last_good &&
+          (lost_since - last_good->first) * 1e-9 < cfg.multifloor.tracking_loss_timeout) {
         last_pose = last_good->second;
         blind_since = last_good->first;
       }
@@ -868,11 +1038,18 @@ struct SlamSystem::Impl {
   }
 
   void on_floor_event(const FloorEvent& ev) {
-    if (ev.kind == FloorEvent::Kind::TransitionStarted) log->log(LogLevel::Info, std::string("floor transition started") + (ev.vertical_unobserved ? " (height change not seen by the odometry)" : ""));
-    if (ev.kind == FloorEvent::Kind::TransitionEnded) log->log(LogLevel::Info, std::string("floor transition ended: ") + to_string(ev.type) + " " + std::to_string(ev.from) + "->" + std::to_string(ev.to) + " dz=" + std::to_string(ev.delta_z));
-    if (ev.kind == FloorEvent::Kind::TransitionStarted && ev.vertical_unobserved && last_pose && odom_fe) {
-      // The height change is invisible to the odometry (elevator): restart the frontend now, so that
-      // it cannot match the old floor's map against an identical-looking arrival floor. Not
+    if (ev.kind == FloorEvent::Kind::TransitionStarted)
+      log->log(LogLevel::Info,
+               std::string("floor transition started") +
+                   (ev.vertical_unobserved ? " (height change not seen by the odometry)" : ""));
+    if (ev.kind == FloorEvent::Kind::TransitionEnded)
+      log->log(LogLevel::Info, std::string("floor transition ended: ") + to_string(ev.type) + " " +
+                                   std::to_string(ev.from) + "->" + std::to_string(ev.to) +
+                                   " dz=" + std::to_string(ev.delta_z));
+    if (ev.kind == FloorEvent::Kind::TransitionStarted && ev.vertical_unobserved && last_pose &&
+        odom_fe) {
+      // The height change is invisible to the odometry (elevator): restart the frontend now, so
+      // that it cannot match the old floor's map against an identical-looking arrival floor. Not
       // re-levelled here: the cabin is about to accelerate; it is at the arrival (TransitionEnded).
       restart_frontend(0.0, /*level=*/false);
       last_kf.reset();
@@ -882,19 +1059,24 @@ struct SlamSystem::Impl {
     }
     if (ev.kind != FloorEvent::Kind::TransitionEnded) return;
     if (ev.from == ev.to && ev.type == TransitionType::Unknown) {
-      // The height came back to where the transition started: no floor change, nothing to record. Its keyframes
-      // join the floor (a pending session keeps waiting for its relocalization, as before).
+      // The height came back to where the transition started: no floor change, nothing to record.
+      // Its keyframes join the floor (a pending session keeps waiting for its relocalization, as
+      // before).
       if (!pending.active) absorb_transit_keyframes(ev.to);
       return;
     }
     if (ev.from == ev.to && ev.continuous_tracking && !ev.needs_frontend_reset && !pending.active) {
-      log->log(LogLevel::Info, "height change was not a floor change: keeping its keyframes on floor " + std::to_string(ev.to));
+      log->log(LogLevel::Info,
+               "height change was not a floor change: keeping its keyframes on floor " +
+                   std::to_string(ev.to));
       absorb_transit_keyframes(ev.to);
       return;
     }
     // A ramp or stairs tracked continuously keeps its keyframes for the floor it arrives at.
     if (!(ev.continuous_tracking && ev.from != ev.to)) transit_kfs.clear();
-    if (odom_fe) odom_fe->request_keyframe();  // the new floor needs its first keyframe even if the robot hovers
+    if (odom_fe)
+      odom_fe
+          ->request_keyframe();  // the new floor needs its first keyframe even if the robot hovers
     open_tr = OpenTransition{};
     open_tr.active = true;
     open_tr.type = ev.type;
@@ -908,8 +1090,8 @@ struct SlamSystem::Impl {
     if (last_kf_on_floor.count(ev.to)) bridge_from = last_kf_on_floor[ev.to];
     if (ev.needs_frontend_reset && last_pose && odom_fe) {
       // The odometry saw no vertical motion (elevator, manual change): restart the frontend at the
-      // same pose (clearing the old floor's map). The height change lives in the manager's altitude,
-      // so the odometry z is deliberately not shifted: that would count it twice.
+      // same pose (clearing the old floor's map). The height change lives in the manager's
+      // altitude, so the odometry z is deliberately not shifted: that would count it twice.
       restart_frontend();
       last_kf.reset();
       last_kf_pose.reset();
@@ -917,8 +1099,8 @@ struct SlamSystem::Impl {
     }
     if (pending.active && pending.in_transition && ev.continuous_tracking && ev.from != ev.to) {
       // Lost and restarted in the middle of this climb: its keyframes are the rest of the climb, so
-      // they are transit keyframes, placed by height when the first keyframe of the new floor arrives
-      // (which also records the transition from the last keyframe before the climb).
+      // they are transit keyframes, placed by height when the first keyframe of the new floor
+      // arrives (which also records the transition from the last keyframe before the climb).
       transit_kfs.insert(transit_kfs.end(), pending.kfs.begin(), pending.kfs.end());
       pending = Pending{};
       open_tr.tracking_gap = true;
@@ -929,7 +1111,9 @@ struct SlamSystem::Impl {
         pending = Pending{};
       } else {
         const KeyframeId first = pending.kfs.front();
-        commit_pending(ev.to, last_kf_on_floor.count(ev.to) ? std::optional<KeyframeId>(last_kf_on_floor[ev.to]) : std::nullopt);
+        commit_pending(ev.to, last_kf_on_floor.count(ev.to)
+                                  ? std::optional<KeyframeId>(last_kf_on_floor[ev.to])
+                                  : std::nullopt);
         finish_open_transition(backend.keyframe(first));
       }
     }
@@ -952,7 +1136,8 @@ struct SlamSystem::Impl {
   }
 };
 
-SlamSystem::SlamSystem(const Config& c, const Extrinsics& e, const SystemTuning& t, std::shared_ptr<Logger> l)
+SlamSystem::SlamSystem(const Config& c, const Extrinsics& e, const SystemTuning& t,
+                       std::shared_ptr<Logger> l)
     : impl_(std::make_unique<Impl>(c, e, t, std::move(l))) {}
 SlamSystem::~SlamSystem() = default;
 
@@ -960,8 +1145,10 @@ void SlamSystem::add_imu(const ImuSample& m) {
   auto& s = *impl_;
   if (!s.cfg.sensors.imu.enabled) return;
   s.imu_mount->add_imu(m);
-  if (!s.imu_checked) s.check_imu_against_tf();
-  else if (s.imu_trusted) s.use_imu(m);
+  if (!s.imu_checked)
+    s.check_imu_against_tf();
+  else if (s.imu_trusted)
+    s.use_imu(m);
 }
 
 void SlamSystem::add_baro(const BaroSample& b) {
@@ -977,7 +1164,8 @@ void SlamSystem::add_baro_reference(const BaroSample& b) {
 void SlamSystem::add_odom(const OdomMeasurement& m) {
   auto& s = *impl_;
   if (!s.cfg.sensors.external_odometry.enabled) return;
-  if (!s.ext_odom.empty() && m.stamp <= s.ext_odom.back().stamp) return;  // out of order or repeated
+  if (!s.ext_odom.empty() && m.stamp <= s.ext_odom.back().stamp)
+    return;  // out of order or repeated
   s.ext_odom.push_back(m);
   constexpr Timestamp kKeep = 10'000'000'000;  // ns
   while (s.ext_odom.front().stamp < m.stamp - kKeep) s.ext_odom.pop_front();
@@ -990,19 +1178,31 @@ void SlamSystem::add_rgbd(const RgbdFrame& f) {
     return;
   }
   if (!s.visual_fe || s.modes.odometry != OdometrySource::Camera) return;
-  if (!s.gravity_done) s.init_gravity(depth_to_cloud(f.depth, f.K, 4, s.tuning.visual.tracker.depth), s.ext.T_base_camera);
+  if (!s.gravity_done)
+    s.init_gravity(depth_to_cloud(f.depth, f.K, 4, s.tuning.visual.tracker.depth),
+                   s.ext.T_base_camera);
   s.cur_rgbd = &f;
-  struct Clear { const RgbdFrame*& p; ~Clear() { p = nullptr; } } clear_rgbd{s.cur_rgbd};
+  struct Clear {
+    const RgbdFrame*& p;
+    ~Clear() { p = nullptr; }
+  } clear_rgbd{s.cur_rgbd};
   SensorFrame sf;
   sf.stamp = f.stamp;
   sf.rgbd = &f;
   const auto odom = s.ext_odom_at(f.stamp);
   if (odom) sf.odom = &*odom;
-  if (s.planar()) sf.up_base = s.plane_up();  // also bounds the tracking's own tilt
-  else if (s.imu_trusted) sf.up_base = s.gravity.up();
+  if (s.planar())
+    sf.up_base = s.plane_up();  // also bounds the tracking's own tilt
+  else if (s.imu_trusted)
+    sf.up_base = s.gravity.up();
   FrontendResult r = s.visual_fe->process(sf);
   s.to_plane(r);
-  if (debug_channel("TRACK")) s.log->log(LogLevel::Debug, strprintf("track t=%.2f kps=%zu valid=%d inl=%d state=%d floor=%d pend=%d", (f.stamp - 1000000000000LL) * 1e-9, f.keypoints.size(), r.valid, r.quality.inliers, int(r.quality.state), s.current_floor(), s.pending.active));
+  if (debug_channel("TRACK"))
+    s.log->log(
+        LogLevel::Debug,
+        strprintf("track t=%.2f kps=%zu valid=%d inl=%d state=%d floor=%d pend=%d",
+                  (f.stamp - 1000000000000LL) * 1e-9, f.keypoints.size(), r.valid,
+                  r.quality.inliers, int(r.quality.state), s.current_floor(), s.pending.active));
   if (!r.valid) {
     s.handle_lost(f.stamp);
     s.feed_manager(r, f.stamp);
@@ -1015,7 +1215,8 @@ void SlamSystem::add_rgbd(const RgbdFrame& f) {
   s.feed_manager(r, f.stamp);
   if (r.is_keyframe) {
     const VisualKeyframeData& kd = s.visual_fe->last_keyframe();
-    s.insert_keyframe(r, kd.cloud, s.ext.T_base_camera, f.stamp, Impl::VisualKf{kd.keypoints, kd.p_cam, kd.K});
+    s.insert_keyframe(r, kd.cloud, s.ext.T_base_camera, f.stamp,
+                      Impl::VisualKf{kd.keypoints, kd.p_cam, kd.K});
   }
 }
 
@@ -1024,7 +1225,10 @@ void SlamSystem::add_lidar(const LidarScan& scan) {
   if (!s.lidar_fe || s.modes.odometry != OdometrySource::Lidar) return;
   if (!s.gravity_done) s.init_gravity(scan.points, s.ext.T_base_lidar);
   s.cur_scan = &scan;
-  struct Clear { const LidarScan*& p; ~Clear() { p = nullptr; } } clear_scan{s.cur_scan};
+  struct Clear {
+    const LidarScan*& p;
+    ~Clear() { p = nullptr; }
+  } clear_scan{s.cur_scan};
   SensorFrame f;
   f.stamp = scan.stamp;
   f.lidar = &scan;
@@ -1048,7 +1252,8 @@ void SlamSystem::add_lidar(const LidarScan& scan) {
     }
     const KeyframeId id = s.next_kf;
     s.insert_keyframe(r, s.lidar_fe->last_keyframe_cloud(), s.ext.T_base_lidar, scan.stamp, vis);
-    if (vis && s.cfg.fusion.colorize_cloud && s.last_cam && !s.last_cam->rgb.empty()) s.keyframe_images[id] = std::make_shared<RgbdFrame>(*s.last_cam);
+    if (vis && s.cfg.fusion.colorize_cloud && s.last_cam && !s.last_cam->rgb.empty())
+      s.keyframe_images[id] = std::make_shared<RgbdFrame>(*s.last_cam);
   }
 }
 
@@ -1092,7 +1297,8 @@ std::vector<Eigen::Vector3f> SlamSystem::floor_cloud(FloorId floor, double voxel
   for (KeyframeId id : g.keyframe_ids()) {
     const auto* cloud = s.backend.cloud(id);
     if (!cloud || cloud->empty()) continue;
-    const auto w = transform_points(*cloud, (g.pose(id) * s.backend.keyframe(id).T_base_sensor).matrix());
+    const auto w =
+        transform_points(*cloud, (g.pose(id) * s.backend.keyframe(id).T_base_sensor).matrix());
     merged.insert(merged.end(), w.begin(), w.end());
   }
   return voxel_downsample(merged, voxel);
@@ -1103,7 +1309,8 @@ void SlamSystem::new_session() {
   if (!s.odom_fe || !s.last_pose) return;
   s.restart_frontend();
   const FloorId f = s.mgr.last_floor();
-  s.bridge_from = s.last_kf_on_floor.count(f) ? std::optional<KeyframeId>(s.last_kf_on_floor[f]) : std::nullopt;
+  s.bridge_from =
+      s.last_kf_on_floor.count(f) ? std::optional<KeyframeId>(s.last_kf_on_floor[f]) : std::nullopt;
   s.last_kf.reset();
   s.last_kf_pose.reset();
   ++s.session;
@@ -1120,7 +1327,9 @@ const std::vector<AcceptedLoop>& SlamSystem::loops() const { return impl_->backe
 const std::vector<TransitionRecord>& SlamSystem::transitions() const { return impl_->transitions; }
 FloorId SlamSystem::current_floor() const { return impl_->current_floor(); }
 SessionId SlamSystem::current_session() const { return impl_->session; }
-TrackingQuality SlamSystem::tracking_quality() const { return impl_->odom_fe ? impl_->odom_fe->quality() : TrackingQuality(); }
+TrackingQuality SlamSystem::tracking_quality() const {
+  return impl_->odom_fe ? impl_->odom_fe->quality() : TrackingQuality();
+}
 std::optional<gtsam::Pose3> SlamSystem::current_pose_odom() const { return impl_->last_pose; }
 std::optional<std::vector<KeypointUse>> SlamSystem::keypoint_use() const {
   const auto& s = *impl_;
@@ -1148,12 +1357,16 @@ MapData SlamSystem::finalize(const std::string& profile_yaml) {
     const FloorGraph& g = s.backend.floor(f);
     FloorData fd;
     fd.metadata.id = f;
-    if (static_cast<size_t>(f) < s.mgr.num_floors()) fd.metadata.altitude_m = s.mgr.level_altitude(f);
-    // Every sensor the run used, the odometry's first (audit A6-05: only the odometry sensor was listed).
+    if (static_cast<size_t>(f) < s.mgr.num_floors())
+      fd.metadata.altitude_m = s.mgr.level_altitude(f);
+    // Every sensor the run used, the odometry's first (audit A6-05: only the odometry sensor was
+    // listed).
     fd.metadata.sensors = {s.modes.odometry == OdometrySource::Lidar ? "lidar" : "camera"};
     const auto& sc = s.cfg.sensors;
-    if (sc.camera.enabled && s.modes.odometry == OdometrySource::Lidar) fd.metadata.sensors.push_back("camera");
-    if (sc.lidar.enabled && s.modes.odometry != OdometrySource::Lidar) fd.metadata.sensors.push_back("lidar");
+    if (sc.camera.enabled && s.modes.odometry == OdometrySource::Lidar)
+      fd.metadata.sensors.push_back("camera");
+    if (sc.lidar.enabled && s.modes.odometry != OdometrySource::Lidar)
+      fd.metadata.sensors.push_back("lidar");
     if (sc.imu.enabled) fd.metadata.sensors.push_back("imu");
     if (sc.barometer.enabled) fd.metadata.sensors.push_back("barometer");
     if (sc.external_odometry.enabled) fd.metadata.sensors.push_back("external_odometry");
@@ -1169,7 +1382,8 @@ MapData SlamSystem::finalize(const std::string& profile_yaml) {
       kr.t = X.translation();
       kr.q = Eigen::Quaterniond(X.rotation().matrix());
       fd.keyframes.push_back(kr);
-      if (std::find(fd.metadata.sessions.begin(), fd.metadata.sessions.end(), node.session) == fd.metadata.sessions.end()) {
+      if (std::find(fd.metadata.sessions.begin(), fd.metadata.sessions.end(), node.session) ==
+          fd.metadata.sessions.end()) {
         fd.metadata.sessions.push_back(node.session);
       }
       const auto* cloud = s.backend.cloud(id);
@@ -1177,16 +1391,19 @@ MapData SlamSystem::finalize(const std::string& profile_yaml) {
         PointCloud pc;
         pc.points = *cloud;
         fd.clouds[id] = std::move(pc);
-        const auto w = transform_points(*cloud, (X * s.backend.keyframe(id).T_base_sensor).matrix());
+        const auto w =
+            transform_points(*cloud, (X * s.backend.keyframe(id).T_base_sensor).matrix());
         merged.insert(merged.end(), w.begin(), w.end());
         // Color the keyframe's LiDAR points with the camera image taken at the same time (if any).
         const auto img = s.keyframe_images.find(id);
         if (img != s.keyframe_images.end()) {
           const gtsam::Pose3 T_cam_lidar = s.ext.T_base_camera.inverse() * s.ext.T_base_lidar;
-          const auto c = colorize_points(*cloud, T_cam_lidar, img->second->K, img->second->rgb, &img->second->depth);
+          const auto c = colorize_points(*cloud, T_cam_lidar, img->second->K, img->second->rgb,
+                                         &img->second->depth);
           merged_colors.insert(merged_colors.end(), c.begin(), c.end());
         } else {
-          merged_colors.insert(merged_colors.end(), cloud->size(), std::array<uint8_t, 3>{128, 128, 128});
+          merged_colors.insert(merged_colors.end(), cloud->size(),
+                               std::array<uint8_t, 3>{128, 128, 128});
         }
         const auto vk = s.visual_kf.find(id);
         if (vk != s.visual_kf.end()) {
@@ -1195,15 +1412,17 @@ MapData SlamSystem::finalize(const std::string& profile_yaml) {
           for (size_t i = 0; i < vk->second.keypoints.size(); ++i) {
             const auto& k = vk->second.keypoints[i];
             const auto& p_cam = vk->second.p_cam[i];
-            vp.keypoints.push_back({k.u, k.v, k.response, p_cam ? static_cast<float>(p_cam->z()) : 0.f});
+            vp.keypoints.push_back(
+                {k.u, k.v, k.response, p_cam ? static_cast<float>(p_cam->z()) : 0.f});
             vp.descriptors.insert(vp.descriptors.end(), k.descriptor.begin(), k.descriptor.end());
           }
           fd.visual[id] = std::move(vp);
         }
         const auto it = s.sc_of.find(id);
         if (it != s.sc_of.end()) {
-          fd.lidar[id] = ScanContextDatabase::to_payload(it->second, static_cast<uint32_t>(cloud->size()),
-                                                         static_cast<float>(s.tuning.scan_context.max_range));
+          fd.lidar[id] =
+              ScanContextDatabase::to_payload(it->second, static_cast<uint32_t>(cloud->size()),
+                                              static_cast<float>(s.tuning.scan_context.max_range));
         }
       }
     }

@@ -2,13 +2,19 @@
 
 namespace strataslam {
 
-ImuPreintegrator::ImuPreintegrator(const ImuNoise& n, double gravity, const gtsam::imuBias::ConstantBias& bias) : bias_(bias) {
+ImuPreintegrator::ImuPreintegrator(const ImuNoise& n, double gravity,
+                                   const gtsam::imuBias::ConstantBias& bias)
+    : bias_(bias) {
   params_ = gtsam::PreintegrationCombinedParams::MakeSharedU(gravity);
   // Continuous-time spectral densities -> covariances (the factor scales them by dt itself).
-  params_->accelerometerCovariance = gtsam::Matrix33::Identity() * n.accel_noise_density * n.accel_noise_density;
-  params_->gyroscopeCovariance = gtsam::Matrix33::Identity() * n.gyro_noise_density * n.gyro_noise_density;
-  params_->biasAccCovariance = gtsam::Matrix33::Identity() * n.accel_random_walk * n.accel_random_walk;
-  params_->biasOmegaCovariance = gtsam::Matrix33::Identity() * n.gyro_random_walk * n.gyro_random_walk;
+  params_->accelerometerCovariance =
+      gtsam::Matrix33::Identity() * n.accel_noise_density * n.accel_noise_density;
+  params_->gyroscopeCovariance =
+      gtsam::Matrix33::Identity() * n.gyro_noise_density * n.gyro_noise_density;
+  params_->biasAccCovariance =
+      gtsam::Matrix33::Identity() * n.accel_random_walk * n.accel_random_walk;
+  params_->biasOmegaCovariance =
+      gtsam::Matrix33::Identity() * n.gyro_random_walk * n.gyro_random_walk;
   params_->integrationCovariance = gtsam::Matrix33::Identity() * 1e-8;
   params_->biasAccOmegaInt = gtsam::Matrix66::Identity() * 1e-5;
   pim_ = std::make_unique<gtsam::PreintegratedCombinedMeasurements>(params_, bias_);

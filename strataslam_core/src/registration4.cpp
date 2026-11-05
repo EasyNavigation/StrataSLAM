@@ -5,7 +5,8 @@
 
 namespace strataslam {
 
-Pose4 align_pose4_closed_form(const std::vector<PointPair>& pairs, const std::vector<double>* weights, bool use_z) {
+Pose4 align_pose4_closed_form(const std::vector<PointPair>& pairs,
+                              const std::vector<double>* weights, bool use_z) {
   double wsum = 0;
   Eigen::Vector3d ms = Eigen::Vector3d::Zero(), md = Eigen::Vector3d::Zero();
   for (size_t i = 0; i < pairs.size(); ++i) {
@@ -52,9 +53,12 @@ RobustAlignment align_pose4_gnc(const std::vector<PointPair>& pairs, double c, b
     for (size_t i = 0; i < n; ++i) {
       const double r2 = std::pow(residual(i, T), 2);
       const double hi = (mu + 1.0) / mu * c2, lo = mu / (mu + 1.0) * c2;
-      if (r2 >= hi) w[i] = 0.0;
-      else if (r2 <= lo) w[i] = 1.0;
-      else w[i] = std::clamp(c / std::sqrt(r2) * std::sqrt(mu * (mu + 1.0)) - mu, 0.0, 1.0);
+      if (r2 >= hi)
+        w[i] = 0.0;
+      else if (r2 <= lo)
+        w[i] = 1.0;
+      else
+        w[i] = std::clamp(c / std::sqrt(r2) * std::sqrt(mu * (mu + 1.0)) - mu, 0.0, 1.0);
     }
     if (mu > 1e5) break;
     mu *= 1.4;

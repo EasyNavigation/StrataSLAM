@@ -1,13 +1,13 @@
 #pragma once
 
+#include <gtsam/base/Lie.h>
+#include <gtsam/geometry/Pose3.h>
+
+#include <Eigen/Core>
 #include <cmath>
 #include <iosfwd>
 #include <string>
 #include <utility>
-
-#include <Eigen/Core>
-#include <gtsam/base/Lie.h>
-#include <gtsam/geometry/Pose3.h>
 
 #include "strataslam/common/result.hpp"
 
@@ -36,7 +36,8 @@ class Pose4 : public gtsam::LieGroup<Pose4, 4> {
   static double WrapAngle(double a);
 
   /// Conversion from a gravity-aligned pose. Fails if |roll| or |pitch| exceed `max_tilt_rad`.
-  static Result<Pose4> FromPose3(const gtsam::Pose3& pose, double max_tilt_rad = kDefaultMaxTiltRad);
+  static Result<Pose4> FromPose3(const gtsam::Pose3& pose,
+                                 double max_tilt_rad = kDefaultMaxTiltRad);
   static Result<Pose4> FromRotationTranslation(const Eigen::Matrix3d& R, const Eigen::Vector3d& t,
                                                double max_tilt_rad = kDefaultMaxTiltRad);
 
@@ -72,8 +73,12 @@ class Pose4 : public gtsam::LieGroup<Pose4, 4> {
 
   struct ChartAtOrigin {
     // Signatures fixed by GTSAM's LieGroup traits (ChartJacobian is passed by value there).
-    static Pose4 Retract(const Vector4& xi, ChartJacobian H = boost::none) { return Expmap(xi, std::move(H)); }
-    static Vector4 Local(const Pose4& X, ChartJacobian H = boost::none) { return Logmap(X, std::move(H)); }
+    static Pose4 Retract(const Vector4& xi, ChartJacobian H = boost::none) {
+      return Expmap(xi, std::move(H));
+    }
+    static Vector4 Local(const Pose4& X, ChartJacobian H = boost::none) {
+      return Logmap(X, std::move(H));
+    }
   };
 
   // ---- Testable ----

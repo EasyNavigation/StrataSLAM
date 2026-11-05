@@ -1,5 +1,6 @@
-// Performance benchmarks (spec 12.8). Targets: ORB with 1000 features at 640x480 <= 33 ms per frame,
-// LiDAR frontend with a 64-beam sensor <= 50 ms per scan, iSAM2 update <= 20 ms mean per keyframe.
+// Performance benchmarks (spec 12.8). Targets: ORB with 1000 features at 640x480 <= 33 ms per
+// frame, LiDAR frontend with a 64-beam sensor <= 50 ms per scan, iSAM2 update <= 20 ms mean per
+// keyframe.
 #include <benchmark/benchmark.h>
 
 #include <random>
@@ -31,8 +32,8 @@ strataslam::GrayImage textured_image() {
 void BM_OrbExtract_640x480_1000(benchmark::State& state) {
   const auto img = textured_image();
   auto orb = strataslam::make_orb_extractor(1000);
-  // Warm-up outside the timed loop: OpenCV's first call in a process initialises its backends (about
-  // 2 s here), which a single measured iteration would report as the cost of an extraction.
+  // Warm-up outside the timed loop: OpenCV's first call in a process initialises its backends
+  // (about 2 s here), which a single measured iteration would report as the cost of an extraction.
   size_t n = orb->extract(img).size();
   for (auto _ : state) n = orb->extract(img).size();
   state.counters["features"] = static_cast<double>(n);
@@ -58,7 +59,9 @@ void BM_VisualTracking(benchmark::State& state) {
     }
   }
   state.SetItemsProcessed(state.iterations() * frames.size());
-  state.counters["time_per_frame"] = benchmark::Counter(static_cast<double>(frames.size()), benchmark::Counter::kIsIterationInvariantRate | benchmark::Counter::kInvert);
+  state.counters["time_per_frame"] = benchmark::Counter(
+      static_cast<double>(frames.size()),
+      benchmark::Counter::kIsIterationInvariantRate | benchmark::Counter::kInvert);
 }
 BENCHMARK(BM_VisualTracking)->Unit(benchmark::kMillisecond)->Iterations(3);
 
@@ -84,11 +87,14 @@ void BM_LidarFrontend_64beams(benchmark::State& state) {
     }
   }
   state.SetItemsProcessed(state.iterations() * scans.size());
-  state.counters["time_per_scan"] = benchmark::Counter(static_cast<double>(scans.size()), benchmark::Counter::kIsIterationInvariantRate | benchmark::Counter::kInvert);
+  state.counters["time_per_scan"] = benchmark::Counter(
+      static_cast<double>(scans.size()),
+      benchmark::Counter::kIsIterationInvariantRate | benchmark::Counter::kInvert);
 }
 BENCHMARK(BM_LidarFrontend_64beams)->Unit(benchmark::kMillisecond)->Iterations(2);
 
-/// Mean cost of inserting a keyframe (odometry factor + iSAM2 update) in a growing chain with periodic loops.
+/// Mean cost of inserting a keyframe (odometry factor + iSAM2 update) in a growing chain with
+/// periodic loops.
 void BM_Isam2KeyframeUpdate(benchmark::State& state) {
   const int n = 400;
   for (auto _ : state) {
@@ -103,15 +109,21 @@ void BM_Isam2KeyframeUpdate(benchmark::State& state) {
       kf.id = static_cast<strataslam::KeyframeId>(i);
       kf.stamp = i * 100000000LL;
       kf.floor = 0;
-      kf.T_odom_base = pose.compose(gtsam::Pose3(gtsam::Rot3(), gtsam::Point3(noise(rng), noise(rng), 0)));
+      kf.T_odom_base =
+          pose.compose(gtsam::Pose3(gtsam::Rot3(), gtsam::Point3(noise(rng), noise(rng), 0)));
       std::optional<strataslam::KeyframeId> from;
       gtsam::Pose3 rel;
-      if (i > 0) { from = static_cast<strataslam::KeyframeId>(i - 1); rel = prev.between(pose); }
+      if (i > 0) {
+        from = static_cast<strataslam::KeyframeId>(i - 1);
+        rel = prev.between(pose);
+      }
       be.add_keyframe(kf, from, rel, std::nullopt);
       prev = pose;
     }
   }
-  state.counters["time_per_keyframe"] = benchmark::Counter(static_cast<double>(n), benchmark::Counter::kIsIterationInvariantRate | benchmark::Counter::kInvert);
+  state.counters["time_per_keyframe"] =
+      benchmark::Counter(static_cast<double>(n), benchmark::Counter::kIsIterationInvariantRate |
+                                                     benchmark::Counter::kInvert);
 }
 BENCHMARK(BM_Isam2KeyframeUpdate)->Unit(benchmark::kMillisecond)->Iterations(3);
 

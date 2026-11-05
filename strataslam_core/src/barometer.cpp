@@ -4,8 +4,9 @@
 
 namespace strataslam {
 
-// The hypsometric equation of an isothermal layer of dry air: dh = (Rd T / g) ln(p1 / p2), e.g. J. M. Wallace and
-// P. V. Hobbs, "Atmospheric Science: An Introductory Survey", 2nd ed., Academic Press 2006, eq. 3.29.
+// The hypsometric equation of an isothermal layer of dry air: dh = (Rd T / g) ln(p1 / p2), e.g. J.
+// M. Wallace and P. V. Hobbs, "Atmospheric Science: An Introductory Survey", 2nd ed., Academic
+// Press 2006, eq. 3.29.
 double hypsometric_height(double p_ref_pa, double p_pa, double temperature_k) {
   return kDryAirGasConstant * temperature_k / kStandardGravity * std::log(p_ref_pa / p_pa);
 }
@@ -27,8 +28,8 @@ double BaroFilter::update(Timestamp stamp, double pressure_pa) {
     p_ref_ = pressure_pa;
     base_station_ref_ = base_station_pa_;
   } else if (base_station_pa_ && !base_station_ref_) {
-    // The base station's first sample came after the rover's: its reference is taken now, so the weather is
-    // cancelled from here on (before 2026-11-04 it was never applied; audit A4A5-02).
+    // The base station's first sample came after the rover's: its reference is taken now, so the
+    // weather is cancelled from here on (before 2026-11-04 it was never applied; audit A4A5-02).
     base_station_ref_ = base_station_pa_;
   }
   // Differential altitude: weather-induced pressure changes seen by the base station are removed.

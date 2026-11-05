@@ -130,7 +130,7 @@ Eigen::Vector3d Pose4::act(const Eigen::Vector3d& p) const {
 Pose4::Matrix4 Pose4::AdjointMap() const {
   const double c = std::cos(theta_), s = std::sin(theta_);
   Matrix4 Ad = Matrix4::Identity();
-  Ad(1, 0) = t_.y();   // -J t
+  Ad(1, 0) = t_.y();  // -J t
   Ad(2, 0) = -t_.x();
   Ad(1, 1) = c;
   Ad(1, 2) = -s;
@@ -163,13 +163,9 @@ Pose4::Vector4 Pose4::Logmap(const Pose4& X, ChartJacobian H) {
 Pose4::Matrix4 Pose4::LeftJacobian(const Vector4& xi) { return left_jacobian(xi); }
 Pose4::Matrix4 Pose4::RightJacobian(const Vector4& xi) { return left_jacobian(-xi); }
 Pose4::Matrix4 Pose4::LeftJacobianInverse(const Vector4& xi) { return left_jacobian_inverse(xi); }
-Pose4::Matrix4 Pose4::RightJacobianInverse(const Vector4& xi) {
-  return left_jacobian_inverse(-xi);
-}
+Pose4::Matrix4 Pose4::RightJacobianInverse(const Vector4& xi) { return left_jacobian_inverse(-xi); }
 
-void Pose4::print(const std::string& s) const {
-  std::cout << s << *this << '\n';
-}
+void Pose4::print(const std::string& s) const { std::cout << s << *this << '\n'; }
 
 bool Pose4::equals(const Pose4& o, double tol) const {
   return std::abs(WrapAngle(theta_ - o.theta_)) <= tol && (t_ - o.t_).cwiseAbs().maxCoeff() <= tol;

@@ -19,9 +19,10 @@ class NullLogger final : public Logger {
   void log(LogLevel, const std::string&) override {}
 };
 
-/// Developer traces, off by default: `STRATASLAM_DEBUG_<CHANNEL>=<n>` in the environment (read once per
-/// channel) enables a channel; the traces are sent to the Logger at Debug level. Returns n (1 when the
-/// value is not a number), or 0 when the channel is off. Channels: ALT, BACKEND, FLOORS, IMU, LOOPS, TRACK.
+/// Developer traces, off by default: `STRATASLAM_DEBUG_<CHANNEL>=<n>` in the environment (read once
+/// per channel) enables a channel; the traces are sent to the Logger at Debug level. Returns n (1
+/// when the value is not a number), or 0 when the channel is off. Channels: ALT, BACKEND, FLOORS,
+/// IMU, LOOPS, TRACK.
 int debug_channel(const char* channel);
 /// True if any STRATASLAM_DEBUG_* variable is set (tools then log at Debug level to stderr).
 bool any_debug_channel();

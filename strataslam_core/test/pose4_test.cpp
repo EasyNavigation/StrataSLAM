@@ -1,5 +1,6 @@
-#include <gtest/gtest.h>
+#include "strataslam/geometry/pose4.hpp"
 
+#include <gtest/gtest.h>
 #include <gtsam/base/numericalDerivative.h>
 #include <gtsam/inference/Symbol.h>
 #include <gtsam/linear/NoiseModel.h>
@@ -11,8 +12,6 @@
 #include <gtsam/slam/PriorFactor.h>
 
 #include <random>
-
-#include "strataslam/geometry/pose4.hpp"
 
 using namespace strataslam;
 using Vector4 = Pose4::Vector4;
@@ -97,7 +96,7 @@ TEST(Pose4, ExpLogRoundTrip10000Samples) {
     Vector4 xi = s.xi();
     // Exercise the angle edge cases: near zero and near +-pi.
     if (i % 5 == 1) xi(0) = std::copysign(std::pow(10.0, -1.0 - (i % 17) * 0.8), xi(0));
-    if (i % 5 == 2) xi(0) = std::copysign(kPi - std::pow(10.0, -(i % 12)) , xi(0));
+    if (i % 5 == 2) xi(0) = std::copysign(kPi - std::pow(10.0, -(i % 12)), xi(0));
     if (i % 5 == 3) xi(0) = 0.0;
     const Pose4 X = Pose4::Expmap(xi);
     const Vector4 back = Pose4::Logmap(X);
@@ -180,7 +179,9 @@ TEST(Pose4, RightJacobianMatchesFiniteDifferences) {
   for (int i = 0; i < 300; ++i) {
     Vector4 xi = s.xi(3.0, 5.0);
     if (i % 4 == 0) xi(0) *= 1e-7;  // Taylor branch
-    const auto f = [&](const Vector4& x) { return Pose4::Logmap(Pose4::Expmap(xi).inverse() * Pose4::Expmap(x)); };
+    const auto f = [&](const Vector4& x) {
+      return Pose4::Logmap(Pose4::Expmap(xi).inverse() * Pose4::Expmap(x));
+    };
     ASSERT_LT((numeric_jacobian(f, xi) - Pose4::RightJacobian(xi)).cwiseAbs().maxCoeff(), 1e-6);
   }
 }
@@ -190,7 +191,9 @@ TEST(Pose4, LeftJacobianMatchesFiniteDifferences) {
   for (int i = 0; i < 300; ++i) {
     Vector4 xi = s.xi(3.0, 5.0);
     if (i % 4 == 0) xi(0) *= 1e-7;
-    const auto f = [&](const Vector4& x) { return Pose4::Logmap(Pose4::Expmap(x) * Pose4::Expmap(xi).inverse()); };
+    const auto f = [&](const Vector4& x) {
+      return Pose4::Logmap(Pose4::Expmap(x) * Pose4::Expmap(xi).inverse());
+    };
     ASSERT_LT((numeric_jacobian(f, xi) - Pose4::LeftJacobian(xi)).cwiseAbs().maxCoeff(), 1e-6);
   }
 }
@@ -200,10 +203,16 @@ TEST(Pose4, JacobianInversesAndRelations) {
   for (int i = 0; i < 500; ++i) {
     Vector4 xi = s.xi(3.0, 5.0);
     if (i % 4 == 0) xi(0) *= 1e-7;
-    EXPECT_LT((Pose4::RightJacobian(xi) * Pose4::RightJacobianInverse(xi) - Matrix4::Identity()).norm(), 1e-9);
-    EXPECT_LT((Pose4::LeftJacobian(xi) * Pose4::LeftJacobianInverse(xi) - Matrix4::Identity()).norm(), 1e-9);
+    EXPECT_LT(
+        (Pose4::RightJacobian(xi) * Pose4::RightJacobianInverse(xi) - Matrix4::Identity()).norm(),
+        1e-9);
+    EXPECT_LT(
+        (Pose4::LeftJacobian(xi) * Pose4::LeftJacobianInverse(xi) - Matrix4::Identity()).norm(),
+        1e-9);
     // J_l = Ad_exp(xi) J_r
-    EXPECT_LT((Pose4::LeftJacobian(xi) - Pose4::Expmap(xi).AdjointMap() * Pose4::RightJacobian(xi)).norm(), 1e-9);
+    EXPECT_LT((Pose4::LeftJacobian(xi) - Pose4::Expmap(xi).AdjointMap() * Pose4::RightJacobian(xi))
+                  .norm(),
+              1e-9);
     // J_r(xi) = J_l(-xi)
     EXPECT_LT((Pose4::RightJacobian(xi) - Pose4::LeftJacobian(-xi)).norm(), 1e-12);
   }
@@ -234,12 +243,15 @@ TEST(Pose4, FromPose3LevelFrameGivesExactYaw) {
 TEST(Pose4, FromPose3RejectsTiltedFrames) {
   const double deg = kPi / 180.0;
   const gtsam::Point3 t(0, 0, 0);
-  EXPECT_FALSE(Pose4::FromPose3(gtsam::Pose3(gtsam::Rot3::RzRyRx(5 * deg, 0, 0.3), t)).ok());   // roll 5°
-  EXPECT_FALSE(Pose4::FromPose3(gtsam::Pose3(gtsam::Rot3::RzRyRx(0, 5 * deg, 0.3), t)).ok());   // pitch 5°
+  EXPECT_FALSE(
+      Pose4::FromPose3(gtsam::Pose3(gtsam::Rot3::RzRyRx(5 * deg, 0, 0.3), t)).ok());  // roll 5°
+  EXPECT_FALSE(
+      Pose4::FromPose3(gtsam::Pose3(gtsam::Rot3::RzRyRx(0, 5 * deg, 0.3), t)).ok());  // pitch 5°
   EXPECT_FALSE(Pose4::FromPose3(gtsam::Pose3(gtsam::Rot3::RzRyRx(-5 * deg, 0, 0), t)).ok());
   EXPECT_TRUE(Pose4::FromPose3(gtsam::Pose3(gtsam::Rot3::RzRyRx(1 * deg, 1 * deg, 0.3), t)).ok());
   // The threshold is configurable.
-  EXPECT_TRUE(Pose4::FromPose3(gtsam::Pose3(gtsam::Rot3::RzRyRx(5 * deg, 0, 0.3), t), 6 * deg).ok());
+  EXPECT_TRUE(
+      Pose4::FromPose3(gtsam::Pose3(gtsam::Rot3::RzRyRx(5 * deg, 0, 0.3), t), 6 * deg).ok());
   const auto err = Pose4::FromPose3(gtsam::Pose3(gtsam::Rot3::RzRyRx(5 * deg, 0, 0), t));
   EXPECT_NE(err.error().message.find("not gravity-aligned"), std::string::npos);
 }
@@ -273,12 +285,20 @@ TEST(Pose4Gtsam, TraitsAndManifoldOps) {
     gtsam::Matrix44 H1, H2;
     X.compose(Y, H1, H2);
     const auto cmp = [&](const Pose4& a, const Pose4& b) { return a.compose(b); };
-    EXPECT_LT((gtsam::numericalDerivative21<Pose4, Pose4, Pose4>(cmp, X, Y) - H1).cwiseAbs().maxCoeff(), 1e-6);
-    EXPECT_LT((gtsam::numericalDerivative22<Pose4, Pose4, Pose4>(cmp, X, Y) - H2).cwiseAbs().maxCoeff(), 1e-6);
+    EXPECT_LT(
+        (gtsam::numericalDerivative21<Pose4, Pose4, Pose4>(cmp, X, Y) - H1).cwiseAbs().maxCoeff(),
+        1e-6);
+    EXPECT_LT(
+        (gtsam::numericalDerivative22<Pose4, Pose4, Pose4>(cmp, X, Y) - H2).cwiseAbs().maxCoeff(),
+        1e-6);
     X.between(Y, H1, H2);
     const auto bet = [&](const Pose4& a, const Pose4& b) { return a.between(b); };
-    EXPECT_LT((gtsam::numericalDerivative21<Pose4, Pose4, Pose4>(bet, X, Y) - H1).cwiseAbs().maxCoeff(), 1e-6);
-    EXPECT_LT((gtsam::numericalDerivative22<Pose4, Pose4, Pose4>(bet, X, Y) - H2).cwiseAbs().maxCoeff(), 1e-6);
+    EXPECT_LT(
+        (gtsam::numericalDerivative21<Pose4, Pose4, Pose4>(bet, X, Y) - H1).cwiseAbs().maxCoeff(),
+        1e-6);
+    EXPECT_LT(
+        (gtsam::numericalDerivative22<Pose4, Pose4, Pose4>(bet, X, Y) - H2).cwiseAbs().maxCoeff(),
+        1e-6);
   }
 }
 
@@ -311,8 +331,14 @@ TEST(Pose4Gtsam, ExactErrorChainJacobiansAtNonzeroError) {
     const Pose4 hx = X1.between(X2, Hb1, Hb2);
     meas.localCoordinates(hx, boost::none, Hl);
     const gtsam::Matrix44 A1 = Hl * Hb1, A2 = Hl * Hb2;
-    EXPECT_LT((gtsam::numericalDerivative21<gtsam::Vector4, Pose4, Pose4>(err, X1, X2) - A1).cwiseAbs().maxCoeff(), 1e-6);
-    EXPECT_LT((gtsam::numericalDerivative22<gtsam::Vector4, Pose4, Pose4>(err, X1, X2) - A2).cwiseAbs().maxCoeff(), 1e-6);
+    EXPECT_LT((gtsam::numericalDerivative21<gtsam::Vector4, Pose4, Pose4>(err, X1, X2) - A1)
+                  .cwiseAbs()
+                  .maxCoeff(),
+              1e-6);
+    EXPECT_LT((gtsam::numericalDerivative22<gtsam::Vector4, Pose4, Pose4>(err, X1, X2) - A2)
+                  .cwiseAbs()
+                  .maxCoeff(),
+              1e-6);
   }
 }
 
@@ -327,9 +353,11 @@ TEST(Pose4Gtsam, PoseGraphConvergesAcrossTheAngleWrap) {
   const auto noise = gtsam::noiseModel::Isotropic::Sigma(4, 0.05);
   g.add(gtsam::PriorFactor<Pose4>(Symbol('x', 0), truth[0], noise));
   for (size_t i = 1; i < truth.size(); ++i) {
-    g.add(gtsam::BetweenFactor<Pose4>(Symbol('x', i - 1), Symbol('x', i), truth[i - 1].between(truth[i]), noise));
+    g.add(gtsam::BetweenFactor<Pose4>(Symbol('x', i - 1), Symbol('x', i),
+                                      truth[i - 1].between(truth[i]), noise));
   }
-  g.add(gtsam::BetweenFactor<Pose4>(Symbol('x', 0), Symbol('x', 11), truth[0].between(truth[11]), noise));
+  g.add(gtsam::BetweenFactor<Pose4>(Symbol('x', 0), Symbol('x', 11), truth[0].between(truth[11]),
+                                    noise));
 
   Sampler s;
   gtsam::Values init;

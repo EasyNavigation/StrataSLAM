@@ -1,18 +1,18 @@
-// strataslam_sim_export_bag: writes a scenario of the simulator as a rosbag2, with exact ground truth
-// beside it, for the ROS 2 tests and for `strataslam doctor`. The simulator itself stays ROS-free.
+// strataslam_sim_export_bag: writes a scenario of the simulator as a rosbag2, with exact ground
+// truth beside it, for the ROS 2 tests and for `strataslam doctor`. The simulator itself stays
+// ROS-free.
 //
 //   strataslam_sim_export_bag <S01..S12> <out_dir> [--profile profile.yaml] [--corrupt <kind>]
 //                           [--camera-hz 15] [--lidar-hz 12] [--seconds N]
-// Writes <out_dir>/bag (mcap/sqlite3), <out_dir>/vocab.bin and <out_dir>/trajectory.tum (ground truth, bag time).
-// Corruptions for the doctor tests: no_tf, depth_encoding, rgb_depth_offset, imu_z_flip, no_camera_info.
+// Writes <out_dir>/bag (mcap/sqlite3), <out_dir>/vocab.bin and <out_dir>/trajectory.tum (ground
+// truth, bag time). Corruptions for the doctor tests: no_tf, depth_encoding, rgb_depth_offset,
+// imu_z_flip, no_camera_info.
 #include <cmath>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
-#include <iostream>
-#include <string>
-
 #include <geometry_msgs/msg/transform_stamped.hpp>
+#include <iostream>
 #include <rclcpp/qos.hpp>
 #include <rclcpp/serialization.hpp>
 #include <rosbag2_cpp/writer.hpp>
@@ -22,6 +22,7 @@
 #include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
+#include <string>
 #include <tf2_msgs/msg/tf_message.hpp>
 
 #include "strataslam/config/config_loader.hpp"
@@ -44,7 +45,8 @@ void write(rosbag2_cpp::Writer& w, const std::string& topic, const Msg& msg, int
   w.write(msg, topic, rclcpp::Time(ns, RCL_ROS_TIME));
 }
 
-geometry_msgs::msg::TransformStamped static_tf(const std::string& parent, const std::string& child, const gtsam::Pose3& p, int64_t ns) {
+geometry_msgs::msg::TransformStamped static_tf(const std::string& parent, const std::string& child,
+                                               const gtsam::Pose3& p, int64_t ns) {
   geometry_msgs::msg::TransformStamped t;
   t.header.stamp = to_time(ns);
   t.header.frame_id = parent;
@@ -64,7 +66,9 @@ geometry_msgs::msg::TransformStamped static_tf(const std::string& parent, const 
 
 int main(int argc, char** argv) {
   if (argc < 3) {
-    std::cerr << "usage: " << argv[0] << " <scenario> <out_dir> [--profile p.yaml] [--corrupt kind] [--camera-hz hz] [--seconds s]\n";
+    std::cerr << "usage: " << argv[0]
+              << " <scenario> <out_dir> [--profile p.yaml] [--corrupt kind] [--camera-hz hz] "
+                 "[--seconds s]\n";
     return 2;
   }
   const std::string scenario = argv[1], out = argv[2];
@@ -72,17 +76,25 @@ int main(int argc, char** argv) {
   double camera_hz = 15.0, lidar_hz = 12.0, seconds = 1e9;
   for (int i = 3; i + 1 < argc; i += 2) {
     const std::string k = argv[i];
-    if (k == "--profile") profile_path = argv[i + 1];
-    else if (k == "--corrupt") corrupt = argv[i + 1];
-    else if (k == "--camera-hz") camera_hz = std::stod(argv[i + 1]);
-    else if (k == "--lidar-hz") lidar_hz = std::stod(argv[i + 1]);
-    else if (k == "--seconds") seconds = std::stod(argv[i + 1]);
+    if (k == "--profile")
+      profile_path = argv[i + 1];
+    else if (k == "--corrupt")
+      corrupt = argv[i + 1];
+    else if (k == "--camera-hz")
+      camera_hz = std::stod(argv[i + 1]);
+    else if (k == "--lidar-hz")
+      lidar_hz = std::stod(argv[i + 1]);
+    else if (k == "--seconds")
+      seconds = std::stod(argv[i + 1]);
   }
   auto spec = strataslam_sim::make_scenario(scenario);
-  // Topics and sensors come from the profile when given (so every example profile can be exercised).
+  // Topics and sensors come from the profile when given (so every example profile can be
+  // exercised).
   strataslam::Config cfg = spec.slam;
-  std::string rgb_t = "/camera/color/image_raw", depth_t = "/camera/aligned_depth_to_color/image_raw", info_t = "/camera/color/camera_info",
-              lidar_t = "/points", imu_t = "/camera/imu", baro_t = "/pressure";
+  std::string rgb_t = "/camera/color/image_raw",
+              depth_t = "/camera/aligned_depth_to_color/image_raw",
+              info_t = "/camera/color/camera_info", lidar_t = "/points", imu_t = "/camera/imu",
+              baro_t = "/pressure";
   std::string base = "base_link";
   if (!profile_path.empty()) {
     const auto r = strataslam::load_profile_file(profile_path);
@@ -114,8 +126,9 @@ int main(int argc, char** argv) {
   writer.open(bag);
   const int64_t t0 = sim.stamp_at(0);
 
-  // Static TF (omitted for the `no_tf` corruption). The topic is registered with the transient-local QoS that
-  // TF listeners require, so that `ros2 bag play` republishes it compatibly.
+  // Static TF (omitted for the `no_tf` corruption). The topic is registered with the
+  // transient-local QoS that TF listeners require, so that `ros2 bag play` republishes it
+  // compatibly.
   if (corrupt != "no_tf") {
     rosbag2_storage::TopicMetadata md;
     md.name = "/tf_static";
@@ -124,7 +137,8 @@ int main(int argc, char** argv) {
     md.offered_qos_profiles = {rclcpp::QoS(rclcpp::KeepLast(1)).transient_local().reliable()};
     writer.create_topic(md);
     tf2_msgs::msg::TFMessage tf;
-    tf.transforms.push_back(static_tf(base, "camera_color_optical_frame", spec.sim.extrinsics.T_base_camera, t0));
+    tf.transforms.push_back(
+        static_tf(base, "camera_color_optical_frame", spec.sim.extrinsics.T_base_camera, t0));
     tf.transforms.push_back(static_tf(base, "lidar_link", spec.sim.extrinsics.T_base_lidar, t0));
     tf.transforms.push_back(static_tf(base, "imu_link", spec.sim.extrinsics.T_base_imu, t0));
     write(writer, "/tf_static", tf, t0);
@@ -161,7 +175,8 @@ int main(int argc, char** argv) {
       }
       case T::Rgbd: {
         const auto f = sim.rgbd(ev.index);
-        const int64_t rgb_stamp = f.stamp + (corrupt == "rgb_depth_offset" ? 50000000LL : 0);  // 50 ms
+        const int64_t rgb_stamp =
+            f.stamp + (corrupt == "rgb_depth_offset" ? 50000000LL : 0);  // 50 ms
         if (corrupt != "no_camera_info") {
           sm::CameraInfo ci;
           ci.header.stamp = to_time(f.stamp);
@@ -179,16 +194,20 @@ int main(int argc, char** argv) {
         depth.header.frame_id = "camera_color_optical_frame";
         depth.width = K.width;
         depth.height = K.height;
-        const bool f32 = corrupt != "depth_encoding";  // the corruption publishes an unsupported encoding
+        const bool f32 =
+            corrupt != "depth_encoding";  // the corruption publishes an unsupported encoding
         depth.encoding = f32 ? "32FC1" : "8UC1";
         depth.step = K.width * (f32 ? 4 : 1);
         depth.data.resize(static_cast<size_t>(depth.step) * K.height);
         for (size_t i = 0; i < f.depth.meters.size(); ++i) {
-          if (f32) std::memcpy(&depth.data[i * 4], &f.depth.meters[i], 4);
-          else depth.data[i] = static_cast<uint8_t>(std::min(255.f, f.depth.meters[i] * 20.f));
+          if (f32)
+            std::memcpy(&depth.data[i * 4], &f.depth.meters[i], 4);
+          else
+            depth.data[i] = static_cast<uint8_t>(std::min(255.f, f.depth.meters[i] * 20.f));
         }
         write(writer, depth_t, depth, f.stamp);
-        sm::Image rgb;  // a flat grey image: the simulator works at feature level (see FeatureFrame)
+        sm::Image
+            rgb;  // a flat grey image: the simulator works at feature level (see FeatureFrame)
         rgb.header.stamp = to_time(rgb_stamp);
         rgb.header.frame_id = "camera_color_optical_frame";
         rgb.width = K.width;
@@ -219,7 +238,8 @@ int main(int argc, char** argv) {
         c.point_step = 16;
         c.row_step = c.point_step * c.width;
         c.is_dense = true;
-        for (const auto& [name, off] : {std::pair<const char*, int>{"x", 0}, {"y", 4}, {"z", 8}, {"t", 12}}) {
+        for (const auto& [name, off] :
+             {std::pair<const char*, int>{"x", 0}, {"y", 4}, {"z", 8}, {"t", 12}}) {
           sm::PointField pf;
           pf.name = name;
           pf.offset = off;
@@ -235,12 +255,14 @@ int main(int argc, char** argv) {
         write(writer, lidar_t, c, s.stamp);
         break;
       }
-      case T::Odom: break;
+      case T::Odom:
+        break;
     }
   }
   writer.close();
-  // The ground truth in the bag's time base, under the name `strataslam eval --gt <dir>` reads (before 2026-11-04 it
-  // was groundtruth.tum in simulation time, 1000 s away from every stamp of the bag; audit AUD-058).
+  // The ground truth in the bag's time base, under the name `strataslam eval --gt <dir>` reads
+  // (before 2026-11-04 it was groundtruth.tum in simulation time, 1000 s away from every stamp of
+  // the bag; audit AUD-058).
   std::ofstream(out + "/trajectory.tum") << sim.trajectory().to_tum(spec.sim.start_stamp_ns * 1e-9);
   // The vocabulary the node needs for visual loop closure (the simulator's random descriptors).
   const auto vr = strataslam_sim::sim_vocabulary()->save(out + "/vocab.bin");

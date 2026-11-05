@@ -1,14 +1,14 @@
 #include "strataslam/io/map_io.hpp"
 
+#include <yaml-cpp/yaml.h>
+
 #include <charconv>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <set>
-#include <stdexcept>
 #include <sstream>
-
-#include <yaml-cpp/yaml.h>
+#include <stdexcept>
 
 namespace fs = std::filesystem;
 
@@ -124,9 +124,13 @@ std::string transitions_to_yaml(const std::vector<TransitionRecord>& list) {
     out << YAML::Key << "kf_before" << YAML::Value << t.kf_before;
     out << YAML::Key << "kf_after" << YAML::Value << t.kf_after;
     out << YAML::Key << "delta_z" << YAML::Value;
-    if (t.delta_z) out << *t.delta_z; else out << YAML::Null;
+    if (t.delta_z)
+      out << *t.delta_z;
+    else
+      out << YAML::Null;
     out << YAML::Key << "covariance" << YAML::Value << YAML::Flow << YAML::BeginSeq;
-    for (int r = 0; r < 4; ++r) for (int c = 0; c < 4; ++c) out << t.covariance(r, c);
+    for (int r = 0; r < 4; ++r)
+      for (int c = 0; c < 4; ++c) out << t.covariance(r, c);
     out << YAML::EndSeq;
     out << YAML::Key << "continuous_tracking" << YAML::Value << t.continuous_tracking;
     out << YAML::Key << "relative" << YAML::Value;
@@ -157,13 +161,16 @@ std::vector<TransitionRecord> transitions_from_yaml(const std::string& text) {
     t.kf_after = n["kf_after"].as<KeyframeId>();
     if (!n["delta_z"].IsNull()) t.delta_z = n["delta_z"].as<double>();
     const YAML::Node cov = n["covariance"];
-    if (!cov.IsSequence() || cov.size() != 16) throw IoError("transitions.yaml: covariance needs 16 values");
+    if (!cov.IsSequence() || cov.size() != 16)
+      throw IoError("transitions.yaml: covariance needs 16 values");
     for (int i = 0; i < 16; ++i) t.covariance(i / 4, i % 4) = cov[i].as<double>();
     t.continuous_tracking = n["continuous_tracking"].as<bool>();
     if (n["relative"].IsDefined() && !n["relative"].IsNull()) {
       const YAML::Node r = n["relative"];
-      if (!r.IsSequence() || r.size() != 4) throw IoError("transitions.yaml: relative needs 4 values");
-      t.relative = std::array<double, 4>{r[0].as<double>(), r[1].as<double>(), r[2].as<double>(), r[3].as<double>()};
+      if (!r.IsSequence() || r.size() != 4)
+        throw IoError("transitions.yaml: relative needs 4 values");
+      t.relative = std::array<double, 4>{r[0].as<double>(), r[1].as<double>(), r[2].as<double>(),
+                                         r[3].as<double>()};
     }
     list.push_back(t);
   }
@@ -182,7 +189,10 @@ std::string metadata_to_yaml(const FloorMetadata& m) {
   out << YAML::Key << "ground_normal" << YAML::Value;
   emit_vec3(out, m.ground_normal);
   out << YAML::Key << "reference_pressure_pa" << YAML::Value;
-  if (m.reference_pressure_pa) out << *m.reference_pressure_pa; else out << YAML::Null;
+  if (m.reference_pressure_pa)
+    out << *m.reference_pressure_pa;
+  else
+    out << YAML::Null;
   out << YAML::Key << "sensors" << YAML::Value << YAML::Flow << YAML::BeginSeq;
   for (const auto& s : m.sensors) out << s;
   out << YAML::EndSeq;
@@ -191,7 +201,10 @@ std::string metadata_to_yaml(const FloorMetadata& m) {
   out << YAML::EndSeq;
   out << YAML::Key << "alignment_residual_rad" << YAML::Value << m.alignment_residual_rad;
   out << YAML::Key << "altitude_m" << YAML::Value;
-  if (m.altitude_m) out << *m.altitude_m; else out << YAML::Null;
+  if (m.altitude_m)
+    out << *m.altitude_m;
+  else
+    out << YAML::Null;
   out << YAML::EndMap;
   return out.c_str();
 }
@@ -208,7 +221,8 @@ FloorMetadata metadata_from_yaml(const std::string& text) {
   for (const auto& s : n["sensors"]) m.sensors.push_back(s.as<std::string>());
   for (const auto& s : n["sessions"]) m.sessions.push_back(s.as<SessionId>());
   m.alignment_residual_rad = n["alignment_residual_rad"].as<double>();
-  if (n["altitude_m"].IsDefined() && !n["altitude_m"].IsNull()) m.altitude_m = n["altitude_m"].as<double>();
+  if (n["altitude_m"].IsDefined() && !n["altitude_m"].IsNull())
+    m.altitude_m = n["altitude_m"].as<double>();
   return m;
 }
 
@@ -220,8 +234,7 @@ constexpr const char* kEdgesHeader = "type,from,to,measurement,info_dim,informat
 std::string keyframes_to_csv(const std::vector<KeyframeRecord>& kfs) {
   std::string s = std::string(kKeyframesHeader) + "\n";
   for (const auto& k : kfs) {
-    s += std::to_string(k.id) + "," + std::to_string(k.stamp_ns) + "," +
-         std::to_string(k.session);
+    s += std::to_string(k.id) + "," + std::to_string(k.stamp_ns) + "," + std::to_string(k.session);
     for (double v : {k.t.x(), k.t.y(), k.t.z(), k.q.x(), k.q.y(), k.q.z(), k.q.w()}) {
       s += "," + fmt_double(v);
     }
@@ -246,8 +259,8 @@ std::vector<KeyframeRecord> keyframes_from_csv(const std::string& text, const st
     k.session = static_cast<SessionId>(parse_u64(f[2], where));
     k.t = {parse_double(f[3], where), parse_double(f[4], where), parse_double(f[5], where)};
     // Parsed before assigning: a parse error thrown inside Eigen's comma initializer would abort.
-    const double qx = parse_double(f[6], where), qy = parse_double(f[7], where), qz = parse_double(f[8], where),
-                 qw = parse_double(f[9], where);
+    const double qx = parse_double(f[6], where), qy = parse_double(f[7], where),
+                 qz = parse_double(f[8], where), qw = parse_double(f[9], where);
     k.q = Eigen::Quaterniond(qw, qx, qy, qz);
     out.push_back(k);
   }
@@ -310,28 +323,30 @@ void write_floor(const fs::path& dir, const FloorData& f) {
   if (f.floor_cloud) check(write_pcd((dir / "floor_cloud.pcd").string(), *f.floor_cloud));
 }
 
-KeyframeId id_from_stem(const fs::path& p) {
-  return parse_u64(p.stem().string(), p.string());
-}
+KeyframeId id_from_stem(const fs::path& p) { return parse_u64(p.stem().string(), p.string()); }
 
 FloorData read_floor(const fs::path& dir) {
   FloorData f;
   f.metadata = metadata_from_yaml(read_text(dir / "metadata.yaml"));
-  f.keyframes = keyframes_from_csv(read_text(dir / "keyframes.csv"), (dir / "keyframes.csv").string());
+  f.keyframes =
+      keyframes_from_csv(read_text(dir / "keyframes.csv"), (dir / "keyframes.csv").string());
   f.edges = edges_from_csv(read_text(dir / "edges.csv"), (dir / "edges.csv").string());
   if (fs::exists(dir / "clouds")) {
     for (const auto& e : fs::directory_iterator(dir / "clouds")) {
-      if (e.path().extension() == ".pcd") f.clouds[id_from_stem(e.path())] = unwrap(read_pcd(e.path().string()));
+      if (e.path().extension() == ".pcd")
+        f.clouds[id_from_stem(e.path())] = unwrap(read_pcd(e.path().string()));
     }
   }
   if (fs::exists(dir / "visual")) {
     for (const auto& e : fs::directory_iterator(dir / "visual")) {
-      if (e.path().extension() == ".bin") f.visual[id_from_stem(e.path())] = unwrap(read_visual_payload(e.path().string()));
+      if (e.path().extension() == ".bin")
+        f.visual[id_from_stem(e.path())] = unwrap(read_visual_payload(e.path().string()));
     }
   }
   if (fs::exists(dir / "lidar")) {
     for (const auto& e : fs::directory_iterator(dir / "lidar")) {
-      if (e.path().extension() == ".bin") f.lidar[id_from_stem(e.path())] = unwrap(read_lidar_payload(e.path().string()));
+      if (e.path().extension() == ".bin")
+        f.lidar[id_from_stem(e.path())] = unwrap(read_lidar_payload(e.path().string()));
     }
   }
   if (fs::exists(dir / "floor_cloud.pcd")) {
@@ -359,7 +374,7 @@ Result<void> write_map(const std::string& dir, const MapData& map) {
     for (const auto& f : map.floors) write_floor(root / floor_dir_name(f.metadata.id), f);
 
     YAML::Emitter out;
-  setup_emitter(out);
+    setup_emitter(out);
     out << YAML::BeginMap;
     out << YAML::Key << "strataslam_version" << YAML::Value << map.strataslam_version;
     out << YAML::Key << "format_version" << YAML::Value << map.format_version;
@@ -403,30 +418,42 @@ Result<MapData> read_map(const std::string& dir) {
     }
     MapData map;
     map.format_version = version;
-    // Maps saved before the rename (0.2.x) carry `easyslam_version`; the format is otherwise the same.
-    const YAML::Node writer = manifest["strataslam_version"].IsDefined() ? manifest["strataslam_version"] : manifest["easyslam_version"];
+    // Maps saved before the rename (0.2.x) carry `easyslam_version`; the format is otherwise the
+    // same.
+    const YAML::Node writer = manifest["strataslam_version"].IsDefined()
+                                  ? manifest["strataslam_version"]
+                                  : manifest["easyslam_version"];
     map.strataslam_version = writer.as<std::string>();
     map.profile_yaml = read_text(root / "profile.yaml");
     map.transitions = transitions_from_yaml(read_text(root / "transitions.yaml"));
-    // A manifest is checked before any floor is read: a hostile or corrupt one listing the same floor 100 000 times
-    // made the reader load it that many times (11.9 GB, then bad_alloc; audit AUD-035).
+    // A manifest is checked before any floor is read: a hostile or corrupt one listing the same
+    // floor 100 000 times made the reader load it that many times (11.9 GB, then bad_alloc; audit
+    // AUD-035).
     const YAML::Node floors = manifest["floors"];
     if (floors.IsDefined() && !floors.IsSequence()) return Error{"manifest: floors must be a list"};
-    if (floors.size() > kMaxFloors) return Error{"manifest: " + std::to_string(floors.size()) + " floors (at most " + std::to_string(kMaxFloors) + ")"};
+    if (floors.size() > kMaxFloors)
+      return Error{"manifest: " + std::to_string(floors.size()) + " floors (at most " +
+                   std::to_string(kMaxFloors) + ")"};
     std::set<std::string> dirs;
     for (const auto& f : floors) {
       const std::string name = f["dir"].as<std::string>();
-      if (name.empty() || name.find('/') != std::string::npos || name.find("..") != std::string::npos) {
+      if (name.empty() || name.find('/') != std::string::npos ||
+          name.find("..") != std::string::npos) {
         return Error{"manifest: invalid floor directory \"" + name + "\""};
       }
-      if (!dirs.insert(name).second) return Error{"manifest: floor directory \"" + name + "\" listed twice"};
+      if (!dirs.insert(name).second)
+        return Error{"manifest: floor directory \"" + name + "\" listed twice"};
     }
     std::set<FloorId> ids;
     for (const auto& f : floors) {
       map.floors.push_back(read_floor(root / f["dir"].as<std::string>()));
       const FloorId id = map.floors.back().metadata.id;
-      if (id < 0) return Error{"floor " + f["dir"].as<std::string>() + ": negative floor id " + std::to_string(id)};
-      if (!ids.insert(id).second) return Error{"floor " + f["dir"].as<std::string>() + ": floor id " + std::to_string(id) + " used twice"};
+      if (id < 0)
+        return Error{"floor " + f["dir"].as<std::string>() + ": negative floor id " +
+                     std::to_string(id)};
+      if (!ids.insert(id).second)
+        return Error{"floor " + f["dir"].as<std::string>() + ": floor id " + std::to_string(id) +
+                     " used twice"};
     }
     return map;
   } catch (const std::exception& e) {

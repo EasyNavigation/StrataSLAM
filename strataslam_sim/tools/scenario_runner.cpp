@@ -1,8 +1,9 @@
 // Runs one scenario with a given seed and thread count and prints one JSON line with every reported
-// metric and the acceptance failures; optionally writes the map. Used by scripts/run_seeds.py for the
-// multi-seed acceptance (ADR-0035) and for bit-exact determinism checks.
-// Usage: strataslam_scenario_runner <Sxx> <seed> [threads] [map_out_dir] [--pixel-sigma px] [--image WxH]
-//   --pixel-sigma / --image change the simulated camera (default 0.5 px, 320x240) for noise studies.
+// metric and the acceptance failures; optionally writes the map. Used by scripts/run_seeds.py for
+// the multi-seed acceptance (ADR-0035) and for bit-exact determinism checks. Usage:
+// strataslam_scenario_runner <Sxx> <seed> [threads] [map_out_dir] [--pixel-sigma px] [--image WxH]
+//   --pixel-sigma / --image change the simulated camera (default 0.5 px, 320x240) for noise
+//   studies.
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -18,7 +19,10 @@ std::string json_escape(const std::string& s) {
   std::string e;
   for (char c : s) {
     if (c == '"' || c == '\\') e += '\\';
-    if (c == '\n') { e += "\\n"; continue; }
+    if (c == '\n') {
+      e += "\\n";
+      continue;
+    }
     e += c;
   }
   return e;
@@ -32,12 +36,17 @@ int main(int argc, char** argv) {
   int width = 0, height = 0;
   for (int i = 1; i < argc; ++i) {
     const std::string a = argv[i];
-    if (a == "--pixel-sigma" && i + 1 < argc) pixel_sigma = std::atof(argv[++i]);
-    else if (a == "--image" && i + 1 < argc && std::sscanf(argv[++i], "%dx%d", &width, &height) == 2) {}
-    else pos.push_back(a);
+    if (a == "--pixel-sigma" && i + 1 < argc)
+      pixel_sigma = std::atof(argv[++i]);
+    else if (a == "--image" && i + 1 < argc &&
+             std::sscanf(argv[++i], "%dx%d", &width, &height) == 2) {
+    } else
+      pos.push_back(a);
   }
   if (pos.size() < 2) {
-    std::fprintf(stderr, "usage: %s <Sxx> <seed> [threads] [map_out_dir] [--pixel-sigma px] [--image WxH]\n", argv[0]);
+    std::fprintf(
+        stderr, "usage: %s <Sxx> <seed> [threads] [map_out_dir] [--pixel-sigma px] [--image WxH]\n",
+        argv[0]);
     return 2;
   }
   const std::string id = pos[0];
@@ -50,13 +59,17 @@ int main(int argc, char** argv) {
     spec.sim.image_height = height;
   }
   const auto r = strataslam_sim::run_scenario(spec);
-  std::printf("{\"scenario\":\"%s\",\"seed\":%llu,\"threads\":%d,\"passed\":%s,\"values\":{", json_escape(id).c_str(),
-              static_cast<unsigned long long>(seed), spec.slam.runtime.threads, r.passed() ? "true" : "false");
+  std::printf("{\"scenario\":\"%s\",\"seed\":%llu,\"threads\":%d,\"passed\":%s,\"values\":{",
+              json_escape(id).c_str(), static_cast<unsigned long long>(seed),
+              spec.slam.runtime.threads, r.passed() ? "true" : "false");
   bool first = true;
   for (const auto& [k, v] : r.report.values) {
     // Python's json module reads NaN/Infinity; a bare "nan" would not parse.
-    if (std::isfinite(v)) std::printf("%s\"%s\":%.10g", first ? "" : ",", json_escape(k).c_str(), v);
-    else std::printf("%s\"%s\":%s", first ? "" : ",", json_escape(k).c_str(), std::isnan(v) ? "NaN" : (v > 0 ? "Infinity" : "-Infinity"));
+    if (std::isfinite(v))
+      std::printf("%s\"%s\":%.10g", first ? "" : ",", json_escape(k).c_str(), v);
+    else
+      std::printf("%s\"%s\":%s", first ? "" : ",", json_escape(k).c_str(),
+                  std::isnan(v) ? "NaN" : (v > 0 ? "Infinity" : "-Infinity"));
     first = false;
   }
   std::printf("},\"failures\":[");

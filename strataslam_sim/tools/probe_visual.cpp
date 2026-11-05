@@ -24,8 +24,13 @@ int main(int argc, char** argv) {
     sf.rgbd = &f;
     const auto r = fe.process(sf);
     const auto gt = sim.gt_pose(f.stamp);
-    const Eigen::Vector3d d = r.valid ? Eigen::Vector3d(r.T_odom_base.translation() - gt.translation()) : Eigen::Vector3d::Zero();
-    std::printf("%4zu kps=%3zu valid=%d state=%d inl=%3d fit=%.2f kf=%d err=%.3f d=(%.3f %.3f %.3f) gt=(%.1f %.1f)\n", i, f.keypoints.size(), r.valid, int(r.quality.state),
-                r.quality.inliers, r.quality.fitness, r.is_keyframe, r.valid ? d.norm() : -1.0, d.x(), d.y(), d.z(), gt.x(), gt.y());
+    const Eigen::Vector3d d = r.valid
+                                  ? Eigen::Vector3d(r.T_odom_base.translation() - gt.translation())
+                                  : Eigen::Vector3d::Zero();
+    std::printf(
+        "%4zu kps=%3zu valid=%d state=%d inl=%3d fit=%.2f kf=%d err=%.3f d=(%.3f %.3f %.3f) "
+        "gt=(%.1f %.1f)\n",
+        i, f.keypoints.size(), r.valid, int(r.quality.state), r.quality.inliers, r.quality.fitness,
+        r.is_keyframe, r.valid ? d.norm() : -1.0, d.x(), d.y(), d.z(), gt.x(), gt.y());
   }
 }

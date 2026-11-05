@@ -1,11 +1,10 @@
 #pragma once
 
+#include <Eigen/Core>
 #include <array>
 #include <cstdint>
 #include <string>
 #include <vector>
-
-#include <Eigen/Core>
 
 #include "strataslam/common/result.hpp"
 

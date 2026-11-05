@@ -1,19 +1,20 @@
 #pragma once
 
+#include <gtsam/geometry/Pose3.h>
+
 #include <functional>
 #include <map>
 #include <string>
 #include <vector>
-
-#include <gtsam/geometry/Pose3.h>
 
 #include "strataslam/common/types.hpp"
 #include "strataslam/geometry/pose4.hpp"
 
 namespace strataslam::eval {
 
-/// A stamp in nanoseconds as TUM seconds with all nine decimals ("1305031102.175304000"): written with 12 significant
-/// digits a 10-digit epoch kept two decimals, and evo matched 10 ms off (+4.5 % of ATE on TUM fr1; audit AUD-049).
+/// A stamp in nanoseconds as TUM seconds with all nine decimals ("1305031102.175304000"): written
+/// with 12 significant digits a 10-digit epoch kept two decimals, and evo matched 10 ms off (+4.5 %
+/// of ATE on TUM fr1; audit AUD-049).
 std::string tum_stamp(int64_t stamp_ns);
 
 struct TimedPose {
@@ -25,7 +26,8 @@ struct TimedPose {
 bool interpolate_pose(const std::vector<TimedPose>& traj, Timestamp stamp, gtsam::Pose3* out);
 
 /// Rigid alignment minimizing sum |T p_i - q_i|^2 (Umeyama without scale).
-gtsam::Pose3 align_se3(const std::vector<Eigen::Vector3d>& p, const std::vector<Eigen::Vector3d>& q);
+gtsam::Pose3 align_se3(const std::vector<Eigen::Vector3d>& p,
+                       const std::vector<Eigen::Vector3d>& q);
 /// Same with the transform restricted to Pose4 (yaw about z + 3D translation).
 Pose4 align_4dof(const std::vector<Eigen::Vector3d>& p, const std::vector<Eigen::Vector3d>& q);
 
@@ -45,7 +47,8 @@ struct RpeResult {
   size_t n = 0;
 };
 /// Relative pose error over a fixed time interval `delta_ns` (no global alignment needed).
-RpeResult rpe(const std::vector<TimedPose>& est, const std::vector<TimedPose>& gt, int64_t delta_ns);
+RpeResult rpe(const std::vector<TimedPose>& est, const std::vector<TimedPose>& gt,
+              int64_t delta_ns);
 
 struct LoopRecord {
   KeyframeId from = 0, to = 0;

@@ -4,11 +4,16 @@ namespace strataslam {
 
 const char* to_string(TransitionType type) {
   switch (type) {
-    case TransitionType::Stairs: return "stairs";
-    case TransitionType::Ramp: return "ramp";
-    case TransitionType::Elevator: return "elevator";
-    case TransitionType::Aerial: return "aerial";
-    case TransitionType::Unknown: return "unknown";
+    case TransitionType::Stairs:
+      return "stairs";
+    case TransitionType::Ramp:
+      return "ramp";
+    case TransitionType::Elevator:
+      return "elevator";
+    case TransitionType::Aerial:
+      return "aerial";
+    case TransitionType::Unknown:
+      return "unknown";
   }
   return "unknown";
 }

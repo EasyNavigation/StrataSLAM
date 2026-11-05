@@ -1,21 +1,22 @@
 #include "strataslam/evaluation/metrics.hpp"
 
+#include <Eigen/Geometry>
+#include <Eigen/SVD>
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <iomanip>
 #include <sstream>
 
-#include <Eigen/Geometry>
-#include <Eigen/SVD>
-
 namespace strataslam::eval {
 
 std::string tum_stamp(int64_t stamp_ns) {
   char buf[32];
   const long long sec = stamp_ns / 1000000000LL, nsec = stamp_ns % 1000000000LL;
-  if (stamp_ns < 0) std::snprintf(buf, sizeof buf, "-%lld.%09lld", -sec, -nsec);
-  else std::snprintf(buf, sizeof buf, "%lld.%09lld", sec, nsec);
+  if (stamp_ns < 0)
+    std::snprintf(buf, sizeof buf, "-%lld.%09lld", -sec, -nsec);
+  else
+    std::snprintf(buf, sizeof buf, "%lld.%09lld", sec, nsec);
   return buf;
 }
 
@@ -42,7 +43,10 @@ bool interpolate_pose(const std::vector<TimedPose>& traj, Timestamp stamp, gtsam
 gtsam::Pose3 align_se3(const std::vector<Vector3d>& p, const std::vector<Vector3d>& q) {
   const double n = static_cast<double>(p.size());
   Vector3d mp = Vector3d::Zero(), mq = Vector3d::Zero();
-  for (size_t i = 0; i < p.size(); ++i) { mp += p[i]; mq += q[i]; }
+  for (size_t i = 0; i < p.size(); ++i) {
+    mp += p[i];
+    mq += q[i];
+  }
   mp /= n;
   mq /= n;
   Matrix3d C = Matrix3d::Zero();
@@ -57,7 +61,10 @@ gtsam::Pose3 align_se3(const std::vector<Vector3d>& p, const std::vector<Vector3
 Pose4 align_4dof(const std::vector<Vector3d>& p, const std::vector<Vector3d>& q) {
   const double n = static_cast<double>(p.size());
   Vector3d mp = Vector3d::Zero(), mq = Vector3d::Zero();
-  for (size_t i = 0; i < p.size(); ++i) { mp += p[i]; mq += q[i]; }
+  for (size_t i = 0; i < p.size(); ++i) {
+    mp += p[i];
+    mq += q[i];
+  }
   mp /= n;
   mq /= n;
   double s_cross = 0, s_dot = 0;
@@ -71,9 +78,10 @@ Pose4 align_4dof(const std::vector<Vector3d>& p, const std::vector<Vector3d>& q)
   return Pose4(theta, Vector3d(mq - R.act(mp)));
 }
 
-// ATE and RPE as defined by J. Sturm, N. Engelhard, F. Endres, W. Burgard, D. Cremers, "A benchmark for the evaluation of
-// RGB-D SLAM systems", IROS 2012. The SE(3) alignment is the closed form of S. Umeyama, "Least-squares estimation of
-// transformation parameters between two point patterns", IEEE TPAMI 13(4), 1991 (without the scale).
+// ATE and RPE as defined by J. Sturm, N. Engelhard, F. Endres, W. Burgard, D. Cremers, "A benchmark
+// for the evaluation of RGB-D SLAM systems", IROS 2012. The SE(3) alignment is the closed form of
+// S. Umeyama, "Least-squares estimation of transformation parameters between two point patterns",
+// IEEE TPAMI 13(4), 1991 (without the scale).
 AteResult ate(const std::vector<TimedPose>& est, const std::vector<TimedPose>& gt, AlignMode mode) {
   std::vector<Vector3d> pe, pg;
   for (const auto& e : est) {
@@ -105,14 +113,16 @@ AteResult ate(const std::vector<TimedPose>& est, const std::vector<TimedPose>& g
   return r;
 }
 
-RpeResult rpe(const std::vector<TimedPose>& est, const std::vector<TimedPose>& gt, int64_t delta_ns) {
+RpeResult rpe(const std::vector<TimedPose>& est, const std::vector<TimedPose>& gt,
+              int64_t delta_ns) {
   RpeResult r;
   double st = 0, sr = 0;
   for (const auto& e0 : est) {
     // Find the estimate pose at e0.stamp + delta (exact stamp match within the estimate list).
     gtsam::Pose3 e1p, g0, g1;
     if (!interpolate_pose(est, e0.stamp + delta_ns, &e1p)) continue;
-    if (!interpolate_pose(gt, e0.stamp, &g0) || !interpolate_pose(gt, e0.stamp + delta_ns, &g1)) continue;
+    if (!interpolate_pose(gt, e0.stamp, &g0) || !interpolate_pose(gt, e0.stamp + delta_ns, &g1))
+      continue;
     const gtsam::Pose3 err = g0.between(g1).between(e0.pose.between(e1p));
     st += err.translation().squaredNorm();
     const double ang = gtsam::Rot3::Logmap(err.rotation()).norm() * 180.0 / M_PI;
@@ -148,7 +158,8 @@ std::map<FloorId, double> floor_height_errors(const std::map<FloorId, std::vecto
   return out;
 }
 
-std::map<FloorId, FusionError> fusion_errors(const std::map<FloorId, Pose4>& est, const std::map<FloorId, Pose4>& truth) {
+std::map<FloorId, FusionError> fusion_errors(const std::map<FloorId, Pose4>& est,
+                                             const std::map<FloorId, Pose4>& truth) {
   std::map<FloorId, FusionError> out;
   for (const auto& [f, e] : est) {
     const auto it = truth.find(f);

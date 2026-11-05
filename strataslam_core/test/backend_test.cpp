@@ -1,8 +1,8 @@
+#include "strataslam/backend/backend.hpp"
+
 #include <gtest/gtest.h>
 
 #include <random>
-
-#include "strataslam/backend/backend.hpp"
 
 using namespace strataslam;
 using Eigen::Vector3d;
@@ -45,7 +45,8 @@ TEST(Backend, LoopClosureReducesDriftAndOptimizationIsConsistent) {
   std::vector<gtsam::Pose3> odom{truth[0]};
   for (size_t i = 1; i < truth.size(); ++i) {
     const gtsam::Pose3 d = truth[i - 1].between(truth[i]);
-    const gtsam::Pose3 dn(d.rotation() * gtsam::Rot3::Yaw(0.004 * n(rng)), Vector3d(d.translation() + Vector3d(0.01 * n(rng), 0.01 * n(rng), 0.0)));
+    const gtsam::Pose3 dn(d.rotation() * gtsam::Rot3::Yaw(0.004 * n(rng)),
+                          Vector3d(d.translation() + Vector3d(0.01 * n(rng), 0.01 * n(rng), 0.0)));
     odom.push_back(odom.back() * dn);
   }
   Backend be(BackendConfig{});
@@ -65,7 +66,9 @@ TEST(Backend, LoopClosureReducesDriftAndOptimizationIsConsistent) {
   be.optimize_all();
   const gtsam::Pose3 last = be.pose_odom(truth.size() - 1);
   const gtsam::Pose3 first = be.pose_odom(0);
-  const double err_after = (first.between(last).translation() - truth.front().between(truth.back()).translation()).norm();
+  const double err_after =
+      (first.between(last).translation() - truth.front().between(truth.back()).translation())
+          .norm();
   EXPECT_LT(err_after, 0.5 * drift_before);
   EXPECT_EQ(be.loops().size(), 1u);
   EXPECT_EQ(be.floor_of(0), 0);
@@ -77,11 +80,15 @@ TEST(Backend, InconsistentLoopIsRejectedByMahalanobisCheck) {
   for (size_t i = 0; i < truth.size(); ++i) {
     std::optional<KeyframeId> from;
     gtsam::Pose3 rel;
-    if (i > 0) { from = i - 1; rel = truth[i - 1].between(truth[i]); }
+    if (i > 0) {
+      from = i - 1;
+      rel = truth[i - 1].between(truth[i]);
+    }
     ASSERT_TRUE(be.add_keyframe(kf(i, 0, truth[i]), from, rel, std::nullopt).ok());
   }
   // A loop claiming that the last pose is 3 m away from where odometry puts it.
-  const gtsam::Pose3 bad = truth.front().between(truth.back()) * gtsam::Pose3(gtsam::Rot3(), Vector3d(3, 0, 0));
+  const gtsam::Pose3 bad =
+      truth.front().between(truth.back()) * gtsam::Pose3(gtsam::Rot3(), Vector3d(3, 0, 0));
   const auto r = be.add_loop(0, truth.size() - 1, bad);
   ASSERT_FALSE(r.ok());
   EXPECT_NE(r.error().message.find("Mahalanobis"), std::string::npos);
@@ -94,7 +101,9 @@ TEST(BackendGating, LoopBetweenDifferentFloorsIsRejected) {
   Backend be(BackendConfig{});
   const gtsam::Pose3 p0(gtsam::Rot3(), Vector3d(0, 0, 1.2));
   ASSERT_TRUE(be.add_keyframe(kf(0, 0, p0), std::nullopt, {}, std::nullopt).ok());
-  ASSERT_TRUE(be.add_keyframe(kf(1, 0, p0 * gtsam::Pose3(gtsam::Rot3(), Vector3d(1, 0, 0))), 0, gtsam::Pose3(gtsam::Rot3(), Vector3d(1, 0, 0)), std::nullopt).ok());
+  ASSERT_TRUE(be.add_keyframe(kf(1, 0, p0 * gtsam::Pose3(gtsam::Rot3(), Vector3d(1, 0, 0))), 0,
+                              gtsam::Pose3(gtsam::Rot3(), Vector3d(1, 0, 0)), std::nullopt)
+                  .ok());
   // Floor 1 has an identical-looking keyframe at the same xy, 3 m higher.
   const gtsam::Pose3 q0(gtsam::Rot3(), Vector3d(0, 0, 4.2));
   ASSERT_TRUE(be.add_keyframe(kf(2, 1, q0), std::nullopt, {}, std::nullopt).ok());
@@ -146,7 +155,8 @@ TEST(BackendGating, DebugFlagRemovesTheGateForTheNegativeControl) {
   const gtsam::Pose3 p0(gtsam::Rot3(), Vector3d(0, 0, 1.2));
   ASSERT_TRUE(be.add_keyframe(kf(0, 0, p0), std::nullopt, {}, std::nullopt).ok());
   ASSERT_TRUE(be.add_keyframe(kf(1, 1, p0 * gtsam::Pose3(gtsam::Rot3(), Vector3d(0, 0, 3))), 0,
-                              gtsam::Pose3(gtsam::Rot3(), Vector3d(0, 0, 3)), std::nullopt).ok());
+                              gtsam::Pose3(gtsam::Rot3(), Vector3d(0, 0, 3)), std::nullopt)
+                  .ok());
   EXPECT_TRUE(be.add_loop(0, 1, gtsam::Pose3()).ok());  // claims the two floors are the same place
   ASSERT_EQ(be.loops().size(), 1u);
   EXPECT_NE(be.loops()[0].from_floor, be.loops()[0].to_floor);  // ground-truth floors still differ
@@ -167,9 +177,10 @@ TEST(Backend, NewSessionIsBridgedWithAWeakFactor) {
   EXPECT_NEAR(be.pose_odom(1).x(), 1.0, 0.05);
 }
 
-// The barometer and the gravity prior are wired into the floor graph with the right sign: with an uncertain
-// (degraded) odometry step, the optimized height follows the barometric height difference and the optimized
-// attitude follows the measured up direction. A sign error or a missing factor fails these (audit AUD-009..011).
+// The barometer and the gravity prior are wired into the floor graph with the right sign: with an
+// uncertain (degraded) odometry step, the optimized height follows the barometric height difference
+// and the optimized attitude follows the measured up direction. A sign error or a missing factor
+// fails these (audit AUD-009..011).
 TEST(Backend, BarometricHeightDifferenceSetsTheHeightWhenTheOdometryIsUncertain) {
   BackendConfig cfg;  // odometry 0.02 m (x10 when degraded = 0.2 m), barometer 0.10 m
   Backend b(cfg);
@@ -186,7 +197,8 @@ TEST(Backend, BarometricHeightDifferenceSetsTheHeightWhenTheOdometryIsUncertain)
   const double dz = b.pose_odom(1).z() - b.pose_odom(0).z();
   // Information-weighted: 1 m x (1/0.1^2) / (1/0.1^2 + 1/0.2^2) = 0.8 m.
   EXPECT_NEAR(dz, 0.8, 0.05);
-  // A keyframe without a barometric height gets no barometric factor: the odometry alone sets its height.
+  // A keyframe without a barometric height gets no barometric factor: the odometry alone sets its
+  // height.
   Backend nb(cfg);
   KeyframeInput a2 = a, c2 = c;
   c2.baro_height.reset();
@@ -199,7 +211,8 @@ TEST(Backend, BarometricHeightDifferenceSetsTheHeightWhenTheOdometryIsUncertain)
 TEST(Backend, GravityPriorLevelsAKeyframeTheOdometryTilted) {
   BackendConfig cfg;  // odometry 0.004 rad (x10 when degraded = 0.04 rad), gravity 0.02 rad
   Backend b(cfg);
-  ASSERT_TRUE(b.add_keyframe(kf(0, 0, gtsam::Pose3()), std::nullopt, gtsam::Pose3(), std::nullopt).ok());
+  ASSERT_TRUE(
+      b.add_keyframe(kf(0, 0, gtsam::Pose3()), std::nullopt, gtsam::Pose3(), std::nullopt).ok());
   // The odometry says the robot rolled 0.1 rad; the IMU, quasi-static, says it is level.
   const gtsam::Pose3 step(gtsam::Rot3::Roll(0.1), Vector3d(1, 0, 0));
   KeyframeInput c = kf(1, 0, step);
@@ -210,9 +223,11 @@ TEST(Backend, GravityPriorLevelsAKeyframeTheOdometryTilted) {
   const double roll = b.pose_odom(1).rotation().roll();
   // Information-weighted: 0.1 x (1/0.04^2) / (1/0.04^2 + 1/0.02^2) = 0.02 rad.
   EXPECT_NEAR(roll, 0.02, 0.01);
-  // The same with the up direction of a body rolled by 0.1 rad: the odometry is confirmed, not pulled.
+  // The same with the up direction of a body rolled by 0.1 rad: the odometry is confirmed, not
+  // pulled.
   Backend t(cfg);
-  ASSERT_TRUE(t.add_keyframe(kf(0, 0, gtsam::Pose3()), std::nullopt, gtsam::Pose3(), std::nullopt).ok());
+  ASSERT_TRUE(
+      t.add_keyframe(kf(0, 0, gtsam::Pose3()), std::nullopt, gtsam::Pose3(), std::nullopt).ok());
   KeyframeInput d = c;
   d.up_body = gtsam::Rot3::Roll(0.1).unrotate(gtsam::Point3(0, 0, 1));
   ASSERT_TRUE(t.add_keyframe(d, KeyframeId{0}, step, std::nullopt).ok());
