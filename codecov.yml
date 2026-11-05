@@ -9,3 +9,9 @@ coverage:
       default:
         informational: true
 comment: false
+# Line coverage, as the gate measures it: a line that ran counts as covered. gcov gives almost every C++ line that calls
+# a function a branch (the exception path, never taken), which Codecov would count as a partial and not a hit: 37 %
+# instead of the gate's 73 % on the same report.
+parsers:
+  cobertura:
+    partials_as_hits: true
