@@ -99,8 +99,10 @@ set_target_properties(strataslam_image_io PROPERTIES EXPORT_NAME image_io POSITI
 target_include_directories(strataslam_image_io PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
-# The header uses GrayImage, whose measurements header includes Eigen.
-target_link_libraries(strataslam_image_io PUBLIC Eigen3::Eigen PNG::PNG JPEG::JPEG)
+# The header uses GrayImage, whose measurements header includes Eigen and GTSAM: the same GTSAM as the core's (without
+# it the target compiled against whatever GTSAM was on the default include path, or failed where there was none:
+# the ros:jazzy container, whose GTSAM is only under /opt/ros).
+target_link_libraries(strataslam_image_io PUBLIC Eigen3::Eigen gtsam PNG::PNG JPEG::JPEG)
 target_compile_options(strataslam_image_io PRIVATE -Wall -Wextra -Werror)
 
 add_executable(strataslam_write_sample_clouds tools/write_sample_clouds.cpp)

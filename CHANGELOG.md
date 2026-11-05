@@ -91,6 +91,9 @@
 - `docs/user/install.md` rewritten and tested; `docs/data_format.md` documents `fused/`, the optional payload folders and the integrity checks.
 
 ### Fixed
+- `strataslam::image_io` declares GTSAM, which its header includes: it compiled against whatever GTSAM was on the
+  default include path (Ubuntu's, next to the core's from ROS) and failed in the `ros:jazzy` container. The CI builds
+  with two compile jobs: `-j` alone ran its runners out of memory.
 - After the independent audit of 2026-11-04 (`audit/AUDIT_REPORT.md`; every change, with its test, in
   `audit/FIXES.md`): S11 lost its third floor in 4 of 20 seeds (the IMU stopped watching for an elevator during a
   long tracking loss); a new level was placed at the drifted absolute altitude instead of the measured climb (S03 2 of
