@@ -519,13 +519,20 @@ void find_duplicate_keys(const YAML::Node& n, const std::string& path,
     std::set<std::string> seen;
     for (const auto& kv : n) {
       const std::string key = kv.first.IsScalar() ? kv.first.Scalar() : std::string("?");
-      const std::string child = path.empty() ? key : path + "." + key;
+      std::string child = path;
+      if (!child.empty()) child += '.';
+      child += key;
       if (!seen.insert(key).second) dups->push_back(child);
       find_duplicate_keys(kv.second, child, dups);
     }
   } else if (n.IsSequence()) {
-    for (size_t i = 0; i < n.size(); ++i)
-      find_duplicate_keys(n[i], path + "[" + std::to_string(i) + "]", dups);
+    for (size_t i = 0; i < n.size(); ++i) {
+      std::string item = path;
+      item += '[';
+      item += std::to_string(i);
+      item += ']';
+      find_duplicate_keys(n[i], item, dups);
+    }
   }
 }
 
