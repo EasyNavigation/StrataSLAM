@@ -1,0 +1,40 @@
+# Robotnik Summit XL with a 3D LiDAR only (the rosbags `prueba_00` and `prueba_03`, and the Gazebo parking garage).
+# No IMU and no barometer: with a ground robot the IMU impulses and vibration are not handled yet (ADR-0032), and the
+# height of each floor is measured by the LiDAR odometry. The floors of the building are not a multiple of a known
+# height, so the floor height prior is off: a plateau after a climb is a level (ADR-0028).
+#
+# For a run that repeats exactly (offline processing of a bag), add under `runtime:` `threads: 1`:
+#   ros2 launch strataslam_ros strataslam.launch.py profile:=summit_lidar.yaml bag:=/path/to/bag
+strataslam:
+  version: 1
+
+robot:
+  platform: ground
+  base_frame: base_link
+  odom_frame: odom
+  map_frame: map
+
+sensors:
+  lidar:
+    enabled: true
+    topic: /front_laser/points
+    type: 3d
+    min_range: 0.8
+    max_range: 60.0
+    deskew: auto
+  imu:
+    enabled: false
+  barometer:
+    enabled: false
+
+multifloor:
+  mode: floors  # floors: a map per level | single: one map, heights kept | planar: one flat map (ground robots)
+  floor_height_prior: null  # the spacing of the floors is not known: no height prior between them
+
+fusion:
+  colorize_cloud: false
+
+output:
+  voxel_size: 0.1
+  publish_tf: false
+

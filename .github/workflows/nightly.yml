@@ -1,0 +1,50 @@
+name: nightly
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+jobs:
+  results:
+    # Every published result regenerated with one command (scripts/make_results.sh): scenarios on seed 42
+    # and on seeds 1001-1020, camera-noise study, fusion ablations, TUM fr1/fr2, KITTI, benchmarks.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - run: scripts/install_deps.sh core && sudo apt-get install -y unzip
+      - run: cmake -S superbuild -B build -DCMAKE_BUILD_TYPE=Release
+      - run: cmake --build build -j
+      - run: scripts/download_datasets.sh data
+      - run: scripts/make_results.sh build data results 4
+      # Regression gate of the multi-seed acceptance (ADR-0035): no scenario may pass on fewer seeds than
+      # the baseline recorded in docs/seeds_baseline.json.
+      - run: |
+          python3 - <<'PY'
+          import json, sys
+          base = json.load(open("docs/seeds_baseline.json")); now = json.load(open("results/seeds_baseline.json"))
+          worse = [f"{s}: {now.get(s, 0):.0%} < {r:.0%}" for s, r in base.items() if now.get(s, 0) + 1e-9 < r]
+          print("\n".join(worse) or "no scenario below its baseline"); sys.exit(1 if worse else 0)
+          PY
+      # Real data: an ATE more than 10 % above docs/real_data_baseline.json is a regression (spec 12.6).
+      - run: |
+          python3 - <<'PY'
+          import json, sys
+          from pathlib import Path
+          base = json.load(open("docs/real_data_baseline.json"))
+          now = {Path(r["sequence"]).name: r["ate_rmse"] for r in map(json.loads, open("results/tum.jsonl")) }
+          now["kitti_2011_09_30_drive_0027"] = json.load(open("results/kitti.json"))["ate_rmse_m"]
+          worse = [f"{k}: {now.get(k, float('inf')):.4f} > 1.1 x {v:.4f}" for k, v in base.items() if not now.get(k, float("inf")) <= 1.1 * v]
+          print("\n".join(worse) or "real-data ATE within 10 % of the baseline"); sys.exit(1 if worse else 0)
+          PY
+      # Fusion ablation (spec 12.5): every formulation converges, no NaN, on S07 and S11 over 20 seeds.
+      - run: python3 strataslam_tools/bench/fusion_ablation.py --input results/ablation_scenarios.jsonl
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nightly-results
+          # The KITTI ground truth (CC BY-NC-SA 3.0, derived from its OXTS data) is not redistributed.
+          path: |
+            results
+            !results/kitti_0027*.gt.tum

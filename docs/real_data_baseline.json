@@ -1,0 +1,5 @@
+{
+  "rgbd_dataset_freiburg1_xyz": 0.01427,
+  "rgbd_dataset_freiburg2_xyz": 0.01519,
+  "kitti_2011_09_30_drive_0027": 0.77
+}

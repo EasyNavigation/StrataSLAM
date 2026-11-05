@@ -1,0 +1,9 @@
+{
+  "title": "StrataSLAM: open multi-floor 3D SLAM for ROS 2",
+  "description": "Open multi-floor 3D SLAM for ROS 2: one point cloud per floor and a global one, without floors collapsing into each other. RGB-D camera, 3D LiDAR or both, with IMU, barometer and external odometry. One YAML profile, a setup checker (strataslam doctor) and offline floor fusion in SE(2)xR.",
+  "upload_type": "software",
+  "license": "Apache-2.0",
+  "creators": [{"name": "Guerrero, José Miguel", "affiliation": "Universidad Rey Juan Carlos"}],
+  "keywords": ["SLAM", "multi-floor", "ROS 2", "LiDAR", "RGB-D", "Lie groups", "pose graph"],
+  "access_right": "open"
+}

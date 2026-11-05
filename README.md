@@ -1,0 +1,81 @@
+# StrataSLAM
+
+Open multi-floor 3D SLAM for ROS 2: **one point cloud per floor and a global one, without the floors
+collapsing into each other.** RGB-D camera, 3D LiDAR or both; IMU, barometer and external odometry are
+optional; everything is configured with one YAML profile. `strataslam doctor` checks your setup before you
+map, and an offline tool fuses the floors, even without any visual overlap, in a gravity-aligned
+4-degree-of-freedom group (SE(2)×ℝ).
+
+Status: **v0.2.0**. Licensed under Apache-2.0; third-party dependencies are in [THIRD_PARTY.md](THIRD_PARTY.md).
+
+## Why
+
+When a robot changes floor (elevator, stairs, ramp, drone) current SLAM systems lose the height (an
+elevator cabin moves with the sensor), close false loops between identical-looking floors, or reset the
+origin in a dark stairwell. StrataSLAM keeps **one submap per floor** (no online code path accepts a loop
+between two floors), detects and classifies each transition, and fuses the floors offline with the
+transition constraints, the barometer, structural anchors and a weak floor-height prior.
+
+## Quick start
+
+```bash
+# ROS 2 Jazzy, Ubuntu 24.04. The first build downloads small_gicp (pinned commit): it needs network.
+mkdir -p ~/strataslam_ws/src && cd ~/strataslam_ws/src && git clone <this repository> strataslam && cd ..
+source /opt/ros/jazzy/setup.bash
+src/strataslam/scripts/install_deps.sh ros          # apt: GTSAM, Eigen, yaml-cpp, OpenCV, libpng, libjpeg, pybind11, GTest
+colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release && source install/setup.bash
+P=$(ros2 pkg prefix strataslam_ros)/share/strataslam_ros/profiles
+strataslam doctor $P/handheld_rgbd.yaml          # check sensors, TF, sync
+strataslam map   $P/handheld_rgbd.yaml           # map (ros2 launch ...)
+strataslam fuse  ~/strataslam_maps/<run> --anchors anchors.yaml        # fuse the floors
+strataslam export ~/strataslam_maps/<run>                              # PCD; --format ply for PLY
+```
+
+The user guide is in [docs/user/](docs/user/README.md); the on-disk map format in
+[docs/data_format.md](docs/data_format.md); the design decisions (and the deviations from the plan, each with
+its reason) in [docs/decisions.md](docs/decisions.md).
+
+## Layout
+
+| Directory | Contents |
+| --- | --- |
+| `strataslam_core/` | ROS-free C++ library: config, Pose4 and Lie-group math, frontends, place recognition, floor manager, backend, mapping, I/O, fusion, metrics |
+| `strataslam_sim/` | synthetic multi-floor buildings (stairs, elevator, ramp, atrium), trajectories, sensors with exact ground truth, scenarios S01-S14, benchmarks |
+| `strataslam_msgs/`, `strataslam_ros/` | messages/services, the node, launch file, example profiles, simulator-bag exporter |
+| `strataslam_tools/` | Python: the `strataslam` command line, doctor, evaluation, export, fusion ablation |
+
+## Build and test
+
+Installation, for users and from a clean machine: [docs/user/install.md](docs/user/install.md). For development:
+
+```bash
+# Core and simulator, no ROS needed (scripts/install_deps.sh core installs the system packages):
+cmake -S superbuild -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j
+ctest --test-dir build --output-on-failure -j4                 # unit tests + scenarios S01-S14 (seed 42)
+python3 scripts/run_seeds.py --runner build/strataslam_sim/strataslam_scenario_runner --seeds 1001-1020   # 20 seeds
+# Python (lint and types as in CI):
+pip install -e "strataslam_tools[dev]"
+ruff check . && (cd strataslam_tools && mypy strataslam_tools)
+STRATASLAM_SAMPLE_BIN=build/strataslam_core/strataslam_write_sample_clouds STRATASLAM_EVAL_BIN=build/strataslam_core/strataslam_eval_tool pytest strataslam_tools/tests
+python3 scripts/license_audit.py --ldd build/strataslam_core/libstrataslam_core.so && python3 scripts/check_links.py
+# ROS 2, from a workspace with this repository in src/:
+colcon build && colcon test
+# The install guide itself, in clean Docker containers:
+scripts/check_install.sh core && scripts/check_install.sh ros
+```
+
+Sanitizers: `-DSTRATASLAM_ENABLE_SANITIZERS=ON`. Coverage: `-DSTRATASLAM_ENABLE_COVERAGE=ON` then
+`scripts/check_coverage.py`. Lint: `run-clang-tidy -p build` (`.clang-tidy`). Benchmarks:
+`build/strataslam_sim/strataslam_benchmarks`.
+
+## Results
+
+[docs/results.md](docs/results.md): the fourteen synthetic scenarios on 20 seeds (pass rate, mean, deviation and worst
+case of every criterion, each failure with its seed), a camera-noise study, the fusion ablation, TUM RGB-D fr1/fr2 and
+a KITTI drive. [docs/scenarios.md](docs/scenarios.md) has the full report of every scenario on the CI seed and
+[docs/benchmarks.md](docs/benchmarks.md) the performance figures. Everything is regenerated with
+`scripts/make_results.sh` (ADR-0035).
+
+## Citing
+
+See [CITATION.cff](CITATION.cff).

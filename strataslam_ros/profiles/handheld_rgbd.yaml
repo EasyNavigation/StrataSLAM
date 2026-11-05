@@ -1,0 +1,79 @@
+# Hand-held Intel RealSense D435i: RGB-D camera + IMU. A template: every option of a profile is here, active when
+# this example uses it, commented with its default otherwise. Reference: docs/user/profiles.md.
+strataslam:
+  version: 1
+
+robot:
+  platform: handheld  # handheld | ground | aerial
+  base_frame: base_link
+  odom_frame: odom
+  map_frame: map
+
+sensors:
+  # A sensor section that is present is enabled unless it says `enabled: false`; an absent one is off.
+  camera:
+    enabled: true
+    # RealSense D435i with realsense2_camera 4.x, launched with the aligned depth and the IMU on:
+    #   ros2 launch realsense2_camera rs_launch.py camera_namespace:=/ align_depth.enable:=true enable_gyro:=true
+    #     enable_accel:=true unite_imu_method:=2
+    # (the driver's defaults put the topics under /camera/camera/ and leave the aligned depth and the IMU off).
+    rgb_topic: /camera/color/image_raw
+    depth_topic: /camera/aligned_depth_to_color/image_raw  # depth registered to the colour image
+    info_topic: /camera/color/camera_info
+    depth_min: 0.3  # m
+    depth_max: 6.0  # m
+    features: orb  # orb (xfeat is not built in this version)
+    max_features: 1000
+  lidar:
+    enabled: false
+    # topic: /points  # sensor_msgs/PointCloud2
+    # type: 3d  # only 3d in this version
+    # min_range: 0.5  # m
+    # max_range: 50.0  # m
+    # deskew: auto  # auto | true | false (auto: when the points carry their time)
+  imu:
+    enabled: true
+    topic: /camera/imu  # the D435i's BMI055 (unite_imu_method:=2 above)
+    # floor_changes: true  # false: the IMU gives gravity only, not elevators (a vibrating robot base)
+    noise:  # nominal BMI055 values; measure yours with `strataslam imu-noise` (docs/user/imu-noise.md)
+      accel_noise_density: 2.0e-3  # m/s^2/sqrt(Hz)
+      gyro_noise_density: 1.7e-4  # rad/s/sqrt(Hz)
+      accel_random_walk: 3.0e-3  # m/s^3/sqrt(Hz)
+      gyro_random_walk: 2.0e-5  # rad/s^2/sqrt(Hz)
+  barometer:
+    enabled: false
+    # topic: /pressure  # sensor_msgs/FluidPressure
+    # reference_topic: /pressure_base  # a fixed base station: differential altitude, weather cancelled
+    # temperature_k: 288.15
+    # settle_time_s: 2.0  # low-pass filter settling time
+  external_odometry:
+    enabled: false
+    # Give a topic or a frame, not both. It is the motion prior of the camera tracking (wheel odometry).
+    # topic: /odom  # nav_msgs/Odometry
+    # frame: odom  # or the TF frame -> robot.base_frame
+
+fusion:
+  odometry_from: auto  # auto | camera | lidar (auto: the LiDAR if enabled, else the camera)
+  loop_closure_from: auto  # auto | camera | lidar | both
+  colorize_cloud: true
+  vocabulary: default  # camera loop closures: `default` is the one shipped (TUM RGB-D offices); your own:
+  #   `strataslam vocab train`, then its path (relative to this file)
+
+multifloor:
+  mode: floors  # floors: a map per level | single: one map, heights kept | planar: one flat map (ground robots)
+  floor_height_prior: 3.0  # m between floors, or null if unknown
+  split_on_tracking_loss: true
+  tracking_loss_timeout: 2.0  # s
+  min_vertical_change: 1.5  # m
+
+output:
+  map_dir: ~/strataslam_maps/{date}_{time}
+  voxel_size: 0.05  # m
+  keyframe_translation: 0.25  # m
+  keyframe_rotation_deg: 10.0
+  publish_tf: true  # map -> floor_<k> -> odom (REP-105); false when another node owns map -> odom (a
+  #   localizer such as AMCL): then only floor_<k> -> strataslam_odom
+
+runtime:
+  seed: 42
+  threads: 0  # 0: automatic; 1: bit-exact runs

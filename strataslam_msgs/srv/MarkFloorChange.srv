@@ -1,0 +1,7 @@
+# Tell strataslam that the robot has just changed floor.
+string transition_type     # stairs | ramp | elevator | aerial | unknown (empty = unknown)
+int32 target_floor         # existing floor id, or -1 to open the next one
+---
+bool success
+string message
+int32 floor                # active floor after the call

@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>strataslam_sim</name>
+  <version>0.2.0</version>
+  <description>Synthetic multi-floor building, trajectories and sensors with exact ground truth.</description>
+  <maintainer email="josemiguel.guerrero@urjc.es">José Miguel Guerrero</maintainer>
+  <license>Apache-2.0</license>
+  <buildtool_depend>cmake</buildtool_depend>
+  <depend>strataslam_core</depend>
+  <test_depend>gtest</test_depend>
+  <export>
+    <build_type>cmake</build_type>
+  </export>
+</package>

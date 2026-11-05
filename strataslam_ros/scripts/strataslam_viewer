@@ -1,0 +1,5 @@
+#!/usr/bin/env python3
+"""Live view of a StrataSLAM run in Rerun (launch argument viewer:=true)."""
+from strataslam_ros.viewer import main
+
+main()

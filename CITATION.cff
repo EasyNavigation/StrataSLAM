@@ -1,0 +1,12 @@
+cff-version: 1.2.0
+message: "If you use StrataSLAM, please cite it using these metadata."
+title: "StrataSLAM: open multi-floor 3D SLAM for ROS 2"
+version: 0.2.0
+license: Apache-2.0
+authors:
+  - family-names: Guerrero
+    given-names: José Miguel
+    email: josemiguel.guerrero@urjc.es
+date-released: 2026-11-02
+repository-code: "https://github.com/EasyNavigation/StrataSLAM"
+# TODO(decision): add `doi:` after archiving the tagged release on Zenodo (see docs/release_checklist.md).

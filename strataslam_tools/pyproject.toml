@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "strataslam_tools"
+version = "0.2.0"
+description = "Command-line tools, evaluation and export for StrataSLAM"
+license = { text = "Apache-2.0" }
+dependencies = ["numpy>=1.26", "pyyaml>=6.0"]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.4", "open3d>=0.18", "ruff==0.17.3", "mypy==1.9.0", "types-PyYAML>=6.0"]
+plot = ["matplotlib>=3.6"]
+# Live view (strataslam_tools.live_view, launch argument viewer:=true). ROS 2 Jazzy ships numpy 1.x: rerun-sdk 0.22.1.
+viewer = ["rerun-sdk>=0.22"]
+
+[project.scripts]
+strataslam = "strataslam_tools.cli:main"
+
+[tool.setuptools]
+packages = ["strataslam_tools"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.mypy]
+strict = true
+# Tests are not type-annotated; strict checking covers the shipped package and bench scripts.
+exclude = ["tests/"]
+
+[[tool.mypy.overrides]]
+# ROS 2 Python packages are only present in a sourced ROS environment; they are imported lazily.
+module = ["rclpy.*", "rosbag2_py.*", "rosidl_runtime_py.*", "tf2_msgs.*", "sensor_msgs.*", "open3d.*", "setuptools.*",
+          "matplotlib.*", "rerun", "rerun.*", "strataslam_ros", "ament_index_python.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# The ROS 2 Python API (rclpy, rosbag2_py) is installed without type annotations: calling it is not an error in the
+# modules that talk to ROS (audit AUD-099; without ROS the imports are simply missing).
+module = ["strataslam_tools.doctor"]
+disallow_untyped_calls = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

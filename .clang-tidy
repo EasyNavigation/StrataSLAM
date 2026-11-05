@@ -1,0 +1,19 @@
+# clang-tidy for the core (CI job lint-cpp: zero warnings). ADR-0037 explains the two exclusions:
+# easily-swappable-parameters is an API-design heuristic, enum-size would change the public ABI of
+# enums that are never stored in bulk, and integer -> floating-point conversions
+# (nanosecond timestamps times 1e-9, counts in means) are intended throughout the numeric code; every
+# other narrowing (floating -> integer, unsigned -> signed) is checked.
+Checks: >
+  -*,
+  bugprone-*,
+  performance-*,
+  clang-analyzer-*,
+  -bugprone-easily-swappable-parameters,
+  -performance-enum-size
+WarningsAsErrors: '*'
+HeaderFilterRegex: 'strataslam_core/(include|src)/.*'
+CheckOptions:
+  - key: bugprone-narrowing-conversions.WarnOnIntegerToFloatingPointNarrowingConversion
+    value: false
+  - key: bugprone-narrowing-conversions.WarnOnIntegerNarrowingConversion
+    value: true

@@ -1,0 +1,42 @@
+# PAL Tiago: torso RoboSense LiDAR (odometry) + head RGB-D camera (loop closures verified by the LiDAR, colours).
+# The depth image is registered to the colour camera, whose camera_info carries K (the depth one has NaN).
+strataslam:
+  version: 1
+robot:
+  platform: ground
+  base_frame: base_footprint
+  odom_frame: odom
+  map_frame: map
+sensors:
+  camera:
+    enabled: true
+    rgb_topic: /head_front_camera/rgb/image_raw
+    depth_topic: /head_front_camera/depth/image_raw
+    info_topic: /head_front_camera/rgb/camera_info
+    depth_min: 0.4
+    depth_max: 6.0
+    features: orb
+    max_features: 1000
+  lidar:
+    enabled: true
+    topic: /rslidar_points
+    type: 3d
+    min_range: 0.8
+    max_range: 60.0
+    deskew: auto
+multifloor:
+  mode: floors  # floors: a map per level | single: one map, heights kept | planar: one flat map (ground robots)
+  floor_height_prior: null  # the spacing of the floors is not known: no height prior between them
+fusion:
+  # The LiDAR tracks the motion (what `auto` picks when both are enabled); the camera does not track.
+  odometry_from: lidar
+  # Both: the robot comes back along the corridor facing the other way, which the camera does not
+  # recognise and the 360-degree LiDAR does.
+  loop_closure_from: both
+  colorize_cloud: true
+  vocabulary: default  # the camera's loop closures (the one shipped, TUM RGB-D offices)
+output:
+  map_dir: ~/strataslam_maps/tiago_lidar_camera_{date}_{time}
+  voxel_size: 0.05
+runtime:
+  threads: 1
