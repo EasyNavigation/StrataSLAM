@@ -12,7 +12,7 @@
   `strataslam doctor --preset-dir` and the node's `preset_dir` parameter are gone.
 
 ### Added
-- The project logo and the CI, coverage (Codecov), licence, ROS 2 and C++ badges in the README (`docs/media/logo.png`); `scripts/check_links.py` also checks the `src` and `href` of HTML tags.
+- README: how to run it with ROS 2 (a real robot, a recorded rosbag, next to a navigation stack). The project logo and the CI, coverage (Codecov), licence, ROS 2 and C++ badges in the README (`docs/media/logo.png`); `scripts/check_links.py` also checks the `src` and `href` of HTML tags.
 - One template profile per kind of robot (ADR-0056): `ground_camera`, `ground_lidar`, `ground_lidar_camera_imu`,
   `handheld_camera_imu`, `aerial_lidar_camera_imu` (and `handheld_oak_d_lite`). The simulator bag exporter writes the
   wheel odometry when the profile enables it.
@@ -95,7 +95,7 @@
   default include path (Ubuntu's, next to the core's from ROS) and failed in the `ros:jazzy` container. The CI builds
   with two compile jobs: `-j` alone ran its runners out of memory.
 - clang-tidy's `performance-inefficient-string-concatenation` in `find_duplicate_keys` (the CI's `lint-cpp`).
-- The CI's Python job installs ROS 2 Jazzy's numpy (1.26.4): mypy 1.9 cannot read numpy 2's stubs.
+- The CI's Python job installs ROS 2 Jazzy's numpy (1.26.4), since mypy 1.9 cannot read numpy 2's stubs, and rerun-sdk 0.22.1 for the live view's tests; it finds the core's executables, which the artifact keeps in subfolders.
 - After the independent audit of 2026-11-04 (`audit/AUDIT_REPORT.md`; every change, with its test, in
   `audit/FIXES.md`): S11 lost its third floor in 4 of 20 seeds (the IMU stopped watching for an elevator during a
   long tracking loss); a new level was placed at the drifted absolute altitude instead of the measured climb (S03 2 of

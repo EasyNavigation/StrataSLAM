@@ -33,15 +33,59 @@ transition constraints, the barometer, structural anchors and a weak floor-heigh
 
 ```bash
 # ROS 2 Jazzy, Ubuntu 24.04. The first build downloads small_gicp (pinned commit): it needs network.
-mkdir -p ~/strataslam_ws/src && cd ~/strataslam_ws/src && git clone <this repository> strataslam && cd ..
+mkdir -p ~/strataslam_ws/src && cd ~/strataslam_ws/src
+git clone https://github.com/EasyNavigation/StrataSLAM.git strataslam && cd ..
 source /opt/ros/jazzy/setup.bash
 src/strataslam/scripts/install_deps.sh ros          # apt: GTSAM, Eigen, yaml-cpp, OpenCV, libpng, libjpeg, pybind11, GTest
 colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release && source install/setup.bash
+```
+
+No sensor at hand? [A first map, start to finish](docs/user/mapping.md#a-first-map-start-to-finish-simulated-building)
+maps a simulated two-storey building from a rosbag the simulator writes.
+
+## Running with ROS 2
+
+Everything is configured by one YAML profile. Copy the template of your kind of robot and set its topics and frames
+([profiles](docs/user/profiles.md)): `ground_camera`, `ground_lidar`, `ground_lidar_camera_imu`,
+`handheld_camera_imu` or `aerial_lidar_camera_imu`.
+
+```bash
 P=$(ros2 pkg prefix strataslam_ros)/share/strataslam_ros/profiles
-strataslam doctor $P/handheld_camera_imu.yaml          # check sensors, TF, sync
-strataslam map   $P/handheld_camera_imu.yaml           # map (ros2 launch ...)
-strataslam fuse  ~/strataslam_maps/<run> --anchors anchors.yaml        # fuse the floors
-strataslam export ~/strataslam_maps/<run>                              # PCD; --format ply for PLY
+cp $P/ground_lidar.yaml ~/my_robot.yaml      # then edit topics and frames
+```
+
+**Mapping with a real robot.** With the robot's drivers running:
+
+```bash
+strataslam doctor ~/my_robot.yaml            # checks topics, rates, TF and sync against the profile
+ros2 launch strataslam_ros strataslam.launch.py profile:=$HOME/my_robot.yaml viewer:=true
+# drive the robot around, across floors if you like; then save the map (Ctrl+C saves it too):
+ros2 service call /strataslam_node/save_map std_srvs/srv/Trigger
+```
+
+**From a recorded rosbag.** Record the topics of the profile with TF, then process the bag offline: every message
+in order, none dropped, so a run repeats exactly (with `runtime: {threads: 1}` bit for bit). The map is saved when the
+bag ends.
+
+```bash
+ros2 bag record -o my_run /points /tf /tf_static   # the profile's topics, here ground_lidar's
+strataslam doctor ~/my_robot.yaml --bag my_run
+ros2 launch strataslam_ros strataslam.launch.py profile:=$HOME/my_robot.yaml bag:=my_run viewer:=true
+```
+
+**With a navigation stack.** StrataSLAM publishes `map -> floor_<k> -> odom` (REP-105), so [Nav2](https://nav2.org) or
+[EasyNav](https://github.com/EasyNavigation/EasyNavigation) and RViz see the robot in `map` while it maps. If
+another localizer owns `map -> odom` (AMCL), set `output.publish_tf: false` in the profile
+([TF](docs/user/mapping.md#reference)).
+
+What the node publishes: `/strataslam/odometry`, `/strataslam/path`, `/strataslam/floor_state` (current floor and
+transitions) and `/strataslam/floor_cloud` (the current floor's cloud, for RViz); services `~/save_map`,
+`~/new_session` and `~/mark_floor_change`. `viewer:=true` needs `rerun-sdk`
+([live view](docs/user/mapping.md)). Each run is saved under `~/strataslam_maps/<date>_<time>/`; afterwards:
+
+```bash
+strataslam fuse   ~/strataslam_maps/<run>        # the floors into one building (--anchors anchors.yaml if needed)
+strataslam export ~/strataslam_maps/<run>        # one PCD per floor; --format ply for PLY
 ```
 
 The user guide is in [docs/user/](docs/user/README.md); the on-disk map format in
