@@ -5,10 +5,13 @@ on:
   pull_request:
 
 jobs:
+  # Each job has a time limit about three times what it takes, so a hung download or test fails it within the hour
+  # instead of after GitHub's six.
   core:
     # Core + simulator without ROS, installed exactly as docs/user/install.md says: unit tests and the
     # integration scenarios S01..S14 (seed 42).
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
       - run: scripts/install_deps.sh core
@@ -38,6 +41,7 @@ jobs:
   coverage:
     # >= 85 % in geometry, backend/factors, floors and config; >= 65 % overall (spec 12.9).
     runs-on: ubuntu-24.04
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
       - run: scripts/install_deps.sh core && sudo apt-get install -y gcovr
@@ -61,6 +65,7 @@ jobs:
   sanitizers:
     # On every push too (audit AUD-018: only pull requests ran it, so a direct push skipped it).
     runs-on: ubuntu-24.04
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
       - run: scripts/install_deps.sh core
@@ -73,6 +78,7 @@ jobs:
     # colcon build of the five packages, the CLI on PATH, colcon test. One package at a time, two compile jobs
     # each (memory, as in the core job).
     runs-on: ubuntu-24.04
+    timeout-minutes: 90
     container: ros:jazzy
     env:
       MAKEFLAGS: -j2
@@ -88,6 +94,7 @@ jobs:
 
   python:
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     needs: core
     steps:
       - uses: actions/checkout@v5
@@ -119,6 +126,7 @@ jobs:
   lint-cpp:
     # clang-tidy with the checks of .clang-tidy (zero warnings) on the core.
     runs-on: ubuntu-24.04
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v5
       - run: scripts/install_deps.sh core && sudo apt-get install -y clang-tidy libomp-dev
@@ -128,6 +136,7 @@ jobs:
   format-cpp:
     # Every C++ file as .clang-format says (ADR-0055); clang-format 18, pinned: another version formats differently.
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
       - run: sudo apt-get update && sudo apt-get install -y clang-format-18
@@ -136,6 +145,7 @@ jobs:
   license-audit:
     # Build files against THIRD_PARTY.md (the linked libraries are checked in the core job).
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v5
@@ -145,6 +155,7 @@ jobs:
 
   docs:
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v5

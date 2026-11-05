@@ -95,6 +95,8 @@
   default include path (Ubuntu's, next to the core's from ROS) and failed in the `ros:jazzy` container. The CI builds
   with two compile jobs: `-j` alone ran its runners out of memory.
 - clang-tidy's `performance-inefficient-string-concatenation` in `find_duplicate_keys` (the CI's `lint-cpp`).
+- `scripts/install_deps.sh`: apt gives up on a mirror that stops answering after 30 s and retries; every CI job has a
+  time limit (a hung apt download held two jobs for over an hour).
 - Codecov counts a line that ran as covered (`partials_as_hits`), as the coverage gate does: gcov's exception branches
   made it report 37 % for the gate's 73 %.
 - The CI's Python job installs ROS 2 Jazzy's numpy (1.26.4), since mypy 1.9 cannot read numpy 2's stubs, and rerun-sdk 0.22.1 for the live view's tests; it finds the core's executables, which the artifact keeps in subfolders.
