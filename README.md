@@ -3,8 +3,8 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/EasyNavigation/StrataSLAM/actions/workflows/ci.yml"><img src="https://github.com/EasyNavigation/StrataSLAM/actions/workflows/ci.yml/badge.svg?branch=main" alt="ci"></a>
-  <a href="https://github.com/EasyNavigation/StrataSLAM/actions/workflows/nightly.yml"><img src="https://github.com/EasyNavigation/StrataSLAM/actions/workflows/nightly.yml/badge.svg" alt="nightly"></a>
+  <a href="https://github.com/EasyNavigation/StrataSLAM/actions/workflows/ci.yml"><img src="https://github.com/EasyNavigation/StrataSLAM/actions/workflows/ci.yml/badge.svg?branch=main" alt="build &amp; test"></a>
+  <a href="https://github.com/EasyNavigation/StrataSLAM/actions/workflows/nightly.yml"><img src="https://github.com/EasyNavigation/StrataSLAM/actions/workflows/nightly.yml/badge.svg" alt="nightly benchmarks"></a>
   <a href="https://codecov.io/gh/EasyNavigation/StrataSLAM"><img src="https://codecov.io/gh/EasyNavigation/StrataSLAM/branch/main/graph/badge.svg" alt="coverage"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License: Apache-2.0"></a>
   <a href="docs/user/install.md"><img src="https://img.shields.io/badge/ROS%202-Jazzy-22314E.svg" alt="ROS 2 Jazzy"></a>

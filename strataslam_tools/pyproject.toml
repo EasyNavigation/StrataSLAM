@@ -44,3 +44,5 @@ disallow_untyped_calls = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# A test that hangs prints the stack of every thread after this long (the run goes on): the cause, in the log.
+faulthandler_timeout = 120

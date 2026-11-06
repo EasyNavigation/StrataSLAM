@@ -1,4 +1,4 @@
-name: ci
+name: build & test
 
 on:
   push:
@@ -116,7 +116,9 @@ jobs:
       # mypy reads its configuration from strataslam_tools/pyproject.toml, so it runs from there.
       - run: mypy strataslam_tools
         working-directory: strataslam_tools
+      # The suite takes seconds: a hang fails here, with faulthandler's stacks, not at the job's limit.
       - run: pytest strataslam_tools/tests
+        timeout-minutes: 10
         env:
           STRATASLAM_TEST_STRICT: "1"
           LD_LIBRARY_PATH: ${{ github.workspace }}/bin

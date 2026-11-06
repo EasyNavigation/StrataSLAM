@@ -2,10 +2,26 @@
 
 from pathlib import Path
 
+from collections.abc import Iterator
+
 import numpy as np
+import pytest
 from conftest import require_module
 
 from strataslam_tools import live_view
+
+
+@pytest.fixture(autouse=True)
+def _close_the_recording() -> Iterator[None]:
+    """Each test closes the recording it opened (its file is flushed and its threads end) before the next one
+    opens another: a recording left open hung the next `rr.init` on CI."""
+    yield
+    try:
+        import rerun as rr
+    except ImportError:
+        return
+    if hasattr(rr, "disconnect"):
+        rr.disconnect()
 
 
 def test_floor_colours_are_distinct_and_transitions_grey() -> None:
@@ -64,7 +80,7 @@ def test_a_run_across_two_floors_is_recorded(tmp_path: Path) -> None:
     import rerun as rr
 
     if hasattr(rr, "disconnect"):
-        rr.disconnect()
+        rr.disconnect()  # flushes the file before it is read
     assert out.stat().st_size > 0
 
 
