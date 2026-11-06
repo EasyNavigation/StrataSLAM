@@ -1,5 +1,8 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <cmath>
+#include <optional>
 #include <random>
 
 #include "strataslam/frontend/lidar_frontend.hpp"
@@ -197,4 +200,46 @@ TEST(ScanContext, PayloadRoundTrip) {
   const ScanContext b = ScanContextDatabase::from_payload(p);
   EXPECT_EQ(a.matrix, b.matrix);
   EXPECT_EQ(a.ring_key, b.ring_key);
+}
+
+// ---------------- LiDAR attitude bounded by the IMU's gravity (ADR-0058) ----------------
+
+namespace {
+
+/// Up in the base frame of the pose the frontend gives to a second scan of the room, taken from
+/// where the first one was (a level base), when the IMU reports `up_base` (none: unbounded).
+Vector3d up_after_second_scan(const std::optional<Vector3d>& up_base) {
+  LidarFrontend fe{LidarFrontendConfig()};
+  LidarScan scan;
+  scan.points = room();
+  SensorFrame f;
+  f.lidar = &scan;
+  scan.stamp = f.stamp = 1'000'000'000LL;
+  EXPECT_TRUE(fe.process(f).valid);
+  scan.stamp = f.stamp = 1'100'000'000LL;
+  f.up_base = up_base;
+  const FrontendResult r = fe.process(f);
+  EXPECT_TRUE(r.valid);
+  EXPECT_LT(r.T_odom_base.translation().norm(), 0.02);  // the leveling keeps the position
+  return r.T_odom_base.rotation().matrix().transpose() * Vector3d::UnitZ();
+}
+
+double angle_deg(const Vector3d& a, const Vector3d& b) {
+  return std::acos(std::clamp(a.normalized().dot(b.normalized()), -1.0, 1.0)) * 180.0 / M_PI;
+}
+
+}  // namespace
+
+TEST(LidarFrontend, TheImusGravityBoundsTheAttitudeToOneDegree) {
+  const Vector3d level = Vector3d::UnitZ();
+  // Without the IMU: the scan's own attitude, level.
+  EXPECT_LT(angle_deg(up_after_second_scan(std::nullopt), level), 0.1);
+  // The IMU 0.5 deg away: within the bound, the LiDAR's attitude stands.
+  const Vector3d close = gtsam::Rot3::Pitch(0.5 * M_PI / 180).matrix() * level;
+  EXPECT_LT(angle_deg(up_after_second_scan(close), level), 0.1);
+  // The IMU 5 deg away: the attitude is moved to 1 deg from it, towards where the LiDAR had it.
+  const Vector3d tilted = gtsam::Rot3::Pitch(5.0 * M_PI / 180).matrix() * level;
+  const Vector3d up = up_after_second_scan(tilted);
+  EXPECT_NEAR(angle_deg(up, tilted), 1.0, 0.05);
+  EXPECT_NEAR(angle_deg(up, level), 4.0, 0.1);
 }
