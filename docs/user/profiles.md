@@ -1,9 +1,9 @@
 # Robot profile
 
-One YAML file describes the robot. Start from a file in `strataslam_ros/profiles/`. The generic ones are templates,
-one per kind of robot: they hold every option, active when the example uses it and commented with its default
-otherwise, so you uncomment what you need (a test keeps them complete). The Summit and Tiago profiles are particular
-robots and rosbags.
+One YAML file describes the robot. Start from a file in `strataslam_ros/profiles/`: they are templates, one per kind
+of robot, that hold every option, active when the example uses it and commented with its default otherwise, so you
+uncomment what you need (a test keeps them complete). For your robot, copy the closest one and set its topics and
+frames.
 
 | Template | Platform | Sensors |
 | --- | --- | --- |
@@ -13,12 +13,6 @@ robots and rosbags.
 | `handheld_camera_imu.yaml` | hand-held | RealSense D435i (RGB-D camera + its IMU) |
 | `aerial_lidar_camera_imu.yaml` | drone | RealSense D435i (RGB-D camera + its IMU) and a 3D LiDAR |
 | `handheld_oak_d_lite.yaml` | hand-held | Luxonis OAK-D Lite with `oak_d_camera` (RGB-D + IMU) |
-
-| Robot profile | Sensors |
-| --- | --- |
-| `summit_lidar.yaml` | 3D LiDAR and the IMU's gravity, Robotnik Summit XL (floor height prior off); the profile of the Summit rosbags |
-| `tiago_lidar_camera.yaml` | PAL Tiago: torso 3D LiDAR for the odometry, head RGB-D camera for loop closures and colours; the profile of the Tiago corridor rosbag |
-| `tiago_camera_only.yaml` | PAL Tiago without the LiDAR: head RGB-D camera, wheel odometry (TF) and base IMU (gravity only); on the corridor rosbag 1.1 m from the LiDAR trajectory |
 
 ```yaml
 strataslam: {version: 1}

@@ -857,7 +857,8 @@ frontend used it.
 - Until the heading is seen, the IMU of a ground robot does not bound the LiDAR (its tilts have no known direction);
   the visual frontend keeps using it as before. The mounting check goes on until then (`imu_learned`), and a mounting
   learned from the turns alone is applied at once, as before, then refined.
-- `summit_lidar.yaml` enables the IMU (`/imu/data`, `floor_changes: false`). `prueba_03`: 3 floors instead of 4,
+- The Summit's profile enables the IMU (`/imu/data`, `floor_changes: false`; the robot profiles are kept out of the
+  repository since). `prueba_03`: 3 floors instead of 4,
   floor 2 at -4.49 m (about -4.3 m by the wheels and the IMU), no floor over floor 0. `prueba_00`: the same 3 floors,
   ramps +2.81 and +2.07 m (+2.95 and +1.99 without the IMU; about +3.0 and +1.65 by the wheels and the IMU).
 - Limits: the first ramp of `prueba_03` comes before the heading is learned (762 deg of turning) and is still the

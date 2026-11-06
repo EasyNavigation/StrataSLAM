@@ -38,9 +38,9 @@ bool has_error(const ConfigResult& r, const std::string& text) {
 }  // namespace
 
 TEST(Profiles, EveryShippedProfileValidates) {
-  for (const char* name : {"ground_camera", "ground_lidar", "ground_lidar_camera_imu",
-                           "handheld_camera_imu", "aerial_lidar_camera_imu", "handheld_oak_d_lite",
-                           "summit_lidar", "tiago_lidar_camera", "tiago_camera_only"}) {
+  for (const char* name :
+       {"ground_camera", "ground_lidar", "ground_lidar_camera_imu", "handheld_camera_imu",
+        "aerial_lidar_camera_imu", "handheld_oak_d_lite"}) {
     const auto r = load_profile_file(std::string(STRATASLAM_PROFILE_DIR) + "/" + name + ".yaml");
     EXPECT_TRUE(r.ok()) << name << ": " << (r.errors.empty() ? "" : r.errors[0].format());
   }

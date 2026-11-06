@@ -4,6 +4,10 @@
 
 ### Removed
 
+- The profiles of particular robots (`summit_lidar`, `summit_lidar_sim`, `tiago_lidar_camera`, `tiago_camera_only`): the
+  templates cover them with their topics and frames (`ground_lidar` or `ground_lidar_camera_imu`), and an
+  IMU whose TF is turned about the vertical is learned from the motion (ADR-0058). The ADRs that name them record the
+  configuration their results were measured with.
 - The example profiles `handheld_rgbd`, `lidar_only` and `combined_aerial`: replaced by one template per kind of robot
   (see Added).
 - Camera presets (`camera: {preset: ...}`, `imu: {noise_preset: ...}`, `strataslam_ros/presets/`): the profile is the
@@ -79,8 +83,8 @@
 ### Changed
 - With an IMU, the LiDAR odometry keeps its roll and pitch within 1 deg of gravity (`max_tilt_error_deg` of the
   LiDAR frontend), as the visual one did: its pitch drift no longer turns a flat drive into a climb (ADR-0058).
-  On a ground robot this waits until the IMU's heading is learned from the accelerations. `summit_lidar.yaml` enables
-  the Summit's IMU: `prueba_03` has 3 floors instead of 4, without the floor 2.2 m under floor 0.
+  On a ground robot this waits until the IMU's heading is learned from the accelerations. With the Summit XL's IMU,
+  `prueba_03` has 3 floors instead of 4, without the floor 2.2 m under floor 0.
 - A LiDAR loop closure whose GICP residual is above the fixed bound (`loop_max_mean_error`, tuned indoors) is accepted
   when the residual is at most four times that of the scan registered against its own predecessors (ADR-0057). Outdoors
   most right loops were rejected: KITTI 07 now closes its loop (ATE 0.81 to 0.41 m), 05 gains 12 loops; 06 and 09 are
