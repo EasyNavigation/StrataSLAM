@@ -807,7 +807,6 @@ class StrataslamNode : public rclcpp::Node {
                   "bag interrupted after %zu of %zu messages: saving the map of what was processed",
                   n_total, static_cast<size_t>(reader.get_metadata().message_count));
     } else {  // with the context shut down there is nobody to publish to
-      guard("publish_cloud", [&] { publish_cloud(); });
       guard("same level", [&] { check_same_level(true); });
     }
     RCLCPP_INFO(get_logger(),
@@ -816,6 +815,23 @@ class StrataslamNode : public rclcpp::Node {
     auto res = std::make_shared<std_srvs::srv::Trigger::Response>();
     on_save_map(res);
     if (!res->success) RCLCPP_ERROR(get_logger(), "no map saved: %s", res->message.c_str());
+    if (!interrupted && slam_) guard("final view", [&] { publish_final_view(); });
+  }
+
+  /// The view of the saved map: the last loop closures and the final optimization of `save_map`
+  /// move the path and the cloud, and the node shuts down right after a bag, so the path, the
+  /// floor -> odom transform and the cloud are published once more (the cloud past its rate limit)
+  /// and delivered before it goes.
+  void publish_final_view() {
+    const auto path = slam_->floor_path(last_floor_);
+    const Timestamp t =
+        path.empty() ? static_cast<Timestamp>(now().nanoseconds()) : path.back().first;
+    publish_state(t);
+    publish_path(rclcpp::Time(t, RCL_ROS_TIME));
+    publish_cloud(true);
+    const auto timeout = std::chrono::seconds(10);  // a cloud of 100 MB to a viewer on this machine
+    if (path_pub_->get_subscription_count() > 0) path_pub_->wait_for_all_acked(timeout);
+    if (cloud_pub_->get_subscription_count() > 0) cloud_pub_->wait_for_all_acked(timeout);
   }
 
   void on_imu(const sm::Imu& m) {
@@ -1308,7 +1324,7 @@ class StrataslamNode : public rclcpp::Node {
     path_pub_->publish(path);
   }
 
-  void publish_cloud() {
+  void publish_cloud(bool force = false) {
     // Building the cloud of a whole floor is not free: only when someone listens (a viewer, RViz),
     // and at most a tenth of the time. A floor of a large map (a 1 km drive: 9 million points, 100
     // MB) takes long to build and to send; at a fixed period of one second it took most of the run,
@@ -1316,7 +1332,7 @@ class StrataslamNode : public rclcpp::Node {
     constexpr double kCloudShare = 0.1;
     const auto start = std::chrono::steady_clock::now();
     if (!slam_ || slam_->keyframes().empty() || cloud_pub_->get_subscription_count() == 0 ||
-        start < cloud_not_before_)
+        (!force && start < cloud_not_before_))
       return;
     const auto pts = slam_->floor_cloud(last_floor_, cfg_.output.voxel_size);
     if (!pts.empty())

@@ -102,7 +102,9 @@
 - The live view drew the path of the raw odometry, never corrected by loop closures, so a closed loop looked collapsed;
   it now draws the optimized keyframe path (`/strataslam/path`). A large map (KITTI 06: 9 million points) froze the
   machine: the node publishes the floor cloud at most a tenth of the time, and the view sends at most 1.5 million points
-  per floor to each 3D tab.
+  per floor to each 3D tab. At the end of a bag the view kept the cloud from before the last loop closures: the rate limit
+  skipped the final cloud and the node shut down right after saving. After `save_map` the node now publishes the path,
+  the floor transform and the cloud of the saved map once more and waits until the viewer has them.
 - `strataslam::image_io` declares GTSAM, which its header includes: it compiled against whatever GTSAM was on the
   default include path (Ubuntu's, next to the core's from ROS) and failed in the `ros:jazzy` container. The CI builds
   with two compile jobs: `-j` alone ran its runners out of memory.
