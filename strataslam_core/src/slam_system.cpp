@@ -759,7 +759,7 @@ struct SlamSystem::Impl {
     const gtsam::Pose3 Xp = fg->pose(ids[prev]) * T_lc;
     std::vector<Eigen::Vector3f> submap;
     // As many keyframes as the loop submap (2 * radius + 1), all on the side already mapped.
-    for (long k = std::max<long>(0, prev - 2 * tuning.loop_submap_radius); k <= prev; ++k) {
+    for (long k = std::max<long>(0, prev - 2L * tuning.loop_submap_radius); k <= prev; ++k) {
       const auto* cl = backend.cloud(ids[k]);
       if (!cl) continue;
       const auto w = transform_points(*cl, Xp.between(fg->pose(ids[k]) * T_lc).matrix());
