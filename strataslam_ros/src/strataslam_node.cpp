@@ -35,6 +35,7 @@
 #include <rclcpp/serialization.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
 #include <rosbag2_cpp/reader.hpp>
+#include <rosbag2_storage/topic_metadata.hpp>
 #include <sensor_msgs/msg/camera_info.hpp>
 #include <sensor_msgs/msg/fluid_pressure.hpp>
 #include <sensor_msgs/msg/image.hpp>
@@ -633,6 +634,39 @@ class StrataslamNode : public rclcpp::Node {
     drain_camera(false);
   }
 
+  /// A sensor topic of the profile that the bag does not have is a mistake (a namespace, a typo):
+  /// the run would end with an empty map. Each one is reported with the bag's topics of that type.
+  void warn_missing_topics(const std::vector<rosbag2_storage::TopicMetadata>& topics) {
+    const auto& s = cfg_.sensors;
+    std::vector<std::pair<std::string, std::string>> wanted;  // topic, message type
+    if (s.lidar.enabled) wanted.push_back({s.lidar.topic, "sensor_msgs/msg/PointCloud2"});
+    if (s.imu.enabled) wanted.push_back({s.imu.topic, "sensor_msgs/msg/Imu"});
+    if (s.barometer.enabled) wanted.push_back({s.barometer.topic, "sensor_msgs/msg/FluidPressure"});
+    if (s.external_odometry.enabled && !s.external_odometry.topic.empty())
+      wanted.push_back({s.external_odometry.topic, "nav_msgs/msg/Odometry"});
+    if (s.camera.enabled) {
+      if (features_topic_.empty())
+        wanted.push_back({s.camera.rgb_topic, "sensor_msgs/msg/Image"});
+      else
+        wanted.push_back({features_topic_, "strataslam_msgs/msg/FeatureFrame"});
+      wanted.push_back({s.camera.depth_topic, "sensor_msgs/msg/Image"});
+      wanted.push_back({s.camera.info_topic, "sensor_msgs/msg/CameraInfo"});
+    }
+    for (const auto& [topic, type] : wanted) {
+      std::string same_type;
+      bool found = false;
+      for (const auto& t : topics) {
+        if (t.name == topic) found = true;
+        if (t.type == type) same_type += (same_type.empty() ? "" : ", ") + t.name;
+      }
+      if (!found)
+        RCLCPP_ERROR(get_logger(), "the bag has no topic %s (%s), so that sensor gets no data; %s",
+                     topic.c_str(), type.c_str(),
+                     same_type.empty() ? "the bag has no topic of that type"
+                                       : ("topics of that type in the bag: " + same_type).c_str());
+    }
+  }
+
   /// Reads the bag at `bag_path_` and feeds the pipeline synchronously, then saves the map.
   void run_bag() {
     // With a viewer (launch argument viewer:=true) the bag starts once it listens, so it sees every
@@ -650,6 +684,7 @@ class StrataslamNode : public rclcpp::Node {
     rosbag2_cpp::Reader reader;
     reader.open(bag_path_);
     const auto& s = cfg_.sensors;
+    warn_missing_topics(reader.get_all_topics_and_types());
     rclcpp::Serialization<sm::PointCloud2> ser_cloud;
     rclcpp::Serialization<sm::Imu> ser_imu;
     rclcpp::Serialization<sm::FluidPressure> ser_baro;
@@ -780,6 +815,7 @@ class StrataslamNode : public rclcpp::Node {
                 bag_path_.c_str(), n_total, n_lidar, n_camera);
     auto res = std::make_shared<std_srvs::srv::Trigger::Response>();
     on_save_map(res);
+    if (!res->success) RCLCPP_ERROR(get_logger(), "no map saved: %s", res->message.c_str());
   }
 
   void on_imu(const sm::Imu& m) {
@@ -1301,6 +1337,7 @@ class StrataslamNode : public rclcpp::Node {
   void check_same_level(bool all) {
     constexpr size_t kLevelCheckKeyframes = 20;
     collect_same_level(all);
+    if (!slam_) return;  // the pipeline never started (no sensor data, or the TF never arrived)
     if (level_job_.valid()) return;  // the previous check is still running
     const auto st = slam_->floor_status();
     std::vector<std::pair<int, int>> pairs;

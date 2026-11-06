@@ -213,6 +213,7 @@ fitness is 0.9 or more for all 132 verifications, but only one passes `loop_max_
 outdoor data has residuals of 0.13 to 0.35. Relaxing it to 0.4 accepted 6 loops, three of them wrong (one pulled
 part of the map 23 m away from the reference). The gate is therefore kept. A per-sensor, noise-aware
 threshold (for example scaled by the registration voxel) is open work and needs more than one bag to tune.
+Superseded by ADR-0057.
 
 ## ADR-0023 · A forced transition close at an invalid height stays on the floor
 
@@ -803,3 +804,29 @@ Every template holds every option (`Profiles.TheTemplatesHoldEveryOption`) and s
 is uncommented; `external_odometry.topic` and `.frame` are alternatives, so uncommenting one comments out the other.
 Each template runs the node on a simulator bag (`test_node_with_profiles.py`); the bag exporter writes the wheel
 odometry when the profile enables it (TF, or `nav_msgs/Odometry` on its topic).
+
+## ADR-0057 · LiDAR loops: the residual is judged against the scan's own
+
+`loop_max_mean_error` (0.12) is the GICP residual per inlier, whose scale depends on the sensor, the voxel and the
+scene. Outdoors it rejected nearly every right loop (ADR-0022): on KITTI 06, 112 verifications of revisits had
+fitness 0.99 and residuals from 0.10 to 0.25, and only the 17 under 0.12 were accepted; KITTI 07 never closed its
+loop (residuals 0.34 to 0.44 with fitness 0.995). A right registration of the same scan sets the scale: the current
+keyframe against the submap of its predecessors (as many keyframes as the loop submap), from their graph poses.
+
+- A loop is accepted when the residual is under `loop_max_mean_error`, as before, or at most `loop_max_error_ratio`
+  (4) times that reference. The reference is computed only for a candidate that passes fitness and degeneracy, once
+  per keyframe.
+- Measured with `STRATASLAM_DEBUG_LOOPS` on the four KITTI bags with ground truth: the right loops have a ratio from
+  0.4 to 2.9 (06, 07, 09), and up to 8.6 on 05, where those over 4 are still rejected; every wrong candidate
+  (repeated straight streets) had a ratio of 6.8 or more and was also degenerate.
+- Results: 07 ATE 0.81 to 0.41 m (max 1.94 to 0.77 m); 05 1.55 to 1.51 m with 32 loops instead of 20; 06 and 09
+  unchanged. The Summit bags of ADR-0022 (`2024_03_21_*_wp`) accept 10 loops each (0 and 3 before) and their fit to the
+  GPS (no RTK: 6 to 7 m median) is unchanged, with no displaced part like the 23 m of a fixed bound of 0.4.
+- Indoors the fixed bound was short too: `prueba_00` 6 to 25 loops, `prueba_03` 1 to 17, the Tiago corridor
+  (`tiago_lidar_camera`) 5 to 17, with the same floors (3, 4, 1). Every new loop agrees within 0.2 m with the distance
+  the map without it already gave its two keyframes, so none bends the map. The simulated scenarios S01-S14 (seeds
+  1001-1020) give the same results, except millimetres in the S10 modality comparison.
+- No indoor/outdoor setting in the profile: the residual depends on the sensor and the scene, not on the label, and
+  the reference measures it on each scan; the same ratio held on KITTI, the Summit (indoors and outdoors) and the Tiago.
+- Limits: the Summit GPS cannot label single loops; a place that repeats with the same geometry (a car park of
+  identical bays) can still give a low ratio, so fitness and the degeneracy check stay in front.

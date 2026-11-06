@@ -77,6 +77,10 @@
 - `scripts/install_deps.sh` and `scripts/check_install.sh` (install guide tested in clean containers), `.clang-tidy` with a CI job (ADR-0037), the `ldd` check of linked libraries in `license_audit.py` (ADR-0036).
 
 ### Changed
+- A LiDAR loop closure whose GICP residual is above the fixed bound (`loop_max_mean_error`, tuned indoors) is accepted
+  when the residual is at most four times that of the scan registered against its own predecessors (ADR-0057). Outdoors
+  most right loops were rejected: KITTI 07 now closes its loop (ATE 0.81 to 0.41 m), 05 gains 12 loops; 06 and 09 are
+  unchanged, and on the Summit bags the 10 new loops leave the fit to GPS unchanged.
 - The project is now **StrataSLAM** (it was easyslam): packages `strataslam_core`, `strataslam_sim`, `strataslam_msgs`,
   `strataslam_ros`, `strataslam_tools`; the C++ namespace and headers `strataslam`; the `strataslam` command; topics
   `/strataslam/...`; environment and CMake variables `STRATASLAM_*`; default map folder `~/strataslam_maps`.
@@ -93,6 +97,12 @@
 - `docs/user/install.md` rewritten and tested; `docs/data_format.md` documents `fused/`, the optional payload folders and the integrity checks.
 
 ### Fixed
+- The node with a bag that lacks a topic of the profile: it crashed at the end (no pipeline was ever started). It now
+  names the missing topic and the bag's topics of that type, and says that no map was saved.
+- The live view drew the path of the raw odometry, never corrected by loop closures, so a closed loop looked collapsed;
+  it now draws the optimized keyframe path (`/strataslam/path`). A large map (KITTI 06: 9 million points) froze the
+  machine: the node publishes the floor cloud at most a tenth of the time, and the view sends at most 1.5 million points
+  per floor to each 3D tab.
 - `strataslam::image_io` declares GTSAM, which its header includes: it compiled against whatever GTSAM was on the
   default include path (Ubuntu's, next to the core's from ROS) and failed in the `ros:jazzy` container. The CI builds
   with two compile jobs: `-j` alone ran its runners out of memory.

@@ -5,6 +5,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <deque>
+#include <limits>
+#include <optional>
 #include <thread>
 
 #include "strataslam/common/version.hpp"
@@ -715,20 +717,62 @@ struct SlamSystem::Impl {
         have = true;
       }
     }
+    // The residual of a right registration depends on the sensor and the scene (an HDL-64 in a
+    // street leaves more than a LiDAR indoors): above the fixed bound, the loop is compared with
+    // the residual of this scan against its own predecessors, a registration known to be right
+    // (ADR-0057).
+    const bool fits =
+        have && best.quality.fitness >= tuning.loop_min_fitness &&
+        best.quality.state != TrackingState::Degraded;  // degraded: ambiguous geometry
+    double ref = -1.0;
+    if (fits && best.mean_error > tuning.loop_max_mean_error) {
+      if (const auto r = reference_error(cur, fg)) ref = *r;
+    }
     if (debug_channel("LOOPS"))
       log->log(LogLevel::Debug,
                strprintf("loop verify kf %lu -> %lu: fitness=%.3f (min %.3f) mean_error=%.3f (max "
-                         "%.3f) degraded=%d",
+                         "%.3f, or %.1f x reference %.3f) degraded=%d",
                          static_cast<unsigned long>(cur.id), static_cast<unsigned long>(cand_id),
                          have ? best.quality.fitness : -1.0, tuning.loop_min_fitness,
                          have ? best.mean_error : -1.0, tuning.loop_max_mean_error,
+                         tuning.loop_max_error_ratio, ref,
                          have && best.quality.state == TrackingState::Degraded));
-    if (!have || best.quality.fitness < tuning.loop_min_fitness ||
-        best.mean_error > tuning.loop_max_mean_error)
+    if (!fits) return std::nullopt;
+    if (best.mean_error > std::max(tuning.loop_max_mean_error, tuning.loop_max_error_ratio * ref))
       return std::nullopt;
-    if (best.quality.state == TrackingState::Degraded) return std::nullopt;  // ambiguous geometry
     return T_lc * best.T_target_source * T_lc.inverse();
   }
+
+  /// Mean residual of `cur` registered against the submap of the keyframes before it, from their
+  /// graph poses: what a right registration of this scan leaves in this place. Computed once per
+  /// keyframe; none for the first keyframe of a floor.
+  std::optional<double> reference_error(const KeyframeInput& cur, const FloorGraph* fg) const {
+    if (ref_error_kf == cur.id) return ref_error;
+    ref_error_kf = cur.id;
+    ref_error.reset();
+    if (!fg || !fg->has(cur.id)) return ref_error;
+    const auto ids = fg->keyframe_ids();
+    const auto it = std::find(ids.begin(), ids.end(), cur.id);
+    if (it == ids.end() || it == ids.begin()) return ref_error;
+    const gtsam::Pose3 T_lc = ext.T_base_lidar;
+    const long prev = it - ids.begin() - 1;
+    const gtsam::Pose3 Xp = fg->pose(ids[prev]) * T_lc;
+    std::vector<Eigen::Vector3f> submap;
+    // As many keyframes as the loop submap (2 * radius + 1), all on the side already mapped.
+    for (long k = std::max<long>(0, prev - 2 * tuning.loop_submap_radius); k <= prev; ++k) {
+      const auto* cl = backend.cloud(ids[k]);
+      if (!cl) continue;
+      const auto w = transform_points(*cl, Xp.between(fg->pose(ids[k]) * T_lc).matrix());
+      submap.insert(submap.end(), w.begin(), w.end());
+    }
+    const auto out = LidarFrontend::register_clouds(
+        submap, cur.cloud, Xp.between(fg->pose(cur.id) * T_lc), tuning.lidar);
+    if (out.quality.state != TrackingState::Lost && out.mean_error > 0.0)
+      ref_error = out.mean_error;
+    return ref_error;
+  }
+  mutable KeyframeId ref_error_kf = std::numeric_limits<KeyframeId>::max();
+  mutable std::optional<double> ref_error;
 
   void try_lidar_loop(const KeyframeInput& cur) {
     if (cur.cloud.empty()) return;
