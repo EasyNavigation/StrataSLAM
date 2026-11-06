@@ -15,6 +15,7 @@
 #include <small_gicp/util/normal_estimation_omp.hpp>
 #pragma GCC diagnostic pop
 
+#include "strataslam/geometry/gravity.hpp"
 #include "strataslam/mapping/voxel_grid.hpp"
 
 namespace strataslam {
@@ -244,6 +245,27 @@ LidarFrontend::RegistrationOutput LidarFrontend::register_clouds(
   return out;
 }
 
+namespace {
+
+/// The sensor pose with the base's roll and pitch bounded by gravity (`up_base`, from the IMU):
+/// within `max_tilt_error_deg` they are the registration's own, beyond it the smallest rotation
+/// brings them back to the bound; heading and sensor position (what the registration measures)
+/// kept.
+gtsam::Pose3 level_lidar(const gtsam::Pose3& T_ol, const gtsam::Pose3& T_base_lidar,
+                         const Eigen::Vector3d& up_base, double max_tilt_error_deg) {
+  const gtsam::Rot3 R_base = T_ol.rotation() * T_base_lidar.rotation().inverse();
+  const Eigen::Vector3d up_now = R_base.matrix().transpose() * Eigen::Vector3d::UnitZ();
+  const Eigen::Vector3d up_imu = up_base.normalized();
+  const double angle = std::acos(std::clamp(up_now.dot(up_imu), -1.0, 1.0));
+  const double bound = max_tilt_error_deg * M_PI / 180.0;
+  if (angle <= bound) return T_ol;
+  const Eigen::Vector3d axis = up_imu.cross(up_now).normalized();
+  const Eigen::Vector3d up_target = Eigen::AngleAxisd(bound, axis) * up_imu;
+  return gtsam::Pose3(level_to(R_base, up_target) * T_base_lidar.rotation(), T_ol.translation());
+}
+
+}  // namespace
+
 FrontendResult LidarFrontend::process(const SensorFrame& frame) {
   auto& s = *impl_;
   FrontendResult res;
@@ -335,6 +357,8 @@ FrontendResult LidarFrontend::process(const SensorFrame& frame) {
     const Eigen::Vector3d fixed = dt_world - weak * weak.dot(dt_world);
     T_ol = gtsam::Pose3(T_ol.rotation(), Eigen::Vector3d(pred_lidar.translation() + fixed));
   }
+  if (frame.up_base)
+    T_ol = level_lidar(T_ol, s.T_base_lidar, *frame.up_base, s.cfg.max_tilt_error_deg);
   const gtsam::Pose3 new_base = T_ol * T_lidar_base;
   res.delta = s.T_odom_base.between(new_base);
   s.recent.push_back(new_base);

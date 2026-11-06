@@ -30,6 +30,10 @@ struct LidarFrontendConfig {
   double min_fitness = 0.25;  ///< below: `Lost`
   /// Voxel size of the downsampled scans kept in keyframes (loop closure / mapping).
   double keyframe_cloud_voxel = 0.3;
+  /// With the IMU's gravity (`SensorFrame::up_base`): the registered roll and pitch are kept within
+  /// this of it, beyond it brought back to the bound (as the visual frontend does). A drifting
+  /// attitude turns forward motion into a climb: on a ramp it is the error of the floor's height.
+  double max_tilt_error_deg = 1.0;
 };
 
 /// Scan-to-local-map LiDAR odometry with GICP (small_gicp).

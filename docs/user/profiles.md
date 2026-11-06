@@ -16,7 +16,7 @@ robots and rosbags.
 
 | Robot profile | Sensors |
 | --- | --- |
-| `summit_lidar.yaml` | 3D LiDAR only, Robotnik Summit XL (floor height prior off); the profile of the Summit rosbags and the Gazebo garage |
+| `summit_lidar.yaml` | 3D LiDAR and the IMU's gravity, Robotnik Summit XL (floor height prior off); the profile of the Summit rosbags |
 | `tiago_lidar_camera.yaml` | PAL Tiago: torso 3D LiDAR for the odometry, head RGB-D camera for loop closures and colours; the profile of the Tiago corridor rosbag |
 | `tiago_camera_only.yaml` | PAL Tiago without the LiDAR: head RGB-D camera, wheel odometry (TF) and base IMU (gravity only); on the corridor rosbag 1.1 m from the LiDAR trajectory |
 

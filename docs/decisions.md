@@ -830,3 +830,35 @@ keyframe against the submap of its predecessors (as many keyframes as the loop s
   the reference measures it on each scan; the same ratio held on KITTI, the Summit (indoors and outdoors) and the Tiago.
 - Limits: the Summit GPS cannot label single loops; a place that repeats with the same geometry (a car park of
   identical bays) can still give a low ratio, so fitness and the degeneracy check stay in front.
+
+## ADR-0058 · The IMU's heading on a ground robot comes from its accelerations; its gravity bounds the LiDAR
+
+In `prueba_03` (Summit XL, LiDAR only) the map had a fourth floor 2.18 m under floor 0, over the same ground: the
+LiDAR odometry read a climb of +2.39 m where the robot drove on the flat (the wheel speed times the IMU's pitch
+gives no climb there, and floors 2 and 3 of that map were already known to be one level). Its pitch drifts, and on a
+long drive a degree of pitch is a climb of a metre per 60 m. The IMU's gravity had no effect on it: only the visual
+frontend used it.
+
+- The LiDAR frontend keeps the base's roll and pitch within `max_tilt_error_deg` (1 deg) of the IMU's gravity
+  (`GravityTracker`), as the visual frontend does with its own bound (2 deg); within it they are the registration's.
+  On `prueba_03` 2 deg left a spurious +1.01 m step; 1 and 0.5 deg remove it (ramps -1.18 and -3.31 m, against about
+  -1.3 and -3.0 m from the wheel speed times the IMU's pitch).
+- The Summit's TF has `imu_link` on the base's axes, but its IMU reads x and y backwards (its x against the wheels'
+  acceleration: slope -0.90; its y against v * w: -0.96). With that TF every slope reads with the opposite sign, and
+  bounding the LiDAR by it made the first ramp a climb. Learning the mounting from the turns (Wahba on the gyroscope)
+  cannot see it: a ground robot only turns about the vertical, which leaves the IMU's heading about it free.
+- `ImuMount` now also pairs, over the same 1 s windows, the base's acceleration by the odometry (dv/dt + w x v in the
+  base frame, the velocity at the window's edges a mean of the last 5 frames: differentiated per frame, the
+  registration's jitter was ten times the signal) with the accelerometer's mean specific force minus gravity. The turn
+  about the base's z that best maps one onto the other is the heading. It is decided once the horizontal acceleration
+  adds up to 4 (m/s^2)^2 and the accelerometer explains half of it: on `prueba_03` the estimate is within about 10 deg
+  of its final value (174 deg) from there, 20 deg at 2. An error e of the heading tilts the slope only by
+  tilt * sin(e).
+- Until the heading is seen, the IMU of a ground robot does not bound the LiDAR (its tilts have no known direction);
+  the visual frontend keeps using it as before. The mounting check goes on until then (`imu_learned`), and a mounting
+  learned from the turns alone is applied at once, as before, then refined.
+- `summit_lidar.yaml` enables the IMU (`/imu/data`, `floor_changes: false`). `prueba_03`: 3 floors instead of 4,
+  floor 2 at -4.49 m (about -4.3 m by the wheels and the IMU), no floor over floor 0. `prueba_00`: the same 3 floors,
+  ramps +2.81 and +2.07 m (+2.95 and +1.99 without the IMU; about +3.0 and +1.65 by the wheels and the IMU).
+- Limits: the first ramp of `prueba_03` comes before the heading is learned (762 deg of turning) and is still the
+  LiDAR's alone. A robot that only turns in place never shows its heading, and its IMU then stays out of the LiDAR.

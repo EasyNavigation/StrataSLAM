@@ -36,7 +36,8 @@ sensors:
     enabled: true
     topic: /imu  # sensor_msgs/Imu, the robot's; its mounting comes from the TF or is learned from the motion
     floor_changes: false  # gravity only: a ground robot's base vibrates, and its vertical acceleration does not
-    #   detect elevators reliably yet (ADR-0032); the LiDAR measures the height of each floor
+    #   detect elevators reliably yet (ADR-0032); the LiDAR measures the height of each floor, its roll and pitch
+    #   bounded by gravity once the IMU's heading is learned from the motion (ADR-0058)
     noise:  # nominal values (also the defaults); measure your IMU with `strataslam imu-noise`
       accel_noise_density: 2.0e-3  # m/s^2/sqrt(Hz)
       gyro_noise_density: 1.7e-4  # rad/s/sqrt(Hz)

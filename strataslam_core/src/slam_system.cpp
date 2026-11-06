@@ -46,6 +46,11 @@ struct SlamSystem::Impl {
   Timestamp turn_start =
       0;  // the rotations are paired with the gyroscope over windows of about 1 s
   Eigen::Vector3d turn_sum = Eigen::Vector3d::Zero();
+  // The base's acceleration over the same windows, for the IMU's heading: velocity at the start,
+  // sum of w x v dt, sum of up dt.
+  std::optional<Eigen::Vector3d> win_v0, last_v;
+  std::deque<Eigen::Vector3d> recent_v;  // the last per-frame velocities: their mean is last_v
+  Eigen::Vector3d win_w_x_v = Eigen::Vector3d::Zero(), win_up = Eigen::Vector3d::Zero();
   std::vector<ImuSample> imu_since_update;
   std::optional<RgbdFrame>
       last_cam;  // newest camera frame (when the odometry comes from the LiDAR)
@@ -256,38 +261,84 @@ struct SlamSystem::Impl {
 
   /// The odometry turned the base between the last valid pose and this one: summed over about a
   /// second (where the rotation stands out of the per-frame noise and a small time offset between
-  /// the sensors does not matter) and paired with the gyroscope for the IMU mounting.
+  /// the sensors does not matter) and paired with the gyroscope for the IMU mounting. Over the same
+  /// windows the base's acceleration, dv/dt + w x v in the base frame, is paired with the
+  /// accelerometer for the heading of the IMU, which the turns of a ground robot do not show.
   void learn_imu_mounting(const FrontendResult& r, Timestamp stamp) {
     if (!imu_mount || imu_learned) return;
     constexpr Timestamp kWindow = 1'000'000'000;  // ns
+    const Eigen::Vector3d up =
+        r.T_odom_base.rotation().matrix().transpose() * Eigen::Vector3d::UnitZ();
     if (!last_fe_stamp) {
       turn_start = stamp;
       turn_sum.setZero();
+      win_v0.reset();
+      last_v.reset();
+      recent_v.clear();
+      win_w_x_v.setZero();
+      win_up.setZero();
     } else {
-      turn_sum += gtsam::Rot3::Logmap(r.delta.rotation());
+      const Eigen::Vector3d rotvec = gtsam::Rot3::Logmap(r.delta.rotation());
+      turn_sum += rotvec;
+      const double dt = (stamp - last_fe_stamp) * 1e-9;
+      if (dt > 1e-3) {
+        const Eigen::Vector3d v = r.delta.translation() / dt;
+        // The velocity at a window's edges is a mean over the last half second or so: one frame's
+        // registration jitter, differentiated, would bury the robot's own acceleration.
+        recent_v.push_back(v);
+        if (recent_v.size() > 5) recent_v.pop_front();
+        Eigen::Vector3d v_mean = Eigen::Vector3d::Zero();
+        for (const auto& x : recent_v) v_mean += x;
+        v_mean /= static_cast<double>(recent_v.size());
+        if (!win_v0) win_v0 = last_v ? *last_v : v_mean;
+        win_w_x_v += rotvec.cross(v);  // (w dt) x v
+        win_up += up * dt;
+        last_v = v_mean;
+      }
     }
     last_fe_stamp = stamp;
     if (stamp - turn_start < kWindow) return;
     imu_mount->add_base_rotation(turn_start, stamp, turn_sum, reference_up(r.T_odom_base));
+    if (win_v0 && last_v) {
+      const double window_s = (stamp - turn_start) * 1e-9;
+      imu_mount->add_base_motion(turn_start, stamp, (*last_v - *win_v0 + win_w_x_v) / window_s,
+                                 win_up.normalized());
+    }
     turn_start = stamp;
     turn_sum.setZero();
+    win_v0 = last_v;
+    win_w_x_v.setZero();
+    win_up.setZero();
     const auto e = imu_mount->estimate();
     if (!e) return;
-    imu_learned = true;
+    if (debug_channel("IMU"))
+      log->log(LogLevel::Debug,
+               strprintf("IMU mounting: %.0f deg turned, motion energy %.2f, explained %.2f, "
+                         "heading %.1f deg",
+                         e->turned_deg, e->motion_energy, e->explained, e->yaw_deg));
+    // Compared with the mounting in use (the TF's, or one learned before the heading was seen).
     const bool wrong =
-        e->tf_error_deg > 10.0 || e->accel_sign < 0 || std::abs(e->accel_scale - 1.0) > 0.03;
+        gtsam::Rot3::Logmap(ext.T_base_imu.rotation().between(e->R_base_imu)).norm() * 180.0 /
+                M_PI >
+            10.0 ||
+        e->accel_sign != imu_sign || std::abs(e->accel_scale / imu_scale - 1.0) > 0.03;
+    if (!e->yaw_observed && imu_trusted && !wrong)
+      return;  // agrees so far: learning goes on until the accelerations show the heading
+    imu_learned = e->yaw_observed;
     if (imu_trusted && !wrong) {
       log->log(
           LogLevel::Info,
           strprintf(
-              "IMU: mounting confirmed by the motion (TF within %.1f deg, %.0f deg of turning)",
+              "IMU: mounting confirmed by the motion (%.1f deg from the TF, %.0f deg of turning)",
               e->tf_error_deg, e->turned_deg));
       return;
     }
     log->log(LogLevel::Warn,
-             strprintf("IMU: mounting learned from %.0f deg of turning: %.1f deg from the TF%s, "
+             strprintf("IMU: mounting learned from %.0f deg of turning%s: %.1f deg from the TF%s, "
                        "gravity scaled by %.3f; used from now on",
-                       e->turned_deg, e->tf_error_deg,
+                       e->turned_deg,
+                       e->yaw_observed ? " and the accelerations" : " (heading still the TF's)",
+                       e->tf_error_deg,
                        e->accel_sign < 0 ? ", accelerometer reports gravity pointing down" : "",
                        e->accel_scale));
     ext.T_base_imu = gtsam::Pose3(e->R_base_imu, ext.T_base_imu.translation());
@@ -1276,6 +1327,12 @@ void SlamSystem::add_lidar(const LidarScan& scan) {
   SensorFrame f;
   f.stamp = scan.stamp;
   f.lidar = &scan;
+  // A ground robot's turns leave the IMU's heading on the base unobserved, and with it the
+  // direction of every tilt the IMU reports: its gravity bounds the LiDAR's attitude once the
+  // accelerations have shown that heading (ADR-0058). Before, a TF that has the IMU turned half
+  // around reads every slope backwards.
+  if (!s.planar() && s.imu_trusted && (s.cfg.robot.platform != Platform::Ground || s.imu_learned))
+    f.up_base = s.gravity.up();
   FrontendResult r = s.lidar_fe->process(f);
   s.to_plane(r);
   if (!r.valid) {

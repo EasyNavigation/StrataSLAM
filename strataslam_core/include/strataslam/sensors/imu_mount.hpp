@@ -17,7 +17,9 @@ namespace strataslam {
 /// rotation IMU -> base, the TF filling in only what the motion does not show (a ground robot only
 /// turns about the vertical). With that rotation, gravity gives the sign convention of the
 /// accelerometer (the specific force points up at rest in ROS; some drivers report it pointing
-/// down) and its scale.
+/// down) and its scale. A rotation about the vertical alone leaves the IMU's heading on the base
+/// unobserved (a ground robot): that one comes from the robot's own accelerations, starting,
+/// braking and the centripetal one in the turns, which the accelerometer must follow (ADR-0058).
 class ImuMount {
  public:
   struct Estimate {
@@ -27,6 +29,12 @@ class ImuMount {
         1.0;  ///< standard gravity over the measured one (1 if far off: not a scale error)
     double tf_error_deg = 0;  ///< angle between this rotation and the TF's
     double turned_deg = 0;    ///< rotation of the base that it was learned from
+    /// The heading of the IMU about the base's vertical was measured by the accelerations; until
+    /// then it is the TF's (or what the turns showed, on a robot that also tilts).
+    bool yaw_observed = false;
+    double motion_energy = 0;  ///< sum of the base's horizontal acceleration squared, (m/s^2)^2
+    double explained = 0;      ///< part of it the accelerometer explains with that heading
+    double yaw_deg = 0;        ///< the heading correction the accelerations ask for
   };
 
   /// `R_base_imu_tf`: the mounting the TF gives (the prior for what the motion does not show).
@@ -38,6 +46,11 @@ class ImuMount {
   /// the IMU to cover the interval (an IMU may trail the odometry).
   void add_base_rotation(Timestamp t0, Timestamp t1, const Eigen::Vector3d& rotvec_base,
                          const Eigen::Vector3d& up_base);
+  /// The base's own acceleration between `t0` and `t1` by the odometry (mean of dv/dt + w x v,
+  /// base frame, gravity excluded) and up in the base frame then (from the odometry's attitude):
+  /// paired with the mean specific force of the IMU over the same interval for the heading.
+  void add_base_motion(Timestamp t0, Timestamp t1, const Eigen::Vector3d& accel_base,
+                       const Eigen::Vector3d& up_base);
   /// Once the base has turned `min_turn_deg` in all (and the gyroscope followed it).
   std::optional<Estimate> estimate() const;
   /// Mean specific force so far, IMU frame (gravity, once the robot's own accelerations average
@@ -55,8 +68,11 @@ class ImuMount {
   struct Turn {
     Timestamp t0, t1;
     Eigen::Vector3d rotvec_base, up_base;
+    bool motion = false;  // a motion interval (accel_base, up_base) rather than a turn
+    Eigen::Vector3d accel_base = Eigen::Vector3d::Zero();
   };
   void pair(const Turn& t);
+  void pair_motion(const Turn& t);
   void pair_ready();
   std::deque<ImuSample> recent_;  // for the gyro integral over each odometry interval
   std::deque<Turn> waiting_;      // odometry turns the IMU does not cover yet
@@ -66,6 +82,10 @@ class ImuMount {
   double energy_ = 0;                            // sum of |rotvec_base|^2
   double turned_ = 0;                            // sum of |rotvec_base|
   Eigen::Vector3d up_sum_ = Eigen::Vector3d::Zero();
+  // The heading: sums of (mean specific force, IMU) * accel_base^T and up_base * accel_base^T, and
+  // of |accel_base|^2 in the horizontal.
+  Eigen::Matrix3d A_ = Eigen::Matrix3d::Zero(), C_ = Eigen::Matrix3d::Zero();
+  double motion_energy_ = 0;
 };
 
 /// Up in the base frame from a calibrated IMU (a Mahony filter on the gravity direction): the

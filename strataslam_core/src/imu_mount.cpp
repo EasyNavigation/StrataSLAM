@@ -12,6 +12,14 @@ namespace {
 constexpr Timestamp kKeep = 10'000'000'000;  // ns of IMU kept for the gyro integrals
 constexpr double kAccelTolerance =
     0.1;  // relative: specific force this close to gravity is "at rest"
+/// Sum over the intervals of the base's horizontal acceleration squared, (m/s^2)^2, before the
+/// heading is decided: on the Summit of `prueba_03` (LiDAR odometry) the heading is within about
+/// 10 deg of its final value from 4, and 20 deg at 2. Its error tilts the IMU's slope by only
+/// tilt * sin(error): 10 deg on a 3 deg ramp is 0.5 deg of roll.
+constexpr double kMinMotionEnergy = 4.0;
+/// Part of that acceleration the accelerometer must explain once turned by the heading: below it
+/// the two do not follow each other (a time offset, a noisy odometry) and the heading stays.
+constexpr double kMinExplained = 0.5;
 }  // namespace
 
 ImuMount::ImuMount(const gtsam::Rot3& R_base_imu_tf, double min_turn_deg)
@@ -33,10 +41,24 @@ void ImuMount::add_base_rotation(Timestamp t0, Timestamp t1, const Eigen::Vector
   pair_ready();
 }
 
+void ImuMount::add_base_motion(Timestamp t0, Timestamp t1, const Eigen::Vector3d& accel_base,
+                               const Eigen::Vector3d& up_base) {
+  if (t1 <= t0) return;
+  Turn m{t0, t1, Eigen::Vector3d::Zero(), up_base};
+  m.motion = true;
+  m.accel_base = accel_base;
+  waiting_.push_back(m);
+  pair_ready();
+}
+
 void ImuMount::pair_ready() {
   while (!waiting_.empty() && !recent_.empty() && recent_.back().stamp >= waiting_.front().t1) {
-    if (recent_.front().stamp <= waiting_.front().t0)
-      pair(waiting_.front());  // else the IMU started later: dropped
+    if (recent_.front().stamp <= waiting_.front().t0) {  // else the IMU started later: dropped
+      if (waiting_.front().motion)
+        pair_motion(waiting_.front());
+      else
+        pair(waiting_.front());
+    }
     waiting_.pop_front();
   }
   while (waiting_.size() > 1000) waiting_.pop_front();  // an IMU that stopped
@@ -54,6 +76,24 @@ void ImuMount::pair(const Turn& turn) {
   energy_ += turn.rotvec_base.squaredNorm();
   turned_ += turn.rotvec_base.norm();
   up_sum_ += turn.up_base;
+}
+
+void ImuMount::pair_motion(const Turn& m) {
+  // Mean specific force over [t0, t1], each sample held until the next.
+  Eigen::Vector3d f = Eigen::Vector3d::Zero();
+  double covered = 0;
+  for (size_t i = 0; i + 1 < recent_.size(); ++i) {
+    const Timestamp a = std::max(recent_[i].stamp, m.t0), b = std::min(recent_[i + 1].stamp, m.t1);
+    if (b > a) {
+      f += recent_[i].accel * ((b - a) * 1e-9);
+      covered += (b - a) * 1e-9;
+    }
+  }
+  if (covered < 0.5 * (m.t1 - m.t0) * 1e-9) return;
+  f /= covered;
+  A_ += f * m.accel_base.transpose();
+  C_ += m.up_base * m.accel_base.transpose();
+  motion_energy_ += m.accel_base.head<2>().squaredNorm();
 }
 
 std::optional<ImuMount::Estimate> ImuMount::estimate() const {
@@ -76,6 +116,21 @@ std::optional<ImuMount::Estimate> ImuMount::estimate() const {
   e.accel_sign = (R * g).dot(up_sum_) >= 0 ? 1.0 : -1.0;
   const double ratio = g.norm() / kStandardGravity;
   e.accel_scale = std::abs(ratio - 1.0) < 0.15 ? 1.0 / ratio : 1.0;
+  // The heading about the base's vertical: the turn about the base's z that best brings the
+  // accelerometer's horizontal force (gravity removed) onto the base's acceleration, H = sum of
+  // (force in the base frame - g up) * accel_base^T.
+  e.motion_energy = motion_energy_;
+  if (motion_energy_ > 0) {
+    const Eigen::Matrix3d H = e.accel_sign * e.accel_scale * R * A_ - kStandardGravity * C_;
+    const double c = H(0, 0) + H(1, 1), s = H(0, 1) - H(1, 0);
+    const double yaw = std::atan2(s, c);
+    e.explained = std::hypot(c, s) / motion_energy_;
+    e.yaw_deg = yaw * 180.0 / M_PI;
+    if (motion_energy_ >= kMinMotionEnergy && e.explained >= kMinExplained) {
+      e.R_base_imu = gtsam::Rot3::Yaw(yaw) * e.R_base_imu;
+      e.yaw_observed = true;
+    }
+  }
   e.tf_error_deg = gtsam::Rot3::Logmap(R_tf_.between(e.R_base_imu)).norm() * 180.0 / M_PI;
   e.turned_deg = turned_ * 180.0 / M_PI;
   return e;
