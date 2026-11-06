@@ -26,6 +26,7 @@ against the OXTS GPS/INS solution. KITTI is CC BY-NC-SA 3.0: used for evaluation
 | Drive | Length | Scans | ATE RMSE | ATE max | Loops | Time per scan | Version | Date |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 2011_09_30_drive_0027 (odometry 07) | 692 m | 1106 | 0.82 m | 2.03 m | 0 | 58 ms (1 thread) | unreleased | 2026-11-03 |
+| 2011_09_30_drive_0027 (odometry 07) | 692 m | 1106 | 0.40 m | 0.76 m | 1 | 58 ms (1 thread) | unreleased (LiDAR loop gate, ADR-0057) | 2026-11-06 |
 | 2011_09_30_drive_0027 (odometry 07) | 692 m | 1106 | 0.77 m | 1.79 m | 0 | 54 ms (1 thread) | unreleased (audit fixes, `make_results.sh`) | 2026-11-05 |
 
 No loop closure was accepted at the revisit near the end of the drive: Scan Context is configured for buildings
