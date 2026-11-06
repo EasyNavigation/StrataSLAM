@@ -1,8 +1,7 @@
 """strataslam_tools.live_view writes a Rerun recording (skipped without the optional extra `viewer`)."""
 
-from pathlib import Path
-
 from collections.abc import Iterator
+from pathlib import Path
 
 import numpy as np
 import pytest
