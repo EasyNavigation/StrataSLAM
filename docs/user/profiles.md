@@ -12,7 +12,6 @@ frames.
 | `ground_lidar_camera_imu.yaml` | ground robot | 3D LiDAR (odometry), RGB-D camera (loop closures, colours), IMU (gravity only); camera and LiDAR loop closures |
 | `handheld_camera_imu.yaml` | hand-held | RealSense D435i (RGB-D camera + its IMU) |
 | `aerial_lidar_camera_imu.yaml` | drone | RealSense D435i (RGB-D camera + its IMU) and a 3D LiDAR |
-| `handheld_oak_d_lite.yaml` | hand-held | Luxonis OAK-D Lite with `oak_d_camera` (RGB-D + IMU) |
 
 ```yaml
 strataslam: {version: 1}
@@ -38,7 +37,7 @@ refused with what to write instead. The values of the cameras that have been tes
 | Camera | Driver and launch | Topics | Depth range | IMU (`imu.topic`, `imu.noise`) |
 | --- | --- | --- | --- | --- |
 | Intel RealSense D435i | `realsense2_camera` 4.x: `ros2 launch realsense2_camera rs_launch.py camera_namespace:=/ align_depth.enable:=true enable_gyro:=true enable_accel:=true unite_imu_method:=2` (its defaults put the topics under `/camera/camera/` and leave the aligned depth and the IMU off) | `/camera/color/image_raw`, `/camera/aligned_depth_to_color/image_raw`, `/camera/color/camera_info` | 0.3-6.0 m | `/camera/imu`; nominal BMI055 noise (`handheld_camera_imu.yaml`) |
-| Luxonis OAK-D Lite | [oak_d_camera](https://github.com/jmguerreroh/oak_d_camera): `ros2 launch oak_d_camera camera.launch.py use_color:=true use_depth:=true use_imu:=true` (720p or lower) | `/oak/color/image`, `/oak/stereo/depth` (16UC1, aligned to colour), `/oak/color/camera_info` | 0.4-6.0 m | `/oak/imu` (raw BMI270); datasheet noise densities (`handheld_oak_d_lite.yaml`) |
+| Luxonis OAK-D Lite | [oak_d_camera](https://github.com/jmguerreroh/oak_d_camera): `ros2 launch oak_d_camera camera.launch.py use_color:=true use_depth:=true use_imu:=true` (720p or lower) | `/oak/color/image`, `/oak/stereo/depth` (16UC1, aligned to colour), `/oak/color/camera_info` | 0.4-6.0 m | `/oak/imu` (raw BMI270); BMI270 datasheet: `accel_noise_density: 1.57e-3`, `gyro_noise_density: 1.22e-4` (random walks not in the datasheet: the nominal ones); `robot.base_frame: oak_base_frame` when hand-held (the IMU's mounting comes from the TF) |
 
 Measure the IMU noise of your own unit with `strataslam imu-noise` ([imu-noise.md](imu-noise.md)); without `noise:` the
 nominal values above are used.

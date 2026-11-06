@@ -799,7 +799,8 @@ The generic profiles were named after a camera or a mix (`handheld_rgbd`, `lidar
 templates are now one per kind of robot, named `<platform>_<sensors>`: `ground_camera` (with the wheel odometry as the
 motion prior, TF `odom -> base_link`), `ground_lidar`, `ground_lidar_camera_imu` (LiDAR odometry, camera and LiDAR loop
 closures, IMU for gravity only: ADR-0032), `handheld_camera_imu` and `aerial_lidar_camera_imu`; `handheld_oak_d_lite`
-stays as the example of another camera. Nothing was released with the old names, so they are not kept as aliases.
+stayed as the example of another camera (removed later, like the robot profiles: its values are in
+`docs/user/profiles.md`). Nothing was released with the old names, so they are not kept as aliases.
 Every template holds every option (`Profiles.TheTemplatesHoldEveryOption`) and stays valid when any commented option
 is uncommented; `external_odometry.topic` and `.frame` are alternatives, so uncommenting one comments out the other.
 Each template runs the node on a simulator bag (`test_node_with_profiles.py`); the bag exporter writes the wheel

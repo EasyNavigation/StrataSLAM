@@ -8,6 +8,8 @@
   templates cover them with their topics and frames (`ground_lidar` or `ground_lidar_camera_imu`), and an
   IMU whose TF is turned about the vertical is learned from the motion (ADR-0058). The ADRs that name them record the
   configuration their results were measured with.
+- The profile of a particular camera, `handheld_oak_d_lite`: `handheld_camera_imu` covers it with its topics, frames and
+  IMU noise, which `docs/user/profiles.md` lists with its driver.
 - The example profiles `handheld_rgbd`, `lidar_only` and `combined_aerial`: replaced by one template per kind of robot
   (see Added).
 - Camera presets (`camera: {preset: ...}`, `imu: {noise_preset: ...}`, `strataslam_ros/presets/`): the profile is the
@@ -20,7 +22,7 @@
   **3D: floors**, each floor in its colour.
 - README: how to run it with ROS 2 (a real robot, a recorded rosbag, next to a navigation stack). The project logo and the CI, coverage (Codecov), licence, ROS 2 and C++ badges in the README (`docs/media/logo.png`); `scripts/check_links.py` also checks the `src` and `href` of HTML tags.
 - One template profile per kind of robot (ADR-0056): `ground_camera`, `ground_lidar`, `ground_lidar_camera_imu`,
-  `handheld_camera_imu`, `aerial_lidar_camera_imu` (and `handheld_oak_d_lite`). The simulator bag exporter writes the
+  `handheld_camera_imu`, `aerial_lidar_camera_imu`. The simulator bag exporter writes the
   wheel odometry when the profile enables it.
 - A visual vocabulary ships with `strataslam_ros` (`vocabularies/tum_rgbd.bin`, trained on TUM RGB-D, CC BY 4.0):
   `fusion.vocabulary: default`, used by the example profiles with a camera (ADR-0054); `fusion.vocabulary` in the profile;

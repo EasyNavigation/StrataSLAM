@@ -55,7 +55,7 @@ def ros_context():  # type: ignore[no-untyped-def]
 
 
 @pytest.mark.parametrize("name", ["ground_camera", "ground_lidar", "ground_lidar_camera_imu", "handheld_camera_imu",
-                                  "aerial_lidar_camera_imu", "handheld_oak_d_lite"])
+                                  "aerial_lidar_camera_imu"])
 def test_node_publishes_odometry_and_saves_a_valid_map(name: str, tmp_path: Path) -> None:
     bag_dir = tmp_path / "sim"
     export_bag(bag_dir, PROFILES / f"{name}.yaml", seconds=25.0)
@@ -64,7 +64,7 @@ def test_node_publishes_odometry_and_saves_a_valid_map(name: str, tmp_path: Path
     map_dir = tmp_path / "map"
     profile = profile_with_map_dir(PROFILES / f"{name}.yaml", map_dir, tmp_path / "profiles" / f"{name}.yaml")
     # Where the vocabulary comes from: the profile, as a path relative to it (handheld_camera_imu) or as `default`, the
-    # one shipped (ground_camera, ground_lidar_camera_imu, handheld_oak_d_lite); nowhere (aerial_lidar_camera_imu: the
+    # one shipped (ground_camera, ground_lidar_camera_imu); nowhere (aerial_lidar_camera_imu: the
     # node must say at the end that no visual loop could close); or the launch (ground_lidar). ground_camera also runs
     # with the wheel odometry the bag carries as TF (odom -> base_link).
     vocabulary = []
@@ -138,7 +138,7 @@ def test_node_publishes_odometry_and_saves_a_valid_map(name: str, tmp_path: Path
     off = "visual loop closure was disabled for the whole run: no vocabulary"
     if name == "handheld_camera_imu":
         assert f"visual vocabulary: {profile.parent / 'vocab.bin'} (" in text and "from the profile)" in text, text[-3000:]
-    if name in ("ground_camera", "ground_lidar_camera_imu", "handheld_oak_d_lite"):
+    if name in ("ground_camera", "ground_lidar_camera_imu"):
         assert "vocabularies/tum_rgbd.bin (9964 words, from the profile)" in text, text[-3000:]
     if name == "ground_lidar":
         assert "words, from the launch)" in text, text[-3000:]

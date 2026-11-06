@@ -366,6 +366,6 @@ def test_sections_with_every_key_commented_out_read_as_the_core_reads_them(tmp_p
     assert enabled(prof, "lidar") and not enabled(prof, "camera") and not enabled(prof, "imu")
     assert doctor.check_disk(prof).name == "disk"
     for name in ("ground_camera", "ground_lidar", "ground_lidar_camera_imu", "handheld_camera_imu",
-                 "aerial_lidar_camera_imu", "handheld_oak_d_lite"):
+                 "aerial_lidar_camera_imu"):
         prof = load_profile(PROFILES / f"{name}.yaml")
         assert doctor.check_disk(prof).name == "disk", name

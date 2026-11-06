@@ -9,7 +9,7 @@ from strataslam_ros import validate_profile
 
 
 @pytest.mark.parametrize("name", ["ground_camera", "ground_lidar", "ground_lidar_camera_imu", "handheld_camera_imu",
-                                  "aerial_lidar_camera_imu", "handheld_oak_d_lite"])
+                                  "aerial_lidar_camera_imu"])
 def test_shipped_profiles_are_valid(name: str) -> None:
     errors, _ = validate_profile(str(PROFILES / f"{name}.yaml"))
     assert errors == []
