@@ -8,6 +8,7 @@
 #include <memory>
 #include <random>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "strataslam/common/logging.hpp"
@@ -276,28 +277,31 @@ struct SummitRig {
     }
     return deg;
   }
-  /// The odometry against the truth: it starts at the first scan, at the world's origin with no
-  /// heading, so the odometry frame is the world's, the base's height down.
-  void expect_odometry_at(const gtsam::Pose3& T_world_base, double tol_m) const {
+  /// How far the odometry is from the truth (m, deg): it starts at the first scan, at the world's
+  /// origin with no heading, so the odometry frame is the world's, the base's height down.
+  std::pair<double, double> odometry_error(const gtsam::Pose3& T_world_base) const {
     const auto pose = slam->current_pose_odom();
-    ASSERT_TRUE(pose.has_value());
+    if (!pose) return {1e9, 1e9};
     const Vector3d expected = T_world_base.translation() - Vector3d(0, 0, kBaseHeight);
-    EXPECT_LT((pose->translation() - expected).norm(), tol_m)
-        << "odometry at " << pose->translation().transpose() << ", robot at "
-        << expected.transpose();
-    EXPECT_LT(
-        gtsam::Rot3::Logmap(pose->rotation().between(T_world_base.rotation())).norm() * 180 / M_PI,
-        1.0);
+    return {
+        (pose->translation() - expected).norm(),
+        gtsam::Rot3::Logmap(pose->rotation().between(T_world_base.rotation())).norm() * 180 / M_PI};
+  }
+  void expect_odometry_at(const gtsam::Pose3& T_world_base, double tol_m) const {
+    const auto [m, deg] = odometry_error(T_world_base);
+    EXPECT_LT(m, tol_m);
+    EXPECT_LT(deg, 1.0);
   }
 };
 
-/// Loops, speeding up and slowing down, on a level floor (base frame: w = wz about the vertical,
-/// a = dv/dt + w x v); `v0` is the speed it starts them at.
+/// Tight loops, speeding up and slowing down, on a level floor (base frame: w = wz about the
+/// vertical, a = dv/dt + w x v): about 1 m/s^2 of centripetal acceleration, so that the heading is
+/// learned within a few seconds of them (cheap enough for the Debug builds of CI, where every scan
+/// costs a second); they start at 1 m/s and stay within some 3 m of where they start.
 struct Loops {
-  double v0;
-  double v(double t) const { return v0 + 0.4 * std::sin(0.5 * t); }
+  double v(double t) const { return 1.0 + 0.4 * std::sin(0.5 * t); }
   double dv(double t) const { return 0.2 * std::cos(0.5 * t); }
-  double wz(double t) const { return 0.5 + 0.3 * std::sin(0.4 * t); }
+  double wz(double t) const { return 0.9 + 0.3 * std::sin(0.4 * t); }
 };
 
 }  // namespace
@@ -306,21 +310,20 @@ struct Loops {
 // the robot's path throughout.
 TEST(ImuMount, TheSystemLearnsAnImuTurnedHalfAroundAndKeepsTheLidarOdometry) {
   SummitRig rig;
-  std::vector<Vector3d> world;  // a 10 x 16 m hall with some boxes in it
+  std::vector<Vector3d> world;  // a 9 x 9 m room with some boxes in it
   std::mt19937 rng(3);
-  box(world, rng, {-4, -3, 0}, {6, 13, 3}, 20);  // walls and ceiling
-  face(world, rng, {-4, -3, 0}, {10, 0, 0}, {0, 16, 0}, 20);
-  box(world, rng, {-3.5, 4, 0}, {-2.5, 5, 1.5}, 20);
-  box(world, rng, {4.5, 1, 0}, {5.5, 2.5, 2.2}, 20);
-  box(world, rng, {4, 9, 0}, {5, 10, 1.0}, 20);
-  box(world, rng, {-3.5, 11, 0}, {-2, 12, 2.5}, 20);
-  box(world, rng, {0.8, -2.5, 0}, {1.6, -1.8, 0.8}, 20);
-  // 30 s of loops: 870 deg of turning.
-  const Loops loops{0.8};
+  box(world, rng, {-4, -3, 0}, {5, 6, 3}, 10);  // walls and ceiling
+  face(world, rng, {-4, -3, 0}, {9, 0, 0}, {0, 9, 0}, 10);
+  box(world, rng, {-3.5, 3, 0}, {-2.5, 4, 1.5}, 10);
+  box(world, rng, {3.8, 0, 0}, {4.6, 1.5, 2.2}, 10);
+  box(world, rng, {3, 4.5, 0}, {4, 5.5, 1.0}, 10);
+  box(world, rng, {0.8, -2.6, 0}, {1.6, -2, 0.8}, 10);
+  // 6 s of loops: the heading is learned after 3, the odometry runs on with it for 3 more.
+  const Loops loops;
   double x = 0, y = 0, th = 0;
   const double dt = 0.001;
   gtsam::Pose3 truth;
-  for (int i = 0; i <= 30'000; ++i) {
+  for (int i = 0; i <= 6'000; ++i) {
     const double t = i * dt;
     const Timestamp stamp = 1'000'000'000LL + static_cast<Timestamp>(i) * 1'000'000LL;
     const double v = loops.v(t), wz = loops.wz(t);
@@ -337,46 +340,47 @@ TEST(ImuMount, TheSystemLearnsAnImuTurnedHalfAroundAndKeepsTheLidarOdometry) {
 }
 
 // A ramp before the heading is known: the IMU's gravity, read through the TF, has the slope
-// backwards, and bounding the LiDAR's attitude by it would turn the climb into a dive. The system
-// keeps the IMU out of the odometry until the accelerations have shown the heading (ADR-0058).
+// backwards, and bounding the LiDAR's attitude by it would turn the climb into a dive (some 19 deg
+// and 1 m off before the level mezzanine pulls the odometry back). The system keeps the IMU out of
+// the odometry until the accelerations have shown the heading (ADR-0058).
 TEST(ImuMount, ARampDrivenBeforeTheHeadingIsLearnedKeepsItsHeight) {
   SummitRig rig;
-  // A 30 x 16 m hall whose floor rises 1.18 m on a 10 m ramp (x from 2 to 12; 10 deg at its
-  // steepest) to a mezzanine; pillars along the walls, boxes on both levels.
-  const double H = std::tan(10.0 * M_PI / 180) * 10.0 / 1.5;
-  const auto h = [H](double x) {  // the floor's height; smooth, so the IMU sees no jolt
-    const double u = std::clamp((x - 2.0) / 10.0, 0.0, 1.0);
-    return H * u * u * (3 - 2 * u);
+  // A 14 x 8 m hall whose floor rises 0.59 m on a 5 m ramp (x from 1 to 6; 10 deg at its steepest)
+  // to a mezzanine; pillars along the walls, boxes on both levels. The ramp starts after the IMU's
+  // first second, at rest on the level floor, where its gravity settles: from then on it is there
+  // to bound the LiDAR, and the ramp shows whether it may.
+  constexpr double kRampStart = 1.0, kRampLength = 5.0;
+  const double H = std::tan(10.0 * M_PI / 180) * kRampLength / 1.5;
+  const auto u = [](double x) { return std::clamp((x - kRampStart) / kRampLength, 0.0, 1.0); };
+  const auto h = [&](double x) {  // the floor's height; smooth, so the IMU sees no jolt
+    return H * u(x) * u(x) * (3 - 2 * u(x));
   };
-  const auto dh = [H](double x) {
-    const double u = std::clamp((x - 2.0) / 10.0, 0.0, 1.0);
-    return H * 6 * u * (1 - u) / 10.0;
-  };
-  const auto ddh = [H](double x) {
-    return x < 2 || x > 12 ? 0.0 : H * (6 - 12 * (x - 2) / 10.0) / 100.0;
+  const auto dh = [&](double x) { return H * 6 * u(x) * (1 - u(x)) / kRampLength; };
+  const auto ddh = [&](double x) {
+    return u(x) <= 0 || u(x) >= 1 ? 0.0 : H * (6 - 12 * u(x)) / (kRampLength * kRampLength);
   };
   std::vector<Vector3d> world;
   std::mt19937 rng(3);
-  box(world, rng, {-4, -6, 0}, {26, 10, 5}, 10);  // walls and ceiling
-  face(world, rng, {-4, -6, 0}, {30, 0, 0}, {0, 16, 0}, 15, h);
-  for (double px = 0; px <= 24; px += 6) {
-    box(world, rng, {px, -5.8, 0}, {px + 0.4, -5.4, 5}, 15);
-    box(world, rng, {px, 9.4, 0}, {px + 0.4, 9.8, 5}, 15);
+  box(world, rng, {-2, -3, 0}, {12, 5, 3}, 10);  // walls and ceiling
+  face(world, rng, {-2, -3, 0}, {14, 0, 0}, {0, 8, 0}, 10, h);
+  for (double px = 0; px <= 11; px += 3.5) {
+    box(world, rng, {px, -2.8, 0}, {px + 0.4, -2.4, 3}, 10);
+    box(world, rng, {px, 4.4, 0}, {px + 0.4, 4.8, 3}, 10);
   }
-  box(world, rng, {-3, -5, 0}, {-2, -4, 1.5}, 15);
-  box(world, rng, {0, 6, 0}, {1, 7, 2}, 15);
-  box(world, rng, {22, -5, H}, {23, -4, H + 1.5}, 15);
-  box(world, rng, {18, 8, H}, {19.5, 9, H + 1}, 15);
-  box(world, rng, {24, 3, H}, {25, 4.5, H + 2}, 15);
-  box(world, rng, {13, -5, H}, {14, -4, H + 0.8}, 15);
+  box(world, rng, {-1.5, -2, 0}, {-0.8, -1.3, 1.5}, 10);
+  box(world, rng, {1, 3.5, 0}, {2, 4.2, 2}, 10);
+  box(world, rng, {10.5, -2.2, H}, {11.5, -1.4, H + 1.5}, 10);
+  box(world, rng, {10, 3.6, H}, {11.4, 4.3, H + 1}, 10);
+  box(world, rng, {6.5, -2.6, H}, {7.3, -2.0, H + 0.8}, 10);
 
-  // 16 s straight on at 1 m/s (up the ramp from 2 to 12 s), then 25 s of loops on the mezzanine,
-  // where the heading is learned.
-  const Loops loops{1.0};
+  // 8 s straight on at 1 m/s (up the ramp from 1 to 6 s), then 5 s of loops on the mezzanine: the
+  // heading is learned after 3, the odometry runs on with it for 2 more.
+  const Loops loops;
   double x = 0, y = 0, th = 0;
-  const double dt = 0.001, t_loops = 16.0;
+  const double dt = 0.001, t_loops = 8.0;
+  double worst_m = 0, worst_deg = 0;  // of the odometry while driving straight on
   gtsam::Pose3 truth;
-  for (int i = 0; i <= 41'000; ++i) {
+  for (int i = 0; i <= 13'000; ++i) {
     const double t = i * dt;
     const Timestamp stamp = 1'000'000'000LL + static_cast<Timestamp>(i) * 1'000'000LL;
     Vector3d w_base, f_base;
@@ -397,13 +401,21 @@ TEST(ImuMount, ARampDrivenBeforeTheHeadingIsLearnedKeepsItsHeight) {
       th += wz * dt;
     }
     if (i % 10 == 0) rig.imu(stamp, w_base, f_base);
-    if (i % 100 == 0) rig.lidar(stamp, world, truth);
-    if (i == 14'000) {
-      EXPECT_LT(rig.learned_heading_deg(),
-                0.0);                      // the ramp was driven before the heading was known
-      rig.expect_odometry_at(truth, 0.1);  // and the odometry is on the mezzanine
+    if (i % 100 == 0) {
+      rig.lidar(stamp, world, truth);
+      if (t < t_loops) {
+        const auto [m, deg] = rig.odometry_error(truth);
+        worst_m = std::max(worst_m, m);
+        worst_deg = std::max(worst_deg, deg);
+      }
+    }
+    if (i == 7'900) {  // the ramp was driven before the heading was known
+      EXPECT_LT(rig.learned_heading_deg(), 0.0);
     }
   }
+  // Up the ramp the odometry followed the robot, at every scan.
+  EXPECT_LT(worst_m, 0.15);
+  EXPECT_LT(worst_deg, 1.0);
   EXPECT_NEAR(rig.learned_heading_deg(), 180.0, 5.0);
   rig.expect_odometry_at(truth, 0.3);
 }
