@@ -56,6 +56,7 @@ struct SlamSystem::Impl {
       last_cam;  // newest camera frame (when the odometry comes from the LiDAR)
   std::map<KeyframeId, std::shared_ptr<const RgbdFrame>> keyframe_images;  // only when colorizing
   bool gravity_done = false;
+  Timestamp first_frame = 0;  // of the odometry's sensor, while waiting to level the start
   // The frame being processed, so that a frontend restart can re-level on it.
   const RgbdFrame* cur_rgbd = nullptr;
   const LidarScan* cur_scan = nullptr;
@@ -360,16 +361,31 @@ struct SlamSystem::Impl {
     return ext.T_base_imu.rotation().matrix() * g->up_body;  // IMU frame -> base frame
   }
 
-  /// Aligns the odometry frame with gravity before the first frame: from the IMU if it was static,
-  /// otherwise from the dominant ground plane of the first cloud (no IMU).
-  void init_gravity(const std::vector<Eigen::Vector3f>& cloud, const gtsam::Pose3& T_base_sensor) {
-    gravity_done = true;
+  /// Aligns the odometry frame with gravity before its first frame: from the IMU at rest over its
+  /// last half second, otherwise from the dominant ground plane of the frame's cloud. With an IMU
+  /// it waits for one (frames arrive before the IMU has half a second: a camera that starts with
+  /// it) and for a moment at rest (a hand-held sensor), skipping the frames meanwhile (false), up
+  /// to `kWait` from the first frame. A ground robot's IMU is not used for it: until the
+  /// accelerations have shown its heading, a TF that has it turned half around reads every tilt
+  /// backwards (ADR-0058: the Summit's 0.46 deg became a start 0.9 deg off and a fourth floor in
+  /// `prueba_03`), and a ground robot sees the ground plane it stands on.
+  bool init_gravity(const std::vector<Eigen::Vector3f>& cloud, const gtsam::Pose3& T_base_sensor,
+                    Timestamp stamp) {
+    constexpr Timestamp kWindow = 500'000'000, kWait = 2'000'000'000;  // ns
+    if (!first_frame) first_frame = stamp;
+    const bool imu_levels = cfg.sensors.imu.enabled && cfg.robot.platform != Platform::Ground;
     std::optional<Eigen::Vector3d> up_base;
-    if (cfg.sensors.imu.enabled && imu_buf.size() >= 100) {
-      const std::vector<ImuSample> w(imu_buf.begin(), imu_buf.end());
-      if (const auto g = estimate_gravity_from_imu(w, 0.05, 0.5))
-        up_base = ext.T_base_imu.rotation().matrix() * g->up_body;
+    if (imu_levels) {
+      if (!imu_buf.empty() && imu_buf.back().stamp - imu_buf.front().stamp >= kWindow) {
+        std::vector<ImuSample> w;
+        for (const auto& m : imu_buf)
+          if (m.stamp >= imu_buf.back().stamp - kWindow) w.push_back(m);
+        if (const auto g = estimate_gravity_from_imu(w, 0.05, 0.5))
+          up_base = ext.T_base_imu.rotation().matrix() * g->up_body;
+      }
+      if (!up_base && stamp - first_frame < kWait) return false;
     }
+    gravity_done = true;
     if (!up_base && !cloud.empty()) {
       const Eigen::Matrix3d R_bs = T_base_sensor.rotation().matrix();
       const auto up_sensor = estimate_up_from_ground_plane(
@@ -381,32 +397,48 @@ struct SlamSystem::Impl {
       // 0.14 m of floor height on average and S07 3 seeds in 20.
       if (up_sensor) up_base = (R_bs * *up_sensor).normalized();
     }
-    if (!up_base || !odom_fe) return;
+    if (!up_base) {
+      log->log(
+          LogLevel::Warn,
+          imu_levels
+              ? "no gravity alignment: the IMU did not rest for half a second at the start and "
+                "no ground plane was seen; the map starts at the sensor's attitude"
+              : "no gravity alignment: no ground plane was seen at the start; the map starts "
+                "at the sensor's attitude");
+      return true;
+    }
+    if (!odom_fe) return true;
     const gtsam::Pose3 T_init(rotation_from_up(*up_base), gtsam::Point3(0, 0, 0));
     odom_fe->reset(T_init);
     log->log(LogLevel::Info, "gravity alignment applied");
+    return true;
   }
 
-  /// Gravity-free vertical acceleration (world), averaged over the IMU samples since the last
-  /// update, using the current orientation estimate.
+  /// Gravity-free vertical acceleration, averaged over the IMU samples since the last update: the
+  /// specific force along up as the IMU's own gravity tracker gives it (base frame), so that it
+  /// does not depend on the odometry's attitude (a start that could not be levelled leaves the
+  /// odometry frame tilted: 20 deg read as -0.6 m/s^2, a lift that never was). None until that
+  /// gravity can be trusted (at once after a start at rest, else after the tracker has converged).
   std::optional<double> take_vertical_accel() {
     if (!cfg.sensors.imu.floor_changes)
       imu_since_update.clear();  // the IMU gives the attitude only
-    if (imu_since_update.empty()) return std::nullopt;
-    const Eigen::Matrix3d R_wb =
-        last_pose ? last_pose->rotation().matrix() : Eigen::Matrix3d::Identity();
+    const auto up = gravity.up();
+    if (imu_since_update.empty() || !up) {
+      imu_since_update.clear();
+      return std::nullopt;
+    }
     const Eigen::Matrix3d R_bi = ext.T_base_imu.rotation().matrix();
     double sum = 0;
-    for (const auto& m : imu_since_update) sum += (R_wb * R_bi * m.accel).z() - kStandardGravity;
+    for (const auto& m : imu_since_update) sum += (R_bi * m.accel).dot(*up) - kStandardGravity;
     const double az = sum / imu_since_update.size();
     if (debug_channel("IMU") && std::abs(az) > 0.5) {
       const auto& m0 = imu_since_update.front();
-      const Eigen::Vector3d w = R_wb * R_bi * m0.accel;
-      log->log(LogLevel::Debug, strprintf("imu az=%.2f n=%zu first a=(%.2f %.2f %.2f) world=(%.2f "
-                                          "%.2f %.2f) pose z-row=(%.2f %.2f %.2f) last_pose=%d",
-                                          az, imu_since_update.size(), m0.accel.x(), m0.accel.y(),
-                                          m0.accel.z(), w.x(), w.y(), w.z(), R_wb(2, 0), R_wb(2, 1),
-                                          R_wb(2, 2), last_pose.has_value()));
+      const Eigen::Vector3d f = R_bi * m0.accel;
+      log->log(LogLevel::Debug,
+               strprintf("imu az=%.2f n=%zu first a=(%.2f %.2f %.2f) base=(%.2f %.2f %.2f) "
+                         "up=(%.2f %.2f %.2f)",
+                         az, imu_since_update.size(), m0.accel.x(), m0.accel.y(), m0.accel.z(),
+                         f.x(), f.y(), f.z(), up->x(), up->y(), up->z()));
     }
     imu_since_update.clear();
     return az;
@@ -669,8 +701,9 @@ struct SlamSystem::Impl {
       if (!p_best) continue;
       corr.push_back({*p_best, Eigen::Vector2d(vis.keypoints[i].u, vis.keypoints[i].v)});
     }
-    const auto T_cam_obj = verify_loop_pnp(corr, vis.K, tuning.visual_loop_min_inliers,
-                                           tuning.visual.tracker.ransac_reprojection_px, 300);
+    const auto T_cam_obj =
+        verify_loop_pnp(corr, vis.K, tuning.visual_loop_min_inliers,
+                        tuning.visual.tracker.ransac_reprojection_px * pixel_scale(vis.K), 300);
     if (!T_cam_obj) return std::nullopt;
     // T_cam_obj maps candidate-camera points to the current camera: T_curcam_candcam.
     const gtsam::Pose3 T_candcam_curcam = T_cam_obj->inverse();
@@ -1273,9 +1306,10 @@ void SlamSystem::add_rgbd(const RgbdFrame& f) {
     return;
   }
   if (!s.visual_fe || s.modes.odometry != OdometrySource::Camera) return;
-  if (!s.gravity_done)
-    s.init_gravity(depth_to_cloud(f.depth, f.K, 4, s.tuning.visual.tracker.depth),
-                   s.ext.T_base_camera);
+  if (!s.gravity_done &&
+      !s.init_gravity(depth_to_cloud(f.depth, f.K, 4, s.tuning.visual.tracker.depth),
+                      s.ext.T_base_camera, f.stamp))
+    return;  // waiting for the IMU to level the start
   s.cur_rgbd = &f;
   struct Clear {
     const RgbdFrame*& p;
@@ -1318,7 +1352,8 @@ void SlamSystem::add_rgbd(const RgbdFrame& f) {
 void SlamSystem::add_lidar(const LidarScan& scan) {
   auto& s = *impl_;
   if (!s.lidar_fe || s.modes.odometry != OdometrySource::Lidar) return;
-  if (!s.gravity_done) s.init_gravity(scan.points, s.ext.T_base_lidar);
+  if (!s.gravity_done && !s.init_gravity(scan.points, s.ext.T_base_lidar, scan.stamp))
+    return;  // waiting for the IMU to level the start
   s.cur_scan = &scan;
   struct Clear {
     const LidarScan*& p;

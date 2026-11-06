@@ -58,6 +58,15 @@ class ImuMount {
   Eigen::Vector3d mean_accel() const {
     return n_accel_ ? Eigen::Vector3d(accel_sum_ / n_accel_) : Eigen::Vector3d::Zero();
   }
+  /// The magnitude of gravity as the accelerometer measures it: the mean over one-second windows of
+  /// the norm of the window's mean specific force, each sample turned into the frame of the
+  /// window's start by the gyroscope. The mean of the raw vectors would shrink on a sensor that
+  /// tilts (a hand-held camera: 8.9 instead of 9.97 m/s^2); within a window the robot's own
+  /// accelerations and the vibration average out, and the gyroscope's drift over a second does not
+  /// count.
+  double gravity_magnitude() const {
+    return n_windows_ ? norm_sum_ / static_cast<double>(n_windows_) : mean_accel().norm();
+  }
   size_t num_samples() const { return n_accel_; }
   /// The last seconds of IMU, as received.
   const std::deque<ImuSample>& recent() const { return recent_; }
@@ -78,6 +87,14 @@ class ImuMount {
   std::deque<Turn> waiting_;      // odometry turns the IMU does not cover yet
   Eigen::Vector3d accel_sum_ = Eigen::Vector3d::Zero();
   size_t n_accel_ = 0;
+  // The current window of gravity_magnitude(): its start, the rotation from the newest sample's
+  // frame to its start's, and the sum of the samples turned into that frame.
+  Timestamp win_start_ = 0;
+  Eigen::Matrix3d win_R_ = Eigen::Matrix3d::Identity();
+  Eigen::Vector3d win_sum_ = Eigen::Vector3d::Zero();
+  size_t win_n_ = 0;
+  double norm_sum_ = 0;
+  size_t n_windows_ = 0;
   Eigen::Matrix3d B_ = Eigen::Matrix3d::Zero();  // sum of rotvec_base * rotvec_imu^T
   double energy_ = 0;                            // sum of |rotvec_base|^2
   double turned_ = 0;                            // sum of |rotvec_base|

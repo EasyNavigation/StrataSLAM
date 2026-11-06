@@ -60,6 +60,11 @@ def _launch_setup(context, *args, **kwargs):
         "bag": os.path.expanduser(LaunchConfiguration("bag").perform(context)),
     }
     namespace = LaunchConfiguration("namespace").perform(context).strip("/")
+    log_level = LaunchConfiguration("log_level").perform(context).lower()
+    if log_level not in ("debug", "info", "warn", "error", "fatal"):
+        raise RuntimeError(f"log_level:={log_level}: use debug, info, warn, error or fatal")
+    # The level of the node, not of the container: its logger is named after the node, under its namespace.
+    node_logger = ".".join(namespace.split("/") + ["strataslam_node"]) if namespace else "strataslam_node"
     actions = []
     if LaunchConfiguration("viewer").perform(context).lower() in ("true", "1", "yes"):
         try:
@@ -85,6 +90,7 @@ def _launch_setup(context, *args, **kwargs):
                            namespace=namespace, parameters=[params])
         ],
         output="screen",
+        arguments=["--ros-args", "--log-level", f"{node_logger}:={log_level}"],
         # With a bag, Ctrl+C saves the map of what was processed: the final optimization of a large map can
         # take longer than the 5 s that launch waits before escalating to SIGTERM and SIGKILL.
         sigterm_timeout="60",
@@ -123,6 +129,8 @@ def generate_launch_description():
             DeclareLaunchArgument("viewer", default_value="false", description="Live view in Rerun: 3D, top view and level line"),
             DeclareLaunchArgument("namespace", default_value="",
                                   description="Namespace of the node, its topics and services (to run several in one ROS domain)"),
+            DeclareLaunchArgument("log_level", default_value="info",
+                                  description="Log level of the node: debug shows the traces of the STRATASLAM_DEBUG_<CHANNEL> channels"),
             OpaqueFunction(function=_launch_setup),
         ]
     )

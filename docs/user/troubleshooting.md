@@ -18,6 +18,6 @@
 | LiDAR timestamps | provide a per-point `t`/`time` field (s or ns) for deskew; without it the scan is used as is |
 
 Diagnostics for developers: `STRATASLAM_DEBUG_<CHANNEL>=1` enables per-frame traces of a channel (`TRACK`, `FLOORS`,
-`ALT` (=n: every n-th sample), `BACKEND`, `LOOPS`, `IMU`). They go to the Logger at Debug level: in the node run it with
-`--ros-args --log-level strataslam_node:=debug`; the scenario tools print them to stderr (also with
+`ALT` (=n: every n-th sample), `BACKEND`, `LOOPS`, `IMU`). They go to the Logger at Debug level: launch the node with
+`log_level:=debug` (for example `STRATASLAM_DEBUG_TRACK=1 ros2 launch strataslam_ros strataslam.launch.py profile:=... log_level:=debug`); the scenario tools print them to stderr (also with
 `STRATASLAM_VERBOSE=1` for the info messages).

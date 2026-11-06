@@ -384,6 +384,49 @@ TEST(Tracker, EachKeypointIsReportedAsInlierRejectedOrUnmatched) {
   EXPECT_EQ(r.inliers, 80);
 }
 
+// The same scene, the same motion and the same calibration error, seen by a VGA camera and by
+// one with twice its focal length (a 720p OAK-D Lite): the error covers twice the pixels, and the
+// pixel thresholds of the tracking grow with the focal length, so both keep every point. With the
+// thresholds of the VGA camera 40 % of the 720p points fell outside RANSAC's 3 px.
+TEST(Tracker, ALongerFocalLengthTracksAsWellAsTheReferenceOne) {
+  for (const double f : {kReferenceFocalPx, 2 * kReferenceFocalPx}) {
+    CameraIntrinsics K;
+    K.width = static_cast<int>(1.2 * f);
+    K.height = static_cast<int>(0.9 * f);
+    K.fx = K.fy = f;
+    K.cx = 0.6 * f;
+    K.cy = 0.45 * f;
+    std::mt19937 rng(9);
+    std::uniform_real_distribution<double> ux(-2.0, 2.0), uy(-1.5, 1.5), uz(3.0, 6.0);
+    std::normal_distribution<double> error(0.0, f / kReferenceFocalPx);  // px
+    const size_t n = 100;
+    std::vector<Vector3d> pts(n);
+    for (auto& p : pts) p = Vector3d(ux(rng), uy(rng), uz(rng));
+    const auto desc = random_descriptors(n, 13);
+    const auto observe = [&](const gtsam::Pose3& T_odom_cam, double sigma) {
+      VisualObservation o;
+      std::normal_distribution<double> e(0.0, sigma);
+      for (size_t i = 0; i < n; ++i) {
+        const Vector3d c = T_odom_cam.transformTo(pts[i]);
+        RgbKeypoint k;
+        k.u = static_cast<float>(K.fx * c.x() / c.z() + K.cx + e(rng));
+        k.v = static_cast<float>(K.fy * c.y() / c.z() + K.cy + e(rng));
+        k.response = 1.f;
+        k.descriptor = desc[i];
+        o.keypoints.push_back(k);
+        o.p_cam.push_back(c);
+      }
+      return o;
+    };
+    VisualTracker tracker{VisualTrackerConfig()};
+    tracker.initialize(K, observe(gtsam::Pose3(), 0.0), gtsam::Pose3());
+    const gtsam::Pose3 moved(gtsam::Rot3::Yaw(0.01), gtsam::Point3(0.05, 0.0, 0.02));
+    const auto r = tracker.track(K, observe(moved, error.stddev()), moved, false);
+    ASSERT_TRUE(r.ok) << "focal " << f;
+    EXPECT_GE(r.inliers, 95) << "focal " << f;
+  }
+}
+
 TEST(Tracker, SystemReportsKeypointUseOnlyWithCameraOdometry) {
   Config lidar;
   lidar.sensors.lidar.enabled = true;

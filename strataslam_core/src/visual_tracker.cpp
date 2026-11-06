@@ -222,8 +222,11 @@ VisualTracker::TrackResult VisualTracker::track(const CameraIntrinsics& K,
   s.matched_landmark.assign(nk, -1);
   if (!s.init || nk < 10 || s.map.empty()) return out;
 
+  const double px = pixel_scale(K);
+  const double match_radius = s.cfg.match_radius_px * px, wide_radius = s.cfg.wide_radius_px * px,
+               reprojection = s.cfg.ransac_reprojection_px * px;
   // Spatial grid over keypoints for windowed search.
-  const double cell = std::max(8.0, widen ? s.cfg.wide_radius_px : s.cfg.match_radius_px);
+  const double cell = std::max(8.0, widen ? wide_radius : match_radius);
   std::unordered_map<int64_t, std::vector<int>> grid;
   // Packed through uint64_t: shifting a negative int64_t left is undefined (UBSan aborted the
   // scenarios on keypoints left of or above the image, cx or cy = -1; audit AUD-047). The bits are
@@ -288,11 +291,11 @@ VisualTracker::TrackResult VisualTracker::track(const CameraIntrinsics& K,
 
   std::vector<PnPCorrespondence> corr;
   std::vector<std::pair<int, int>> pairs;
-  guided(pred, widen ? s.cfg.wide_radius_px : s.cfg.match_radius_px, &corr, &pairs);
+  guided(pred, widen ? wide_radius : match_radius, &corr, &pairs);
   if (static_cast<int>(corr.size()) < 2 * s.cfg.min_inliers && !widen) {
     corr.clear();
     pairs.clear();
-    guided(pred, s.cfg.wide_radius_px, &corr, &pairs);
+    guided(pred, wide_radius, &corr, &pairs);
   }
   if (static_cast<int>(corr.size()) < s.cfg.min_inliers) {
     // Global (windowless) matching against the whole local map as a last resort.
@@ -324,10 +327,8 @@ VisualTracker::TrackResult VisualTracker::track(const CameraIntrinsics& K,
   if (out.matches < s.cfg.min_inliers) return out;
 
   const gtsam::Pose3 init_cam_odom = pred.inverse();
-  PnPResult pnp =
-      solve_pnp(corr, K, &init_cam_odom, s.cfg.ransac_reprojection_px, s.cfg.ransac_iterations);
-  if (!pnp.ok)
-    pnp = solve_pnp(corr, K, nullptr, s.cfg.ransac_reprojection_px, s.cfg.ransac_iterations);
+  PnPResult pnp = solve_pnp(corr, K, &init_cam_odom, reprojection, s.cfg.ransac_iterations);
+  if (!pnp.ok) pnp = solve_pnp(corr, K, nullptr, reprojection, s.cfg.ransac_iterations);
   if (!pnp.ok) return out;
   out.inliers = static_cast<int>(pnp.inliers.size());
   gtsam::Pose3 T_cam_obj = pnp.T_cam_obj;
@@ -342,7 +343,7 @@ VisualTracker::TrackResult VisualTracker::track(const CameraIntrinsics& K,
       m.depth = p_cam ? std::optional<double>(p_cam->z()) : std::nullopt;
       rm.push_back(m);
     }
-    T_cam_obj = refine_rgbd(rm, K, T_cam_obj, s.cfg.pixel_sigma, s.cfg.depth_sigma_coeff,
+    T_cam_obj = refine_rgbd(rm, K, T_cam_obj, s.cfg.pixel_sigma * px, s.cfg.depth_sigma_coeff,
                             s.cfg.depth_sigma_floor, 8);
   }
   out.T_odom_cam = T_cam_obj.inverse();

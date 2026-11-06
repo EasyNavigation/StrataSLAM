@@ -13,6 +13,17 @@
 
 namespace strataslam {
 
+/// Focal length (px) at which the pixel thresholds of VisualTrackerConfig hold: a VGA camera
+/// (TUM RGB-D, RealSense at 640x480). The same motion and the same calibration errors cover more
+/// pixels with a longer focal length (a 720p OAK-D Lite: 1000 px), so the thresholds grow with it
+/// (pixel_scale); below it they stay, since the keypoints' own noise does not shrink.
+constexpr double kReferenceFocalPx = 525.0;
+/// Factor applied to the pixel thresholds of the visual tracking for a camera of intrinsics K.
+inline double pixel_scale(const CameraIntrinsics& K) {
+  return K.fx > kReferenceFocalPx ? K.fx / kReferenceFocalPx : 1.0;
+}
+
+/// Pixel thresholds are for a focal length of kReferenceFocalPx (see pixel_scale).
 struct VisualTrackerConfig {
   BackprojectionConfig depth;
   int min_inliers = 30;   ///< below: tracking is Lost

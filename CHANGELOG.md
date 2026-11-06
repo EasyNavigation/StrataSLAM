@@ -18,6 +18,9 @@
   `strataslam doctor --preset-dir` and the node's `preset_dir` parameter are gone.
 
 ### Added
+- `log_level:=` for the launch file (default `info`): `log_level:=debug` shows the traces of the
+  `STRATASLAM_DEBUG_<CHANNEL>` channels. The troubleshooting guide told to pass `--ros-args --log-level`, which never
+  reached the node in its container.
 - Live view: a second 3D tab, **3D: height**, with the map coloured by height (blue low, red high) next to
   **3D: floors**, each floor in its colour.
 - README: how to run it with ROS 2 (a real robot, a recorded rosbag, next to a navigation stack). The project logo and the CI, coverage (Codecov), licence, ROS 2 and C++ badges in the README (`docs/media/logo.png`); `scripts/check_links.py` also checks the `src` and `href` of HTML tags.
@@ -83,6 +86,10 @@
 - `scripts/install_deps.sh` and `scripts/check_install.sh` (install guide tested in clean containers), `.clang-tidy` with a CI job (ADR-0037), the `ldd` check of linked libraries in `license_audit.py` (ADR-0036).
 
 ### Changed
+- The pixel thresholds of the visual tracking (matching windows, RANSAC, the reprojection weight) are for a VGA focal
+  length (525 px) and grow with a longer one: the same motion and calibration errors cover more pixels. A hand-held
+  OAK-D Lite at 720p (1000 px) lost tracking in 46 % of its frames, now 25 %, as at 360p; VGA cameras and the
+  simulator are unchanged.
 - With an IMU, the LiDAR odometry keeps its roll and pitch within 1 deg of gravity (`max_tilt_error_deg` of the
   LiDAR frontend), as the visual one did: its pitch drift no longer turns a flat drive into a climb (ADR-0058).
   On a ground robot this waits until the IMU's heading is learned from the accelerations. With the Summit XL's IMU,
@@ -107,6 +114,18 @@
 - `docs/user/install.md` rewritten and tested; `docs/data_format.md` documents `fused/`, the optional payload folders and the integrity checks.
 
 ### Fixed
+- A hand-held camera with an IMU (OAK-D Lite) mapped almost nothing: three false floor transitions, one ending as a
+  63 m lift. Three causes, all fixed:
+  - The start was never levelled: it was tried once, on the first frame, before the IMU had reached the pipeline
+    (0.3 s in). The start now waits for the IMU at rest over half a second, up to 2 s, and says so when it gives up.
+    A ground robot's start is still levelled by the ground plane it stands on: until the accelerations show its
+    heading, a TF with the IMU turned half around reads its tilt backwards (the Summit's `prueba_03` got a fourth
+    floor that way).
+  - The floor manager read the IMU's vertical acceleration through the odometry's attitude, so an unlevelled start
+    (20 deg) looked like a lift (-0.6 m/s^2). It now uses the IMU's own gravity, from when that can be trusted.
+  - The accelerometer's scale was taken from the norm of its mean reading, which shrinks on a sensor that tilts
+    (8.9 instead of 9.97 m/s^2): a correct IMU was scaled by 1.099. It is now measured over one-second windows held
+    still by the gyroscope.
 - An IMU turned about the vertical with respect to its TF (the Summit XL's reads x and y backwards) is detected:
   the mounting learned from the motion also uses the robot's accelerations, since the turns of a ground robot leave
   that heading unobserved (ADR-0058). Before, every slope it reported had the wrong sign.

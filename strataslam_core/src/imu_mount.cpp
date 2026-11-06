@@ -27,6 +27,21 @@ ImuMount::ImuMount(const gtsam::Rot3& R_base_imu_tf, double min_turn_deg)
 
 void ImuMount::add_imu(const ImuSample& s) {
   if (!recent_.empty() && s.stamp <= recent_.back().stamp) return;
+  constexpr Timestamp kGravityWindow = 1'000'000'000;  // ns
+  if (win_n_ == 0) {
+    win_start_ = s.stamp;
+    win_R_.setIdentity();
+  } else {
+    win_R_ =
+        win_R_ * gtsam::Rot3::Expmap(s.gyro * (s.stamp - recent_.back().stamp) * 1e-9).matrix();
+  }
+  win_sum_ += win_R_ * s.accel;
+  if (++win_n_ >= 10 && s.stamp - win_start_ >= kGravityWindow) {
+    norm_sum_ += (win_sum_ / static_cast<double>(win_n_)).norm();
+    ++n_windows_;
+    win_sum_.setZero();
+    win_n_ = 0;
+  }
   recent_.push_back(s);
   while (recent_.front().stamp < s.stamp - kKeep) recent_.pop_front();
   accel_sum_ += s.accel;
@@ -114,7 +129,7 @@ std::optional<ImuMount::Estimate> ImuMount::estimate() const {
   e.R_base_imu = gtsam::Rot3(R);
   const Eigen::Vector3d g = mean_accel();
   e.accel_sign = (R * g).dot(up_sum_) >= 0 ? 1.0 : -1.0;
-  const double ratio = g.norm() / kStandardGravity;
+  const double ratio = gravity_magnitude() / kStandardGravity;
   e.accel_scale = std::abs(ratio - 1.0) < 0.15 ? 1.0 / ratio : 1.0;
   // The heading about the base's vertical: the turn about the base's z that best brings the
   // accelerometer's horizontal force (gravity removed) onto the base's acceleration, H = sum of
