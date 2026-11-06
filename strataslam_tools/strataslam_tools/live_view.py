@@ -1,4 +1,5 @@
-"""Live view of a StrataSLAM run in Rerun: the 3D map with each floor in its colour, the top view, the
+"""Live view of a StrataSLAM run in Rerun: the 3D map with each floor in its colour (or, in its second tab,
+coloured by height), the top view, the
 level line (height of the robot over time, coloured by floor; with a barometer, its height too) and the
 log of the run below them. With a camera, its image with the keypoints and the depth image used appear
 next to the log.
@@ -41,6 +42,25 @@ DRAW_SENSOR, DRAW_PATH, DRAW_ROBOT = 35.0, 40.0, 50.0
 KEYPOINT_RADIUS = 3.0  # UI points
 PATH_PERIOD_S = 0.25  # the paths are re-sent at most this often (wall clock): they grow with the run
 TOPDOWN_MAX_POINTS = 300_000
+# Points of one floor sent to the 3D views (each tab): a floor of a 1 km drive has 9 million, more than the viewer
+# and the graphics card take every refresh.
+WORLD_MAX_POINTS = 1_500_000
+# The height colours span the lowest to the highest point mapped so far; when that range grows by more than this, every
+# floor is coloured again, so that one height has one colour across the map.
+HEIGHT_RECOLOUR_M = 0.5
+TURBO_LO, TURBO_HI = 0.1, 0.9  # the part of the Turbo map used: blue to red
+
+
+def height_colours(z: NDArray[np.float32], lo: float, hi: float) -> NDArray[np.uint8]:
+    """Turbo colour map (blue low, red high) of heights between lo and hi: N x 3 RGB. Polynomial fit of Google's Turbo
+    (no matplotlib needed)."""
+    x = np.clip((np.asarray(z, dtype=np.float64) - lo) / max(hi - lo, 1e-6), 0.0, 1.0)
+    x = TURBO_LO + x * (TURBO_HI - TURBO_LO)  # without the near-black ends, lost on the viewer's dark background
+    r = 0.13572138 + x * (4.61539260 + x * (-42.66032258 + x * (132.13108234 + x * (-152.94239396 + x * 59.28637943))))
+    g = 0.09140261 + x * (2.19418839 + x * (4.84296658 + x * (-14.18503333 + x * (4.27729857 + x * 2.82956604))))
+    b = 0.10667330 + x * (12.64194608 + x * (-60.58204836 + x * (110.36276771 + x * (-89.90310912 + x * 27.34824973))))
+    rgb: NDArray[np.uint8] = (np.clip(np.stack([r, g, b], axis=-1), 0.0, 1.0) * 255.0).astype(np.uint8)
+    return rgb
 
 
 def floor_colour(floor: int) -> tuple[int, int, int]:
@@ -80,11 +100,13 @@ class LiveView:
         self._z_bottom: float | None = None
         self._map_lo: NDArray[np.float32] | None = None  # extent of the map drawn so far (live scan is cut to it)
         self._map_hi: NDArray[np.float32] | None = None
+        self._height_range: tuple[float, float] | None = None  # range of the height colours sent so far
 
     def _send_static(self) -> None:
         rr = self.rr
         self._send_blueprint(camera=self._camera)
         rr.log("world", rr.ViewCoordinates.RIGHT_HAND_Z_UP, static=True)
+        self._height_range = None  # a new window: the height colours are sent again with the clouds
         rr.log("camera", rr.AnnotationContext(KEYPOINT_CLASSES), static=True)  # colour and name of each `use`
 
     def reopen(self) -> None:
@@ -115,7 +137,14 @@ class LiveView:
         self.rr.send_blueprint(rrb.Blueprint(
             rrb.Vertical(
                 rrb.Horizontal(
-                    rrb.Spatial3DView(origin="/world", name="3D"),
+                    # The same map in two tabs, a click apart: each floor in its colour, or coloured by height.
+                    rrb.Tabs(
+                        rrb.Spatial3DView(origin="/world", contents=["+ $origin/**", "- /world/height/**"],
+                                          name="3D: floors"),
+                        rrb.Spatial3DView(origin="/world", contents=["+ $origin/**", "- /world/floors/**"],
+                                          name="3D: height"),
+                        active_tab=0,
+                    ),
                     rrb.Vertical(
                         rrb.Spatial2DView(origin="/topdown", name="Top view"),
                         rrb.TimeSeriesView(origin="/levels", name="Level line (z over time)",
@@ -211,6 +240,18 @@ class LiveView:
         self._last_path_wall = time.monotonic()
         self._dirty = False
 
+    def floor_path(self, floor: int, pieces: list[list[tuple[float, float, float]]]) -> None:
+        """The optimized path of a floor (its keyframes, in pieces: one per visit), in the common frame. It replaces
+        what the poses drew there, which a loop closure leaves with the drift it corrected; the poses that follow
+        continue it from its last keyframe."""
+        pieces = [list(q) for q in pieces if q]
+        if not pieces:
+            return
+        if floor == self._last_floor:
+            pieces.append([pieces[-1][-1]])  # the live tail, from the last keyframe
+        self._strips[floor] = pieces
+        self._dirty = True
+
     def floor_cloud(self, t: float, floor: int, points: Points) -> None:
         """The cloud of one floor in the common frame (N x 3); replaces the previous one of that floor (static,
         latest only: every refresh carries the whole floor)."""
@@ -224,15 +265,42 @@ class LiveView:
             self._map_lo = lo if self._map_lo is None else np.minimum(self._map_lo, lo)
             self._map_hi = hi if self._map_hi is None else np.maximum(self._map_hi, hi)
         self._floor_clouds[floor] = p
+        if self._recolour_heights():
+            for other, q in self._floor_clouds.items():
+                if other != floor:
+                    self._log_height_cloud(other, q)
         self._log_floor_cloud(floor, p)
+
+    def _recolour_heights(self) -> bool:
+        """Whether the range of the map's heights moved enough to colour every floor again (and takes it)."""
+        if self._z_bottom is None or self._z_top is None:
+            return False
+        lo, hi = self._z_bottom, self._z_top
+        if self._height_range is not None and abs(lo - self._height_range[0]) < HEIGHT_RECOLOUR_M \
+                and abs(hi - self._height_range[1]) < HEIGHT_RECOLOUR_M:
+            return False
+        self._height_range = (lo, hi)
+        return True
 
     def _log_floor_cloud(self, floor: int, p: NDArray[np.float32]) -> None:
         rr = self.rr
         colour = floor_colour(floor)
+        p = p[::max(1, len(p) // WORLD_MAX_POINTS)]
         rr.log(f"world/floors/floor_{floor}", rr.Points3D(p, colors=[colour], radii=self._radius(1.0)), static=True)
         step = max(1, len(p) // TOPDOWN_MAX_POINTS)
         q = p[::step, :2] * np.array([1.0, -1.0], dtype=np.float32)
         rr.log(f"topdown/floors/floor_{floor}", rr.Points2D(q, colors=[colour], radii=self._radius(1.0)), static=True)
+        self._log_height_cloud(floor, p)
+
+    def _log_height_cloud(self, floor: int, p: NDArray[np.float32]) -> None:
+        """The floor's cloud coloured by height, for the tab "3D: height"."""
+        p = p[::max(1, len(p) // WORLD_MAX_POINTS)]
+        if self._height_range is None and not self._recolour_heights():
+            return
+        assert self._height_range is not None
+        lo, hi = self._height_range
+        self.rr.log(f"world/height/floor_{floor}",
+                    self.rr.Points3D(p, colors=height_colours(p[:, 2], lo, hi), radii=self._radius(1.0)), static=True)
 
     def sensor_cloud(self, t: float, sensor: str, points: Points) -> None:
         """What a sensor (`lidar`, `camera`) sees right now, in the common frame (N x 3), within the map's

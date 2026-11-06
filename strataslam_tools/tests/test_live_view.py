@@ -14,6 +14,28 @@ def test_floor_colours_are_distinct_and_transitions_grey() -> None:
     assert live_view.floor_colour(10) == live_view.floor_colour(0)
 
 
+def test_height_colours_go_from_blue_low_to_red_high() -> None:
+    c = live_view.height_colours(np.array([-1.0, 0.0, 5.0, 10.0, 11.0], dtype=np.float32), 0.0, 10.0)
+    assert c.shape == (5, 3) and c.dtype == np.uint8
+    assert c[1, 2] > c[1, 0] and c[3, 0] > c[3, 2]  # blue at the bottom, red at the top
+    assert (c[0] == c[1]).all() and (c[4] == c[3]).all()  # outside the range: the colour of its end
+    assert min(int(v.max()) for v in c) > 150  # no near-black end: they would vanish on the dark background
+
+
+def test_the_height_colours_follow_the_map_as_it_grows(tmp_path: Path) -> None:
+    require_module("rerun", "pip install rerun-sdk, the optional extra `viewer`")
+    view = live_view.LiveView(save=tmp_path / "run.rrd")
+    sent: list[str] = []
+    view._log_height_cloud = lambda floor, p: sent.append(f"floor_{floor}")  # type: ignore[method-assign]
+    view.floor_cloud(1.0, 0, np.random.default_rng(1).random((300, 3)))
+    assert sent == ["floor_0"] and view._height_range is not None
+    view.floor_cloud(2.0, 0, np.random.default_rng(2).random((300, 3)))  # same heights: only this floor again
+    assert sent == ["floor_0", "floor_0"]
+    view.floor_cloud(3.0, 1, np.random.default_rng(3).random((300, 3)) + [0.0, 0.0, 3.0])  # the map grows 3 m up
+    assert sorted(sent[2:]) == ["floor_0", "floor_1"]  # every floor coloured again on the new range
+    assert view._height_range[1] > 3.0
+
+
 def test_a_run_across_two_floors_is_recorded(tmp_path: Path) -> None:
     require_module("rerun", "pip install rerun-sdk, the optional extra `viewer`")
     out = tmp_path / "run.rrd"
@@ -38,8 +60,33 @@ def test_a_run_across_two_floors_is_recorded(tmp_path: Path) -> None:
     assert view._z_bottom is not None and view._z_bottom < 0.1
     assert view._z_top is not None and view._z_top > 3.0
     assert set(view._strips) == {0, -1, 1}
+    assert view._height_range is not None and view._height_range[1] > 3.0  # the tab "3D: height" spans both floors
     import rerun as rr
 
     if hasattr(rr, "disconnect"):
         rr.disconnect()
     assert out.stat().st_size > 0
+
+
+def test_the_optimized_path_replaces_the_drifted_one_and_the_live_tail_continues_it(tmp_path: Path) -> None:
+    require_module("rerun", "pip install rerun-sdk, the optional extra `viewer`")
+    view = live_view.LiveView(save=tmp_path / "run.rrd")
+    for i in range(5):
+        view.pose(float(i), (float(i), 0.5 * i, 0.0), 0)  # drifted odometry
+    view.floor_path(0, [[(0.0, 0.0, 0.0), (2.0, 0.0, 0.0)], [(3.0, 0.0, 0.0), (4.0, 0.0, 0.0)]])  # two visits
+    assert view._strips[0] == [[(0.0, 0.0, 0.0), (2.0, 0.0, 0.0)], [(3.0, 0.0, 0.0), (4.0, 0.0, 0.0)], [(4.0, 0.0, 0.0)]]
+    view.pose(5.0, (5.0, 0.0, 0.0), 0)
+    assert view._strips[0][-1] == [(4.0, 0.0, 0.0), (5.0, 0.0, 0.0)]  # the live tail starts at the last keyframe
+    view.floor_path(1, [])  # nothing to draw: nothing changes
+    assert 1 not in view._strips
+
+
+def test_a_large_floor_is_thinned_for_the_3d_views(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    require_module("rerun", "pip install rerun-sdk, the optional extra `viewer`")
+    monkeypatch.setattr(live_view, "WORLD_MAX_POINTS", 1000)
+    view = live_view.LiveView(save=tmp_path / "run.rrd")
+    sizes: list[int] = []
+    real = view.rr.Points3D
+    monkeypatch.setattr(view.rr, "Points3D", lambda p, **kw: sizes.append(len(p)) or real(p, **kw))
+    view.floor_cloud(1.0, 0, np.random.default_rng(1).random((10_000, 3)))
+    assert sizes and max(sizes) <= 1000  # both tabs

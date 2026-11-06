@@ -114,8 +114,11 @@ ros2 launch strataslam_ros strataslam.launch.py profile:=profile.yaml viewer:=tr
 - **3D**: the cloud of each floor in its own colour, the path travelled in white and the robot in yellow, with a
   vertical pole through every level mapped so far that shows where it is from any angle; in magenta, what the
   sensors see right now (the LiDAR scan, the camera's depth) within the extent of the map, so that far returns do
-  not move the framing, under `sensor` in the entity tree.
-- **Top view**: the same from above.
+  not move the framing, under `sensor` in the entity tree. Two tabs show it: **3D: floors**, each floor in its
+  colour, and **3D: height**, the same cloud coloured by height from blue (lowest point mapped so far) to red
+  (highest), as RViz's axis colour does; the colours are spread again over the whole map when it grows by more
+  than half a metre. Each tab keeps its own camera.
+- **Top view**: the map from above, each floor in its colour.
 - **Level line**: the height of the robot over time, coloured by floor (grey while in a transition or lost). With a
   barometer, its filtered height is a magenta line, aligned with the robot's height at its first reading: in each
   transition it shows whether the barometer agrees with the odometry, and how much it drifts on a floor.

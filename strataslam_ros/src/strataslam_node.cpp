@@ -1273,11 +1273,21 @@ class StrataslamNode : public rclcpp::Node {
   }
 
   void publish_cloud() {
-    // Building the cloud of a whole floor is not free: only when someone listens (a viewer, RViz).
-    if (!slam_ || slam_->keyframes().empty() || cloud_pub_->get_subscription_count() == 0) return;
+    // Building the cloud of a whole floor is not free: only when someone listens (a viewer, RViz),
+    // and at most a tenth of the time. A floor of a large map (a 1 km drive: 9 million points, 100
+    // MB) takes long to build and to send; at a fixed period of one second it took most of the run,
+    // and the viewer's machine froze under the messages.
+    constexpr double kCloudShare = 0.1;
+    const auto start = std::chrono::steady_clock::now();
+    if (!slam_ || slam_->keyframes().empty() || cloud_pub_->get_subscription_count() == 0 ||
+        start < cloud_not_before_)
+      return;
     const auto pts = slam_->floor_cloud(last_floor_, cfg_.output.voxel_size);
-    if (pts.empty()) return;
-    cloud_pub_->publish(xyz_cloud(pts, "floor_" + std::to_string(last_floor_), now()));
+    if (!pts.empty())
+      cloud_pub_->publish(xyz_cloud(pts, "floor_" + std::to_string(last_floor_), now()));
+    const auto spent = std::chrono::steady_clock::now() - start;
+    cloud_not_before_ = start + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                                    spent * (1.0 / kCloudShare));
   }
 
   // ---------------- same-level candidates ----------------
@@ -1460,6 +1470,7 @@ class StrataslamNode : public rclcpp::Node {
   std::string profile_path_, vocabulary_path_, features_topic_, profile_text_;
   bool visual_loops_off_ = false;  ///< loops would come from the camera, but there is no vocabulary
   double cloud_period_s_ = 5.0;
+  std::chrono::steady_clock::time_point cloud_not_before_{};  ///< see publish_cloud
   double wait_for_viewer_s_ = 0.0;
   strataslam::Extrinsics ext_;
   std::map<int, gtsam::Pose3>

@@ -28,6 +28,7 @@ from pathlib import Path
 import numpy as np
 import rclpy
 from nav_msgs.msg import Odometry
+from nav_msgs.msg import Path as PathMsg
 from rcl_interfaces.msg import Log
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
@@ -93,6 +94,7 @@ class Viewer(Node):
         self.t: float | None = None  # stamp of the latest pose or camera frame (clouds carry the wall clock)
         self.floor_from_odom: dict[int, np.ndarray] = {}  # T_floor_odom, latest per floor
         self.pending_clouds: dict[int, PointCloud2] = {}  # clouds that arrived before their floor's TF
+        self.pending_paths: dict[int, PathMsg] = {}  # the same for the optimized paths
         self.z: float | None = None
         self.transit_z0: float | None = None  # height when the current transition began
         self.direction_told = False
@@ -104,6 +106,7 @@ class Viewer(Node):
         self.create_subscription(Odometry, "strataslam/odometry", self.on_odometry, reliable)
         self.create_subscription(FloorState, "strataslam/floor_state", self.on_floor_state, reliable)
         self.create_subscription(PointCloud2, "strataslam/floor_cloud", self.on_cloud, latched)
+        self.create_subscription(PathMsg, "strataslam/path", self.on_path, reliable)
         # What the sensors see right now, already in the odometry frame.
         self.create_subscription(PointCloud2, "strataslam/scan", lambda m: self.on_sensor("lidar", m), qos_profile_sensor_data)
         self.create_subscription(PointCloud2, "strataslam/depth_cloud", lambda m: self.on_sensor("camera", m),
@@ -177,6 +180,8 @@ class Viewer(Node):
             self.floor_from_odom[floor] = matrix(tr.transform)
             if floor in self.pending_clouds:
                 self.on_cloud(self.pending_clouds.pop(floor))
+            if floor in self.pending_paths:
+                self.on_path(self.pending_paths.pop(floor))
 
     def on_sensor(self, sensor: str, m: PointCloud2) -> None:
         if self.floor is None:
@@ -192,6 +197,24 @@ class Viewer(Node):
         use = np.frombuffer(bytes(m.use), dtype=np.uint8)
         self.view.camera(t, image_array(m.image), depth_array(m.depth), uv, use)
 
+    def on_path(self, m: PathMsg) -> None:
+        """The floor's optimized keyframes (in `floor_<k>`), moved to the odometry frame as its cloud is: the path
+        drawn from the poses keeps the drift a loop closure corrected, this one does not. A gap of more than
+        PATH_GAP_S between keyframes (another visit of the floor) starts a new piece."""
+        floor = floor_of_frame(m.header.frame_id)
+        if floor is None or not m.poses:
+            return
+        if floor not in self.floor_from_odom:
+            self.pending_paths[floor] = m
+            return
+        odom_from_floor = np.linalg.inv(self.floor_from_odom[floor])
+        xyz = np.array([[q.pose.position.x, q.pose.position.y, q.pose.position.z] for q in m.poses])
+        xyz = xyz @ odom_from_floor[:3, :3].T + odom_from_floor[:3, 3]
+        stamps = np.array([stamp_s(q.header.stamp) for q in m.poses])
+        cuts = np.flatnonzero(np.diff(stamps) > PATH_GAP_S) + 1
+        pieces = [[tuple(float(v) for v in row) for row in part] for part in np.split(xyz, cuts)]
+        self.view.floor_path(floor, pieces)
+
     def on_cloud(self, m: PointCloud2) -> None:
         floor = floor_of_frame(m.header.frame_id)
         if floor is None:
@@ -204,6 +227,8 @@ class Viewer(Node):
         p = p @ odom_from_floor[:3, :3].T + odom_from_floor[:3, 3]
         self.view.floor_cloud(self.t or 0.0, floor, p)
 
+
+PATH_GAP_S = 5.0  # keyframes further apart in time are drawn as separate pieces of a floor's path
 
 # Exit code of the viewer when the user closed only the viewer and the SLAM goes on: the launch does not end then.
 VIEWER_ONLY = 3

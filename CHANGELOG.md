@@ -12,6 +12,8 @@
   `strataslam doctor --preset-dir` and the node's `preset_dir` parameter are gone.
 
 ### Added
+- Live view: a second 3D tab, **3D: height**, with the map coloured by height (blue low, red high) next to
+  **3D: floors**, each floor in its colour.
 - README: how to run it with ROS 2 (a real robot, a recorded rosbag, next to a navigation stack). The project logo and the CI, coverage (Codecov), licence, ROS 2 and C++ badges in the README (`docs/media/logo.png`); `scripts/check_links.py` also checks the `src` and `href` of HTML tags.
 - One template profile per kind of robot (ADR-0056): `ground_camera`, `ground_lidar`, `ground_lidar_camera_imu`,
   `handheld_camera_imu`, `aerial_lidar_camera_imu` (and `handheld_oak_d_lite`). The simulator bag exporter writes the
