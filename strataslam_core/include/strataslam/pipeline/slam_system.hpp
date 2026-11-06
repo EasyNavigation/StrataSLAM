@@ -38,13 +38,17 @@ struct SystemTuning {
   int pending_keyframes_for_new_floor =
       8;  ///< unlocalized keyframes after a loss before a new floor is opened
   ScanContextConfig scan_context;
-  double loop_min_fitness = 0.55;  ///< GICP inlier fraction required to accept a LiDAR loop
-  double loop_max_mean_error =
-      0.12;  ///< GICP mean residual per inlier always accepted for a LiDAR loop
-  double loop_max_error_ratio = 4.0;  ///< above it, accepted up to this many times the residual of
-                                      ///< the scan against its own predecessors (ADR-0057)
-  int loop_cooldown_keyframes = 8;  ///< minimum keyframes between accepted loops
-  int loop_submap_radius = 2;       ///< neighbours merged on each side of the candidate
+  /// GICP inlier fraction required to accept a LiDAR loop.
+  double loop_min_fitness = 0.55;
+  /// GICP mean residual per inlier always accepted for a LiDAR loop.
+  double loop_max_mean_error = 0.12;
+  /// Above it, accepted up to this many times the residual of the scan against its own
+  /// predecessors (ADR-0057).
+  double loop_max_error_ratio = 4.0;
+  /// Minimum keyframes between accepted loops.
+  int loop_cooldown_keyframes = 8;
+  /// Neighbours merged on each side of the candidate.
+  int loop_submap_radius = 2;
 };
 
 struct KeyframeInfo {
