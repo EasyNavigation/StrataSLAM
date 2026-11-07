@@ -1531,11 +1531,14 @@ void SlamSystem::add_lidar(const LidarScan& scan) {
   // The gyroscope's turn since the last pose, its heading drift (measured against the odometry out
   // of confined spaces) taken out: the rotation of a scan in an elevator cabin, where the
   // registration's goes wrong by tens of degrees as the person turns round in it.
-  std::optional<gtsam::Rot3> raw_turn;
-  if (s.last_pose) raw_turn = s.gyro_delta(s.last_pose_stamp, scan.stamp);
+  std::optional<gtsam::Rot3> raw_turn, R_prev;
+  if (s.last_pose) {
+    R_prev = s.last_pose->rotation();
+    raw_turn = s.gyro_delta(s.last_pose_stamp, scan.stamp);
+  }
   const double turn_s = (scan.stamp - s.last_pose_stamp) * 1e-9;
-  if (raw_turn) {
-    const gtsam::Rot3& R = s.last_pose->rotation();
+  if (raw_turn && R_prev) {
+    const gtsam::Rot3& R = *R_prev;
     // Projected on the rotations: a product of matrices is not one to the last digit, and in a
     // confined space nothing else re-estimates the rotation it gives.
     f.gyro_delta = gtsam::Rot3::ClosestTo(
@@ -1544,13 +1547,13 @@ void SlamSystem::add_lidar(const LidarScan& scan) {
   FrontendResult r = s.lidar_fe->process(f);
   if (r.confined) s.last_confined = scan.stamp;
   if (r.valid && !r.confined) s.observe_heading(scan.stamp, r.T_odom_base.rotation());
-  if (debug_channel("GYRO") && r.valid && f.gyro_delta)
+  if (debug_channel("GYRO") && r.valid && f.gyro_delta && R_prev)
     s.log->log(LogLevel::Debug,
                strprintf("gyro t=%.3f confined=%d drift=%.3f deg/s registration off the "
                          "gyroscope by %.2f deg",
                          scan.stamp * 1e-9, int(r.confined), s.heading_drift() * 180.0 / M_PI,
-                         gtsam::Rot3::Logmap(f.gyro_delta->between(s.last_pose->rotation().between(
-                                                 r.T_odom_base.rotation())))
+                         gtsam::Rot3::Logmap(
+                             f.gyro_delta->between(R_prev->between(r.T_odom_base.rotation())))
                                  .norm() *
                              180.0 / M_PI));
   s.to_plane(r);
