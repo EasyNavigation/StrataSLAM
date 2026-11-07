@@ -97,7 +97,7 @@ its reason) in [docs/decisions.md](docs/decisions.md).
 | Directory | Contents |
 | --- | --- |
 | `strataslam_core/` | ROS-free C++ library: config, Pose4 and Lie-group math, frontends, place recognition, floor manager, backend, mapping, I/O, fusion, metrics |
-| `strataslam_sim/` | synthetic multi-floor buildings (stairs, elevator, ramp, atrium), trajectories, sensors with exact ground truth, scenarios S01-S14, benchmarks |
+| `strataslam_sim/` | synthetic multi-floor buildings (stairs, elevator, ramp, atrium), trajectories, sensors with exact ground truth, scenarios S01-S15, benchmarks |
 | `strataslam_msgs/`, `strataslam_ros/` | messages/services, the node, launch file, example profiles, simulator-bag exporter |
 | `strataslam_tools/` | Python: the `strataslam` command line, doctor, evaluation, export, fusion ablation |
 
@@ -108,7 +108,7 @@ Installation, for users and from a clean machine: [docs/user/install.md](docs/us
 ```bash
 # Core and simulator, no ROS needed (scripts/install_deps.sh core installs the system packages):
 cmake -S superbuild -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j
-ctest --test-dir build --output-on-failure -j4                 # unit tests + scenarios S01-S14 (seed 42)
+ctest --test-dir build --output-on-failure -j4                 # unit tests + scenarios S01-S15 (seed 42)
 python3 scripts/run_seeds.py --runner build/strataslam_sim/strataslam_scenario_runner --seeds 1001-1020   # 20 seeds
 # Python (lint and types as in CI):
 pip install -e "strataslam_tools[dev]"

@@ -129,6 +129,15 @@ class GravityTracker {
     gyro_n_ = 0;
     static_start_ = still_ = true;
   }
+  /// The base frame's samples turned by `dR` from now on (a mounting learned): its state is turned
+  /// with them, so that it stays ready. A reset would leave a body that moves without `up` for
+  /// three time constants (Elevator-VIGS Factory-M: a 20 m ride unmeasured).
+  void rotate(const Eigen::Matrix3d& dR) {
+    if (up_) up_ = (dR * *up_).normalized();
+    bias_ = dR * bias_;
+    gyro_sum_ = dR * gyro_sum_;
+  }
+  bool started() const { return up_.has_value(); }
   const Eigen::Vector3d& gyro_bias() const { return bias_; }
 
  private:

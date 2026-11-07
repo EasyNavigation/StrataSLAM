@@ -40,6 +40,7 @@ TEST(Scenario, S11_FullPipelineThreeFloors) { check("S11"); }
 TEST(Scenario, S12_CameraBlackout) { check("S12"); }
 TEST(Scenario, S13_GentleRamp) { check("S13"); }
 TEST(Scenario, S14_CameraBlackoutWithWheelOdometry) { check("S14"); }
+TEST(Scenario, S15_ElevatorUpStairsDown) { check("S15"); }
 
 TEST(Scenario, S02_MapSurvivesDiskRoundTrip) {
   const ScenarioSpec spec = make_scenario("S02");

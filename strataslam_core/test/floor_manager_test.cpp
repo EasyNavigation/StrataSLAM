@@ -64,9 +64,10 @@ struct Rig {
       step({x, pos.y(), z}, use_baro ? std::optional<double>(baro) : std::nullopt);
     }
   }
+  /// The transition's end (not the end of the odometry's part before a ride the IMU takes over).
   const FloorEvent* ended() const {
     for (const auto& e : events)
-      if (e.kind == FloorEvent::Kind::TransitionEnded) return &e;
+      if (e.kind == FloorEvent::Kind::TransitionEnded && !e.ride_follows) return &e;
     return nullptr;
   }
   int count(FloorEvent::Kind k) const {
@@ -468,4 +469,423 @@ TEST(FloorManager, WithoutAHeightPriorTheMinimumVerticalChangeDecides) {
     EXPECT_EQ(r.mgr.floor(), 1);
     EXPECT_NEAR(r.mgr.level_altitude(1), 2.0, 0.15);
   }
+}
+
+namespace {
+
+/// An elevator ride as the IMU feels it: `a` m/s^2 up for `t_acc` s, cruise for `t_cruise` s, `a`
+/// down for `t_acc` s, sampled while the odometry stays at `p` (`ok`: tracking or lost).
+void ride(Rig& r, const Vector3d& p, double a, double t_acc, double t_cruise, bool ok) {
+  const auto steps = [](double s) { return static_cast<int>(std::lround(s / kDt)); };
+  for (int i = 0; i < steps(t_acc); ++i) r.step(p, std::nullopt, a, ok);
+  for (int i = 0; i < steps(t_cruise); ++i) r.step(p, std::nullopt, 0.0, ok);
+  for (int i = 0; i < steps(t_acc); ++i) r.step(p, std::nullopt, -a, ok);
+}
+
+}  // namespace
+
+// Elevator-VIGS Mall-E: the closing doors made the LiDAR odometry jump 0.33 m before it was lost in
+// the cabin, which opened the transition as one the odometry measures; the 4.5 m ride was then
+// left to the odometry, which came back 1.5 m up. The IMU, accelerating as for an elevator while
+// the odometry is lost, takes the transition, and the ride ends when the cabin stops, although the
+// person walks out at once (a hand-held odometry is never calm for long).
+TEST(FloorManager, AnElevatorWhoseDoorsMadeTheOdometryJumpIsMeasuredByTheImu) {
+  FloorManagerConfig c;
+  c.floor_height_prior.reset();
+  Rig r(c);
+  for (int i = 0; i < 30; ++i) r.step(r.pos, std::nullopt, 0.0);
+  const Vector3d before = r.pos, doors = before + Vector3d(0, 0, 0.35);
+  for (int i = 0; i < 3; ++i)
+    r.step(before + Vector3d(0, 0, 0.35 * (i + 1) / 3), std::nullopt, 0.0);
+  ASSERT_EQ(r.count(FloorEvent::Kind::TransitionStarted), 1);
+  for (int i = 0; i < 20; ++i) r.step(doors, std::nullopt, 0.0, false);  // lost, the cabin waits
+  ride(r, doors, 0.5, 2.0, 2.5, false);                                  // 4.5 m up
+  for (int i = 0; i < 10; ++i) r.step(doors, std::nullopt, 0.0, false);  // the doors open
+  // Back with a jump of its own, walking out: the height and the IMU bob, at rates that one second
+  // does not average out (Mall-E: the odometry's speed up to 0.14 m/s, the IMU's 1 s mean up to
+  // 0.19 m/s^2), so the odometry is never calm for long.
+  const Vector3d out = doors + Vector3d(0, 0, 1.2);
+  for (int i = 0; i < 200; ++i) {
+    const double t = i * kDt;
+    r.step(out + Vector3d(t, 0, 0.05 * std::sin(2 * M_PI * 0.7 * t)), std::nullopt,
+           0.3 * std::sin(2 * M_PI * 1.3 * t), true);
+    if (i == 30) {
+      EXPECT_EQ(r.mgr.floor(), 1) << "the ride ends when the cabin stops";
+    }
+  }
+  const FloorEvent* e = r.ended();
+  ASSERT_NE(e, nullptr);
+  EXPECT_EQ(e->type, TransitionType::Elevator);
+  EXPECT_EQ(e->to, 1);
+  EXPECT_NEAR(e->delta_z, 4.5, 0.2);
+  EXPECT_EQ(r.mgr.floor(), 1);
+}
+
+// A ride longer than the 12 s of vertical acceleration kept on a floor (15 floors in Elevator-VIGS
+// Residential2): it is decided after it has stopped, and integrated from its start.
+TEST(FloorManager, ALongElevatorRideIsIntegratedFromItsStart) {
+  FloorManagerConfig c;
+  c.floor_height_prior.reset();
+  Rig r(c);
+  for (int i = 0; i < 30; ++i) r.step(r.pos, std::nullopt, 0.0);
+  ride(r, r.pos, 0.5, 2.0, 12.0, true);  // 14 m in 16 s, the odometry seeing a still cabin
+  for (int i = 0; i < 40; ++i) r.step(r.pos, std::nullopt, 0.0);
+  const FloorEvent* e = r.ended();
+  ASSERT_NE(e, nullptr);
+  EXPECT_EQ(e->type, TransitionType::Elevator);
+  EXPECT_NEAR(e->delta_z, 14.0, 0.3);
+}
+
+// Elevator-VIGS Office2-E: the closing doors made the odometry jump 0.2 m, under depart_dz, before
+// it was lost; its altitude, frozen there, kept the IMU from opening the 3.3 m ride.
+TEST(FloorManager, AnOdometryLostAfterAJumpUnderTheThresholdStillLetsTheImuOpenTheRide) {
+  FloorManagerConfig c;
+  c.floor_height_prior.reset();
+  Rig r(c);
+  for (int i = 0; i < 30; ++i) r.step(r.pos, std::nullopt, 0.0);
+  const Vector3d before = r.pos, doors = before + Vector3d(0, 0, 0.2);
+  for (int i = 0; i < 3; ++i) r.step(before + Vector3d(0, 0, 0.2 * (i + 1) / 3), std::nullopt, 0.0);
+  EXPECT_EQ(r.count(FloorEvent::Kind::TransitionStarted), 0);
+  for (int i = 0; i < 20; ++i) r.step(doors, std::nullopt, 0.0, false);
+  ride(r, doors, 0.5, 2.0, 1.0, false);  // 3 m up
+  for (int i = 0; i < 30; ++i) r.step(doors, std::nullopt, 0.0, false);
+  const FloorEvent* e = r.ended();
+  ASSERT_NE(e, nullptr);
+  EXPECT_EQ(e->type, TransitionType::Elevator);
+  EXPECT_NEAR(e->delta_z, 3.0, 0.2);
+}
+
+// While the odometry tracks, a vertical move it sees too (a rig lowered and raised again, a step,
+// the bob of the gait) gives 1 s means of vertical acceleration over the departure threshold for
+// as long as a cabin's push (Elevator-VIGS Office2: 2.5 s; Station1's cabin pushes for 1.1 s). It
+// is not handed to the IMU: integrated from there, the tilt of the gravity estimate made a 93 m
+// "ride" of Campus1, back where the odometry had started.
+TEST(FloorManager, AVerticalMoveTheOdometryTracksIsNotARide) {
+  FloorManagerConfig c;
+  c.floor_height_prior.reset();
+  Rig r(c);
+  for (int i = 0; i < 30; ++i) r.step(r.pos, std::nullopt, 0.0);
+  r.climb(0.4, 2.0, false);  // the odometry drifts up: a transition opens
+  ASSERT_EQ(r.count(FloorEvent::Kind::TransitionStarted), 1);
+  double z = r.pos.z(), v = 0;
+  for (const double a :
+       {-0.8, 0.8, 0.8, -0.8}) {  // 0.9 m down and up again, the odometry following
+    for (int i = 0; i < 15; ++i) {
+      v += a * kDt;
+      z += v * kDt;
+      r.step({r.pos.x(), r.pos.y(), z}, std::nullopt, a);
+    }
+  }
+  for (int i = 0; i < 300; ++i) r.step(r.pos, std::nullopt, 0.08);  // a tilted gravity estimate
+  for (const auto& e : r.events) EXPECT_NE(e.type, TransitionType::Elevator);
+}
+
+// Elevator-VIGS Office4: down a flight of stairs the odometry tracks at less than half the speed
+// that the IMU's 1 s means give. The steps jolt the IMU as no cabin does: not a ride.
+TEST(FloorManager, AStairTheOdometryTracksHalfWayIsNotARideForTheImu) {
+  FloorManagerConfig c;
+  c.floor_height_prior.reset();
+  Rig r(c);
+  for (int i = 0; i < 30; ++i) r.step(r.pos, std::nullopt, 0.0);
+  r.climb(-0.4, 2.0, false);  // the odometry drifts down: a transition opens
+  ASSERT_EQ(r.count(FloorEvent::Kind::TransitionStarted), 1);
+  Vector3d p = r.pos;
+  int k = 0;
+  for (const double a : {-1.0, 1.0}) {
+    for (int i = 0; i < 20; ++i, ++k) {
+      p += Vector3d(0.6 * kDt, 0, -0.2 * kDt);
+      r.step(p, std::nullopt, a + 1.5 * std::sin(2 * M_PI * 2.0 * k * kDt + 0.3));  // the steps
+    }
+  }
+  for (int i = 0; i < 30; ++i) r.step(r.pos + Vector3d(kDt, 0, 0), std::nullopt, 0.0);
+  for (int i = 0; i < 100; ++i) r.step(r.pos, std::nullopt, 0.0);
+  for (const auto& e : r.events) EXPECT_NE(e.type, TransitionType::Elevator);
+}
+
+// Elevator-VIGS Office4: the odometry opened a transition 50 s before the ride (the rig lifted)
+// and was lost on the way to the cabin. When the IMU takes it over, what came before ends on the
+// floor it left, and the ride goes on to its own end.
+TEST(FloorManager, ARideTheImuTakesOverEndsTheOdometrysTransitionOnTheFloorItLeft) {
+  FloorManagerConfig c;
+  c.floor_height_prior.reset();
+  Rig r(c);
+  for (int i = 0; i < 30; ++i) r.step(r.pos, std::nullopt, 0.0);
+  r.climb(0.4, 2.0, false);  // the odometry drifts up: a transition opens
+  ASSERT_EQ(r.count(FloorEvent::Kind::TransitionStarted), 1);
+  for (int i = 0; i < 100; ++i) r.step(r.pos + Vector3d(kDt, 0, 0), std::nullopt, 0.0);  // walking
+  ride(r, r.pos, 0.6, 2.5, 7.5, false);  // 15 m up, lost in the cabin
+  for (int i = 0; i < 40; ++i) r.step(r.pos, std::nullopt, 0.0);
+  std::vector<const FloorEvent*> ends;
+  for (const auto& e : r.events)
+    if (e.kind == FloorEvent::Kind::TransitionEnded) ends.push_back(&e);
+  ASSERT_EQ(ends.size(), 2u);
+  EXPECT_TRUE(ends[0]->ride_follows);
+  EXPECT_EQ(ends[0]->from, 0);
+  EXPECT_EQ(ends[0]->to, 0);
+  EXPECT_FALSE(ends[1]->ride_follows);
+  EXPECT_EQ(ends[1]->type, TransitionType::Elevator);
+  EXPECT_EQ(ends[1]->from, 0);
+  EXPECT_EQ(ends[1]->to, 1);
+  EXPECT_NEAR(ends[1]->delta_z, 15.0, 0.5);
+}
+
+// Elevator-VIGS Station2: a short push, mostly over before the IMU took the ride from the odometry.
+// Counted from the onset it is a cabin's, and the brake that matches it ends the ride at rest.
+TEST(FloorManager, AShortPushIsCountedFromTheOnsetAndTheRideEndsWhereTheCabinBrakes) {
+  FloorManagerConfig c;
+  c.floor_height_prior.reset();
+  Rig r(c);
+  for (int i = 0; i < 30; ++i) r.step(r.pos, std::nullopt, 0.0);
+  r.climb(0.4, 2.0, false);  // the odometry drifts up: a transition opens
+  ASSERT_EQ(r.count(FloorEvent::Kind::TransitionStarted), 1);
+  for (int i = 0; i < 30; ++i) r.step(r.pos, std::nullopt, 0.0);
+  const auto steps = [](double sec) { return static_cast<int>(std::lround(sec / kDt)); };
+  for (int i = 0; i < steps(1.6); ++i) r.step(r.pos, std::nullopt, -0.4);  // 0.64 m/s down
+  for (int i = 0; i < steps(4.0); ++i) r.step(r.pos, std::nullopt, 0.0);
+  for (int i = 0; i < steps(1.6); ++i) r.step(r.pos, std::nullopt, 0.4);
+  for (int i = 0; i < steps(3.0); ++i) r.step(r.pos, std::nullopt, 0.0);  // at rest, still inside
+  const FloorEvent* e = r.ended();
+  ASSERT_NE(e, nullptr) << "the ride ends where the cabin stops";
+  EXPECT_EQ(e->type, TransitionType::Elevator);
+  EXPECT_NEAR(e->delta_z, -0.64 * (1.6 + 4.0), 0.4);
+}
+
+// Elevator-VIGS Office3: walked into the cabin and it left at once. The boarding walk, still in the
+// odometry's last seconds, is no walk out of a cabin that is moving: the ride goes on to its brake.
+TEST(FloorManager, TheWalkIntoACabinThatLeavesAtOnceDoesNotEndTheRide) {
+  FloorManagerConfig c;
+  c.floor_height_prior.reset();
+  Rig r(c);
+  for (int i = 0; i < 30; ++i) r.step(r.pos, std::nullopt, 0.0);
+  r.climb(0.4, 2.0, false);  // the odometry drifts up: a transition opens
+  ASSERT_EQ(r.count(FloorEvent::Kind::TransitionStarted), 1);
+  const auto steps = [](double sec) { return static_cast<int>(std::lround(sec / kDt)); };
+  Vector3d p = r.pos;
+  for (int i = 0; i < steps(3.0); ++i) r.step(p += Vector3d(kDt, 0, 0), std::nullopt, 0.0);
+  for (int i = 0; i < steps(1.5); ++i)  // the cabin leaves, the odometry still walking in
+    r.step(p += Vector3d(kDt, 0, 0), std::nullopt, -0.8);
+  for (int i = 0; i < steps(3.0); ++i)  // and then drifting in the closed cabin
+    r.step(p += Vector3d(kDt, 0, 0), std::nullopt, 0.0);
+  for (int i = 0; i < steps(2.0); ++i) r.step(p, std::nullopt, 0.0);
+  for (int i = 0; i < steps(1.5); ++i) r.step(p, std::nullopt, 0.8);
+  for (int i = 0; i < steps(3.0); ++i) r.step(p, std::nullopt, 0.0);
+  const FloorEvent* e = r.ended();
+  ASSERT_NE(e, nullptr);
+  EXPECT_EQ(e->type, TransitionType::Elevator);
+  EXPECT_NEAR(e->delta_z, -1.2 * (1.5 + 5.0), 0.5);
+}
+
+// Elevator-VIGS Station3: the brake of a ride whose push the IMU did not see, taken for a push.
+// Its speed never comes back to rest, and the walk that follows, longer than any cabin, ends it:
+// no ride integrated through the walk.
+TEST(FloorManager, ALoneBrakeTakenForAPushIsEndedByAWalkLongerThanACabin) {
+  FloorManagerConfig c;
+  c.floor_height_prior.reset();
+  Rig r(c);
+  for (int i = 0; i < 30; ++i) r.step(r.pos, std::nullopt, 0.0);
+  r.climb(0.4, 2.0, false);  // the odometry drifts up: a transition opens
+  ASSERT_EQ(r.count(FloorEvent::Kind::TransitionStarted), 1);
+  const auto steps = [](double sec) { return static_cast<int>(std::lround(sec / kDt)); };
+  for (int i = 0; i < steps(1.5); ++i) r.step(r.pos, std::nullopt, -0.5, false);  // the brake
+  for (int i = 0; i < steps(2.0); ++i) r.step(r.pos, std::nullopt, 0.0, false);
+  Vector3d p = r.pos;
+  for (int i = 0; i < steps(45.0); ++i)  // a walk at 1 m/s, the IMU bobbing with the steps
+    r.step(p += Vector3d(kDt, 0, 0), std::nullopt, 0.3 * std::sin(2 * M_PI * 1.3 * i * kDt));
+  for (const auto& e : r.events) EXPECT_NE(e.type, TransitionType::Elevator) << e.delta_z;
+  EXPECT_FALSE(r.mgr.in_unobserved_transition()) << "the transition is the odometry's again";
+}
+
+// Elevator-VIGS Residential3: a cabin that starts gently (under the departure threshold) and brakes
+// hard. The IMU takes the brake for a push; when it never comes back to rest, the push is found
+// back in the history, before the cabin's calm, and the ride measured from it.
+TEST(FloorManager, ARideWhosePushWasUnderTheThresholdIsFoundBackFromItsBrake) {
+  FloorManagerConfig c;
+  c.floor_height_prior.reset();
+  Rig r(c);
+  for (int i = 0; i < 30; ++i) r.step(r.pos, std::nullopt, 0.0);
+  r.climb(0.4, 2.0, false);  // the odometry drifts up: a transition opens
+  ASSERT_EQ(r.count(FloorEvent::Kind::TransitionStarted), 1);
+  const auto steps = [](double sec) { return static_cast<int>(std::lround(sec / kDt)); };
+  for (int i = 0; i < steps(4.0); ++i) r.step(r.pos, std::nullopt, 0.0, false);
+  for (int i = 0; i < steps(4.0); ++i) r.step(r.pos, std::nullopt, 0.18, false);  // 0.72 m/s up
+  for (int i = 0; i < steps(8.0); ++i) r.step(r.pos, std::nullopt, 0.0, false);
+  for (int i = 0; i < steps(1.6); ++i) r.step(r.pos, std::nullopt, -0.45, false);  // the brake
+  for (int i = 0; i < steps(2.0); ++i) r.step(r.pos, std::nullopt, 0.0, false);
+  Vector3d p = r.pos;
+  for (int i = 0; i < steps(45.0); ++i)  // out, at 1 m/s, the IMU bobbing with the steps
+    r.step(p += Vector3d(kDt, 0, 0), std::nullopt, 0.3 * std::sin(2 * M_PI * 1.3 * i * kDt));
+  const FloorEvent* e = r.ended();
+  ASSERT_NE(e, nullptr);
+  EXPECT_EQ(e->type, TransitionType::Elevator);
+  EXPECT_NEAR(e->delta_z, 0.5 * 0.72 * 4.0 + 0.72 * 8.0 + 0.5 * 0.72 * 1.6, 0.6);
+}
+
+// Elevator-VIGS Campus6: the odometry moves in the cabin as it brakes. The ride does not end there
+// as a walk out of it: it ends when the cabin has stopped.
+TEST(FloorManager, ARideIsNotWalkedOutOfWhileTheCabinBrakes) {
+  FloorManagerConfig c;
+  c.floor_height_prior.reset();
+  Rig r(c);
+  for (int i = 0; i < 30; ++i) r.step(r.pos, std::nullopt, 0.0);
+  r.climb(0.4, 2.0, false);  // the odometry drifts up: a transition opens
+  ASSERT_EQ(r.count(FloorEvent::Kind::TransitionStarted), 1);
+  const auto steps = [](double sec) { return static_cast<int>(std::lround(sec / kDt)); };
+  for (int i = 0; i < steps(2.0); ++i) r.step(r.pos, std::nullopt, 0.6);  // 1.2 m/s up
+  Vector3d p = r.pos;
+  for (int i = 0; i < steps(5.0); ++i) r.step(p, std::nullopt, 0.0);
+  for (int i = 0; i < steps(3.0); ++i) r.step(p += Vector3d(kDt, 0, 0), std::nullopt, 0.0);
+  for (int i = 0; i < steps(2.0); ++i)  // braking, the odometry still moving
+    r.step(p += Vector3d(kDt, 0, 0), std::nullopt, -0.6);
+  for (int i = 0; i < steps(1.0); ++i) r.step(p, std::nullopt, 0.0);
+  for (int i = 0; i < steps(6.0); ++i) r.step(p += Vector3d(kDt, 0, 0), std::nullopt, 0.0);
+  const FloorEvent* e = r.ended();
+  ASSERT_NE(e, nullptr);
+  EXPECT_EQ(e->type, TransitionType::Elevator);
+  EXPECT_NEAR(e->delta_z, 1.2 * 2.0 + 1.2 * 8.0, 0.5);
+}
+
+// Elevator-VIGS Office3: a jolt taken for a cabin's push, then a walk whose steps jolt the IMU. It
+// is no ride once the steps are clear, so the ride that follows is taken from its own start.
+TEST(FloorManager, AJoltFollowedBySteppingIsDroppedInTimeForTheRideThatFollows) {
+  FloorManagerConfig c;
+  c.floor_height_prior.reset();
+  Rig r(c);
+  for (int i = 0; i < 30; ++i) r.step(r.pos, std::nullopt, 0.0);
+  r.climb(0.4, 2.0, false);  // the odometry drifts up: a transition opens
+  ASSERT_EQ(r.count(FloorEvent::Kind::TransitionStarted), 1);
+  const auto steps = [](double sec) { return static_cast<int>(std::lround(sec / kDt)); };
+  for (int i = 0; i < steps(1.5); ++i) r.step(r.pos, std::nullopt, -0.6, false);  // the jolt
+  Vector3d p = r.pos;
+  for (int i = 0; i < steps(15.0); ++i)  // a walk at 1 m/s, its steps jolting the IMU
+    r.step(p += Vector3d(kDt, 0, 0), std::nullopt, 1.5 * std::sin(2 * M_PI * 2.0 * i * kDt + 0.3));
+  for (int i = 0; i < steps(3.0); ++i) r.step(p, std::nullopt, 0.0);  // in the cabin
+  ride(r, p, 0.6, 2.5, 7.5, false);                                   // 15 m up
+  for (int i = 0; i < steps(4.0); ++i) r.step(p, std::nullopt, 0.0);
+  const FloorEvent* e = r.ended();
+  ASSERT_NE(e, nullptr);
+  EXPECT_EQ(e->type, TransitionType::Elevator);
+  EXPECT_NEAR(e->delta_z, 15.0, 0.6);
+}
+
+// Elevator-VIGS Office1: the odometry opened the transition before the ride and tracked the cabin
+// through it, still. The IMU's 15 m are its own.
+TEST(FloorManager, ARideTheOdometryTracksAsAStillCabinIsMeasuredByTheImu) {
+  FloorManagerConfig c;
+  c.floor_height_prior.reset();
+  Rig r(c);
+  for (int i = 0; i < 30; ++i) r.step(r.pos, std::nullopt, 0.0);
+  r.climb(0.4, 2.0, false);  // the odometry drifts up: a transition opens
+  ASSERT_EQ(r.count(FloorEvent::Kind::TransitionStarted), 1);
+  for (int i = 0; i < 30; ++i) r.step(r.pos, std::nullopt, 0.0);
+  ride(r, r.pos, 0.6, 2.5, 7.5, true);  // 1.5 m/s for 10 s: 15 m, the cabin still to the odometry
+  for (int i = 0; i < 30; ++i) r.step(r.pos, std::nullopt, 0.0);
+  const FloorEvent* e = r.ended();
+  ASSERT_NE(e, nullptr);
+  EXPECT_EQ(e->type, TransitionType::Elevator);
+  EXPECT_NEAR(e->delta_z, 15.0, 0.5);
+}
+
+// Elevator-VIGS Office1-H: a bias and the tilt of the gravity estimate add 0.03 m/s^2 through a
+// 33 m ride, and the speed integrated from the onset was still 0.94 m/s when the cabin had
+// stopped. The stop is the brake that answers the push; the zero-velocity update at that end
+// removes a constant bias from the height.
+TEST(FloorManager, ALongRideWithABiasedAccelerometerStopsWhereTheCabinBrakes) {
+  FloorManagerConfig c;
+  c.floor_height_prior.reset();
+  Rig r(c);
+  for (int i = 0; i < 30; ++i) r.step(r.pos, std::nullopt, 0.0);
+  const double bias = 0.03;
+  const auto steps = [](double s) { return static_cast<int>(std::lround(s / kDt)); };
+  for (int i = 0; i < steps(2.0); ++i) r.step(r.pos, std::nullopt, 0.6 + bias, false);
+  for (int i = 0; i < steps(20.0); ++i) r.step(r.pos, std::nullopt, bias, false);
+  for (int i = 0; i < steps(2.0); ++i) r.step(r.pos, std::nullopt, -0.6 + bias, false);
+  for (int i = 0; i < steps(3.0); ++i) r.step(r.pos, std::nullopt, bias, false);
+  const FloorEvent* e = r.ended();
+  ASSERT_NE(e, nullptr) << "the ride ends when the cabin has braked";
+  EXPECT_EQ(e->type, TransitionType::Elevator);
+  EXPECT_NEAR(e->delta_z, 1.2 * 22.0, 0.5);  // 1.2 m/s for 22 s
+}
+
+// What the bias estimate has left is larger than the calm threshold (Elevator-VIGS Mall-M: the
+// estimate drifted while walking and the cabin at rest read +0.12 m/s^2): the ride still stops
+// where the cabin brakes, its accelerations measured from the one before it started.
+TEST(FloorManager, ARideStopsWhereTheCabinBrakesWithABiasTheEstimateLeft) {
+  FloorManagerConfig c;
+  c.floor_height_prior.reset();
+  Rig r(c);
+  for (int i = 0; i < 30; ++i) r.step(r.pos, std::nullopt, 0.0);
+  const double left = 0.13;
+  const auto steps = [](double s) { return static_cast<int>(std::lround(s / kDt)); };
+  for (int i = 0; i < steps(5.0); ++i) r.step(r.pos, std::nullopt, left);  // in the cabin
+  for (int i = 0; i < steps(2.0); ++i) r.step(r.pos, std::nullopt, -0.6 + left, false);
+  for (int i = 0; i < steps(15.0); ++i) r.step(r.pos, std::nullopt, left, false);
+  for (int i = 0; i < steps(2.0); ++i) r.step(r.pos, std::nullopt, 0.6 + left, false);
+  for (int i = 0; i < steps(3.0); ++i) r.step(r.pos, std::nullopt, left, false);
+  const FloorEvent* e = r.ended();
+  ASSERT_NE(e, nullptr) << "the ride ends at rest, before anyone walks out";
+  EXPECT_EQ(e->type, TransitionType::Elevator);
+  EXPECT_NEAR(e->delta_z, -1.2 * 17.0, 0.5);  // 1.2 m/s for 17 s
+}
+
+// Elevator-VIGS Office4: up by elevator, measured by the IMU (14.75 m), and back down the stairs,
+// measured by the odometry (15.43 m), to where the walk had started. The level reached by the ride
+// is only known to a few percent of it: the stairs end on the first level, not 0.68 m under it.
+TEST(FloorManager, BackDownTheStairsFromALevelTheImuMeasuredIsTheLevelItLeft) {
+  FloorManagerConfig c;
+  c.floor_height_prior.reset();
+  Rig r(c);
+  for (int i = 0; i < 30; ++i) r.step(r.pos, std::nullopt, 0.0);
+  ride(r, r.pos, 0.6, 2.5, 7.5, true);  // 15 m up, the cabin still to the odometry
+  for (int i = 0; i < 40; ++i) r.step(r.pos, std::nullopt, 0.0);
+  ASSERT_EQ(r.mgr.floor(), 1);
+  r.walk(3);
+  r.climb(-15.7, 40.0, /*stepped=*/true);  // the stairs, all the way down
+  r.walk(3);
+  r.stand(8);
+  EXPECT_EQ(r.mgr.floor(), 0);
+  EXPECT_EQ(r.mgr.num_floors(), 2u);
+}
+
+// A cabin that brakes gently, under the pulse threshold, is never seen braking; the ride ends when
+// the odometry walks out of it, at a walking pace (Elevator-VIGS Factory-H, where the cabin's
+// bumps hid the brake).
+TEST(FloorManager, ARideWhoseBrakeIsNotSeenEndsWhenTheOdometryWalksOut) {
+  FloorManagerConfig c;
+  c.floor_height_prior.reset();
+  Rig r(c);
+  for (int i = 0; i < 30; ++i) r.step(r.pos, std::nullopt, 0.0);
+  for (int i = 0; i < 30; ++i) r.step(r.pos, std::nullopt, 0.5);     // 1.5 m/s
+  for (int i = 0; i < 100; ++i) r.step(r.pos, std::nullopt, -0.15);  // a gentle brake: 0 m/s
+  for (int i = 0; i < 20; ++i) r.step(r.pos, std::nullopt, 0.0);
+  for (int i = 0; i < 60; ++i)  // out, at 1 m/s, the IMU bobbing
+    r.step(r.pos + Vector3d(kDt, 0, 0), std::nullopt, 0.3 * std::sin(2 * M_PI * 1.3 * i * kDt));
+  const FloorEvent* e = r.ended();
+  ASSERT_NE(e, nullptr);
+  EXPECT_EQ(e->type, TransitionType::Elevator);
+  EXPECT_NEAR(e->delta_z, 0.5 * 1.5 * 3.0 + 0.5 * 1.5 * 10.0, 0.5);
+}
+
+// A jolt the IMU took for a cabin starting (Elevator-VIGS Factory-H, boarding) is no ride once the
+// odometry walks on; the transition goes back to the odometry, and the ride that follows is
+// measured from its own start.
+TEST(FloorManager, AJoltThatWasNoRideLeavesTheNextRideToItsOwnStart) {
+  FloorManagerConfig c;
+  c.floor_height_prior.reset();
+  Rig r(c);
+  for (int i = 0; i < 30; ++i) r.step(r.pos, std::nullopt, 0.0);
+  r.climb(0.4, 2.0, false);  // the odometry drifts up: a transition opens
+  ASSERT_EQ(r.count(FloorEvent::Kind::TransitionStarted), 1);
+  for (int i = 0; i < 12; ++i) r.step(r.pos, std::nullopt, -0.6, false);  // a jolt, lost
+  for (int i = 0; i < 12; ++i) r.step(r.pos, std::nullopt, 0.6, false);
+  for (int i = 0; i < 50; ++i)  // walks on, into the cabin
+    r.step(r.pos + Vector3d(kDt, 0, 0), std::nullopt, 0.0);
+  for (int i = 0; i < 30; ++i) r.step(r.pos, std::nullopt, 0.0);
+  ride(r, r.pos, 0.6, 2.5, 5.0, true);  // 11.25 m up, the cabin still to the odometry
+  for (int i = 0; i < 30; ++i) r.step(r.pos, std::nullopt, 0.0);
+  const FloorEvent* e = nullptr;
+  for (const auto& ev : r.events)
+    if (ev.kind == FloorEvent::Kind::TransitionEnded && ev.type == TransitionType::Elevator)
+      e = &ev;
+  ASSERT_NE(e, nullptr);
+  EXPECT_NEAR(e->delta_z, 11.25, 0.4);
 }

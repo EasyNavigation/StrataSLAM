@@ -114,6 +114,19 @@
 - `docs/user/install.md` rewritten and tested; `docs/data_format.md` documents `fused/`, the optional payload folders and the integrity checks.
 
 ### Fixed
+- Elevator rides were lost when the odometry had opened a transition before them (its drift while walking, a jump as
+  the doors closed) and was then lost in the cabin or saw it still: the IMU now takes such a ride, measures it from its
+  onset to the cabin's stop, and leaves what came before on the floor it left (ADR-0059). On Elevator-VIGS the 16 real
+  sequences come closer to their measured rises and round trips (Office4: up by elevator, down by the stairs, a loop
+  closed with its start) and the simulated rides are measured (per-floor ATE 0.07-0.39 m, before up to 23 m). Stairs
+  and steps the odometry tracks are not taken for rides (the IMU's spread), nor is a jolt or a lone brake: the ride
+  whose gentle push a brake ended is found back in 60 s of history.
+- A floor reached again by the stairs after an elevator ride was linked to its keyframes a ride's height off, and its
+  loops with them were rejected: the odometry restarts after the ride at the height measured (ADR-0059). New scenario
+  S15 (three floors up by elevator, down the stairs).
+- A mounting learned from the motion no longer resets the gravity tracker, which left a moving body without gravity
+  for 31 s; a heading within 20 deg of the TF keeps the TF; a frontend restarted after a loss is turned by what the
+  gyroscope measured meanwhile.
 - A hand-held camera with an IMU (OAK-D Lite) mapped almost nothing: three false floor transitions, one ending as a
   63 m lift. Three causes, all fixed:
   - The start was never levelled: it was tried once, on the first frame, before the IMU had reached the pipeline

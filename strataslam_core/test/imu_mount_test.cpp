@@ -147,6 +147,22 @@ TEST(ImuMount, ACorrectHeadingIsConfirmedByTheAccelerations) {
   EXPECT_LT(e.tf_error_deg, 1.0);
 }
 
+// The heading from the accelerations is resolved to about 10 deg: a correction below 20 deg
+// confirms the TF rather than contradicting it (Elevator-VIGS Mall-E: an exact TF read -11.7 deg
+// off and was replaced, and the gravity tracker restarted for the whole elevator ride). A larger
+// one is applied.
+TEST(ImuMount, AHeadingWithinTheResolutionKeepsTheTfAndALargerOneIsLearned) {
+  const auto near = drive(gtsam::Rot3::Yaw(12.0 * M_PI / 180), gtsam::Rot3(), true);
+  EXPECT_TRUE(near.yaw_observed);
+  EXPECT_NEAR(near.yaw_deg, 12.0, 1.0);
+  EXPECT_LT(near.tf_error_deg, 1.0);
+  const gtsam::Rot3 truth = gtsam::Rot3::Yaw(30.0 * M_PI / 180);
+  const auto far = drive(truth, gtsam::Rot3(), true);
+  EXPECT_TRUE(far.yaw_observed);
+  EXPECT_NEAR(far.tf_error_deg, 30.0, 1.0);
+  EXPECT_LT(gtsam::Rot3::Logmap(far.R_base_imu.between(truth)).norm() * 180.0 / M_PI, 1.0);
+}
+
 TEST(ImuMount, WithoutTheAccelerationsTheHeadingStaysTheTfs) {
   const auto e = drive(gtsam::Rot3::Yaw(M_PI), gtsam::Rot3(), false);
   EXPECT_FALSE(e.yaw_observed);
@@ -165,6 +181,25 @@ TEST(ImuMount, NothingIsLearnedWithoutTurning) {
                               Vector3d::UnitZ());
   }
   EXPECT_FALSE(mount.estimate().has_value());
+}
+
+// A mounting learned while the body moves: the tracker's state is turned with the samples, so it
+// stays ready and right (a reset left Elevator-VIGS Factory-M without `up` for its 20 m ride).
+TEST(GravityTracker, TurnedWithALearnedMountingItStaysReadyAndRight) {
+  GravityTracker g;
+  const gtsam::Rot3 R_true = gtsam::Rot3::Roll(0.4);  // the IMU in the (level) base
+  const Vector3d f_imu = R_true.matrix().transpose() * Vector3d(0, 0, kStandardGravity);
+  Timestamp t = 1'000'000'000;
+  for (int i = 0; i < 200; ++i, t += 10'000'000)
+    g.add(t, f_imu, Vector3d::Zero());  // through the TF's mounting: the identity
+  ASSERT_TRUE(g.up().has_value());
+  g.rotate(R_true.matrix());
+  ASSERT_TRUE(g.up().has_value());
+  EXPECT_NEAR(g.up()->dot(Vector3d::UnitZ()), 1.0, 1e-6);
+  for (int i = 0; i < 100; ++i, t += 10'000'000)  // moving: accelerating, nothing corrects it
+    g.add(t, R_true.matrix() * f_imu + Vector3d(0, 6.0, 0), Vector3d::Zero());
+  ASSERT_TRUE(g.up().has_value());
+  EXPECT_NEAR(g.up()->dot(Vector3d::UnitZ()), 1.0, 1e-6);
 }
 
 TEST(GravityTracker, FollowsATiltAndIgnoresTheRobotsOwnAcceleration) {

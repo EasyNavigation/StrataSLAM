@@ -51,7 +51,7 @@ if(STRATASLAM_BUILD_TESTS)
   target_link_libraries(strataslam_sim_tests PRIVATE strataslam_sim GTest::gtest_main)
   # Listed when they run, not while building (see strataslam_core/CMakeLists.txt).
   gtest_discover_tests(strataslam_sim_tests DISCOVERY_TIMEOUT 120 DISCOVERY_MODE PRE_TEST)
-  # Scenario (integration) tests S01..S14: slower, labelled "integration".
+  # Scenario (integration) tests S01..S15: slower, labelled "integration".
   add_executable(strataslam_scenario_tests test/scenario_test.cpp)
   target_link_libraries(strataslam_scenario_tests PRIVATE strataslam_sim GTest::gtest_main)
   gtest_discover_tests(strataslam_scenario_tests DISCOVERY_TIMEOUT 600 DISCOVERY_MODE PRE_TEST PROPERTIES LABELS integration TIMEOUT 1800)

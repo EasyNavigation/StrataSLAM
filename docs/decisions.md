@@ -864,3 +864,50 @@ frontend used it.
   ramps +2.81 and +2.07 m (+2.95 and +1.99 without the IMU; about +3.0 and +1.65 by the wheels and the IMU).
 - Limits: the first ramp of `prueba_03` comes before the heading is learned (762 deg of turning) and is still the
   LiDAR's alone. A robot that only turns in place never shows its heading, and its IMU then stays out of the LiDAR.
+
+## ADR-0059 · Elevator rides the IMU measures while the odometry is lost, or still in the cabin
+
+Elevator-VIGS (Hugging Face `Rui5125/Elevator-VIGS`, CC BY-NC 4.0: a hand-held LiDAR and 400 Hz IMU riding 1 to 15
+floors, 16 real sequences with laser-measured rises or round trips and 16 simulated ones with exact ground truth; not
+redistributed) lost most rides: the LiDAR odometry, lost in the cabin or seeing it still, had often opened a transition
+of its own before the ride (its drift while walking, a jump as the doors closed), and the IMU never took it over.
+Offline (`threads: 1`) against `aad8e44`, every real sequence comes closer to its truth: one-way rises within 0.06-0.9
+m (Residential2 +50.31 m against +49.98, before +8.11; Office2 +16.08 against +16.78, before nothing), round trips
+closing within 0.07-2.6 m (before 3.2-13.9; Office4 up 14.77 m by elevator, down the stairs to floor 0 and a loop
+closed with its start). The simulated rides are measured (per-floor ATE 0.07-0.39 m, before up to 23 m: the arrival
+floor was mapped into the one left).
+
+- **Takeover.** An odometry-opened transition is taken by the IMU when its 1 s mean of vertical acceleration passes
+  the departure threshold for `imu_depart_s`, it has gained a cabin's speed (0.3 m/s) and the odometry did not follow:
+  lost all along, or tracking at less than half that speed (a cabin is still to it), with the IMU smooth as a cabin
+  is (`kCabinSpread`: under 0.45 m/s^2 of spread over 1 s; 0.1-0.4 in cabins, 0.5-4.4 on stairs and steps, which the
+  odometry tracks half-way and whose 1 s means look like a push). What the odometry's transition held until the onset
+  ends on the floor it left (`ride_follows`), with any session lost before it; the ride counts from its onset.
+- **The ride.** Push and brake are the integrals of the 1 s mean beyond 0.2 m/s^2 (a cruising cabin vibrates by
+  +-0.16), counted from the onset, from the mean of the 5 s before it (the slow bias estimate drifts while walking:
+  0.13 m/s^2 on Mall-M). It ends braked (60 % of the push) and calm for `ride_stop_s`, or when the odometry walks out
+  once the cabin has slowed to half its top speed and its last pulse is over (not out of a cabin still moving or
+  braking: Office3, Campus6). A ride that never comes back to rest was one pulse: a jolt, or the brake of a ride whose
+  push stayed under the threshold (Station3, Residential3: 0.23 m/s^2). It is dropped once the IMU jolts as steps do
+  for 3 s while the odometry walks (a cabin does not, even when the odometry drifts 10 m in it: Office2), or after
+  30 m; first, the push is looked for in 60 s of history (an opposite pulse of most of its speed before a cabin's
+  calm) and the ride measured from it. A ride whose height is no floor's goes back to the odometry too. The level it
+  reaches is known to 5 % of the ride (per-level sigma), so a stair back down closes on the level it left.
+- **The map.** The frontend restarted after the ride is raised by its height, which the manager is told is no motion
+  (`odometry_rebased`): the odometry's z is the height again. Left at the height before the ride, a floor reached
+  again by the stairs was linked to its keyframes a ride's height off and every loop with them was rejected (Office4:
+  15 m; scenario S15, three floors up by elevator and down the stairs: ATE 3.45 m and no loop, now 0.05 m and 22). The
+  keyframes taken in the cabin of such a ride are dropped, as when the odometry is lost there: they have the height
+  it left. A restart is turned by what the gyroscope measured while the odometry was blind (a person turning round).
+- **The IMU itself.** A mounting learned from the motion turns the gravity tracker's state instead of resetting it (a
+  moving body waited 31 s for gravity: Factory-M's 20 m ride went unmeasured); a heading under 20 deg from the TF keeps
+  the TF (Elevator-VIGS learned 11-22 deg on an IMU that is the base frame: its gyroscope matches the ground truth's
+  rates within 0.1 deg).
+- **Limits.** On the simulated walks without a ride the gravity tracker errs by 2-5 deg (the simulator's IMU; 0.5-0.9
+  deg on the real one) and the LiDAR's 1 deg bound (ADR-0058) follows it: Office2-Walk keeps a false floor of -2.49 m
+  (-2.02 m before, when a wrong mounting reset the tracker and left the LiDAR unbounded for 31 s), Factory-Walk's ATE
+  is 0.50 m (0.29). Loosening the bound or the tracker's gate fixed those walks and lost real rides. On the Summit
+  (`floor_changes: false`) only the tracker turn applies: `prueba_03` ramps -1.18 and -3.02 m (-3.31 before; about
+  -3.0 by the wheels and the IMU's pitch), `prueba_00` +2.49 and +1.71 (+2.81 and +2.07; about +3.0 and +1.65). KITTI
+  and the OAK bags are unchanged; S05, S06 and S11 are closer (ATE 0.13 -> 0.04 m, 0.11 -> 0.02 m; heights 0.065 ->
+  0.003 m, 0.230 -> 0.212 m).

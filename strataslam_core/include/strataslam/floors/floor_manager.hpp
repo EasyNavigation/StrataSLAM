@@ -5,6 +5,7 @@
 #include <memory>
 #include <optional>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 #include "strataslam/common/logging.hpp"
@@ -52,6 +53,10 @@ struct FloorManagerConfig {
   double imu_calm_accel = 0.10;  ///< m/s^2
   double elevator_imu_min =
       1.0;  ///< m, vertical change measured by the IMU that identifies an elevator
+  /// s of IMU calm, once the cabin's integrated speed is back near zero, that end a ride the IMU
+  /// measures: its height is integrated up to there, without waiting for the odometry to calm down
+  /// (a person walks out of the cabin at once).
+  double ride_stop_s = 1.0;
   double max_transition_s = 120.0;     ///< forced close after this long
   double tracking_loss_timeout = 2.0;  ///< s
   bool aerial_platform = false;        ///< robot.platform == aerial
@@ -81,6 +86,10 @@ struct FloorEvent {
   /// TransitionStarted: the height change was seen by the barometer/IMU but not by the odometry, so
   /// the frontend should restart now to avoid matching the old floor's (possibly identical) map.
   bool vertical_unobserved = false;
+  /// TransitionEnded with `from == to`: the transition the odometry opened ends at the onset of a
+  /// ride the IMU now measures, which stays open (its own TransitionEnded follows). What was mapped
+  /// until then belongs to the floor it left.
+  bool ride_follows = false;
 };
 
 /// State machine OnFloor / InTransition(type) / Lost. Pure logic over scalar signals, so it is
@@ -130,6 +139,7 @@ class FloorManager {
   }
 
  private:
+  Timestamp last_ride_dbg_ = 0;  ///< FLOORS debug channel: last trace of a ride's speed
   struct Acc {
     Timestamp t0 = 0;
     double alt0 = 0, baro0 = 0;
@@ -138,10 +148,25 @@ class FloorManager {
     Eigen::Vector3d last_pos = Eigen::Vector3d::Zero();
     std::vector<std::pair<double, double>> profile;  ///< (horizontal run, altitude)
     Timestamp calm_since = 0;
-    Timestamp plateau_since = 0;  ///< start of the current uninterrupted calm
-    double plateau_h0 = 0;        ///< s_h at that moment
-    bool unobserved = false;      ///< opened by baro/IMU while the odometry stayed put
-    Timestamp imu_onset = 0;      ///< start of the vertical-acceleration window that triggered it
+    Timestamp plateau_since = 0;    ///< start of the current uninterrupted calm
+    double plateau_h0 = 0;          ///< s_h at that moment
+    bool unobserved = false;        ///< opened by baro/IMU while the odometry stayed put
+    Timestamp imu_onset = 0;        ///< start of the vertical-acceleration window that triggered it
+    Timestamp az_over_since = 0;    ///< opened by the odometry: since when the IMU accelerates
+    int ride_sign = 0;              ///< an IMU-measured ride: +1 up, -1 down, 0 not known yet
+    double ride_push = 0;           ///< m/s, its acceleration along that sign (the cabin starting)
+    double ride_brake = 0;          ///< m/s, its acceleration against it (the cabin braking)
+    Timestamp last_ride_stamp = 0;  ///< its last sample
+    Timestamp last_pulse = 0;       ///< its last pulse (a cabin starting or braking)
+    double ride_s_h0 = 0;           ///< m, the horizontal run when it started
+    Timestamp ride_calm_since = 0;  ///< since when it has looked stopped
+    Timestamp imu_end = 0;          ///< where the IMU's integration ends (0: now)
+    double ride_ref = 0;            ///< m/s^2, the vertical acceleration before its onset
+    double ride_v = 0;              ///< m/s, its speed from the 1 s means (from `ride_ref`)
+    double ride_v_peak = 0;         ///< m/s, the largest |ride_v|
+    Timestamp pulse1_end = 0;       ///< where its first pulse ended
+    double pulse1_v = 0;            ///< m/s, ride_v there
+    Timestamp gait_since = 0;       ///< since when the IMU has jolted as steps do
   };
   struct Motion {
     double vz = 0;            ///< m/s, vertical speed of the odometry altitude (0 without odometry)
@@ -159,12 +184,13 @@ class FloorManager {
   FloorEvent decide_transition(const FloorSample& s, bool forced);
   FloorSample last_sample_;
   double median_slope() const;
-  FloorId assign_level(double altitude, double tol_override = -1.0);
+  FloorId assign_level(double altitude, double tol_override = -1.0, double sigma = 0.0);
 
   FloorManagerConfig cfg_;
   FloorState state_ = FloorState::OnFloor;
   FloorId floor_ = 0;
   std::vector<double> levels_;
+  std::vector<double> level_sigma_;  ///< m, how well each level's altitude is known
   double altitude_ = 0;
   double altitude_offset_ = 0;
   Timestamp last_tracked_ = 0;  ///< stamp of the last sample with valid odometry
@@ -174,6 +200,8 @@ class FloorManager {
   std::optional<double> baro_ref_;
   // vertical speed estimation
   std::deque<std::pair<Timestamp, double>> alt_hist_;
+  std::deque<std::pair<Timestamp, double>> run_win_;  ///< horizontal run in a transition, last 3 s
+  std::deque<std::pair<Timestamp, double>> odom_vz_win_;  ///< tracked vertical speed, last 6 s
   std::deque<std::tuple<Timestamp, double, double>>
       slope_win_;  ///< (stamp, cumulative horizontal run, altitude)
   double hrun_ = 0;
@@ -192,8 +220,14 @@ class FloorManager {
       az_hist_;  ///< recent vertical accelerations (bias removed)
   double az_bias_ = 0;
   Timestamp az_over_since_ = 0;
+  std::vector<std::pair<double, double>> filtered_az(Timestamp onset, Timestamp end) const;
+  double imu_speed_gain(Timestamp onset, Timestamp end) const;
+  std::optional<double> odom_max_vz_since(Timestamp t) const;
   double imu_delta_z(Timestamp onset, Timestamp end) const;
   double az_mean(Timestamp now, double window_s) const;
+  double az_mean_between(Timestamp from, Timestamp to) const;
+  double az_spread(Timestamp from, Timestamp to) const;
+  std::optional<Timestamp> push_before(Timestamp onset, double v_brake) const;
   Eigen::Vector3d last_pos_ = Eigen::Vector3d::Zero();
   bool have_last_pos_ = false;
   Timestamp lost_since_ = 0;

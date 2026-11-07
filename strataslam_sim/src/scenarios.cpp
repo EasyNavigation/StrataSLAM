@@ -232,6 +232,26 @@ ScenarioSpec make_scenario(const std::string& id, uint64_t seed) {
       enable_baro(s);
     else
       enable_imu(s);
+  } else if (id == "S15") {
+    s.description =
+        "Four identical floors, up three by elevator (IMU), back down the stairs to where the walk "
+        "began, camera + LiDAR + IMU";
+    bc.num_floors = 4;
+    bc.identical_floors = true;
+    s.building = std::make_shared<Building>(bc);
+    TrajectoryBuilder tb(*s.building, tc, 0, {3, 3}, 0.0);
+    tb.walk({{29, 3}, {29, 19}, {3, 19}, {3, 3}, {21.6, 3}});
+    tb.walk_facing({{21.6, 0.5}, {21.6, -1.1}}, M_PI / 2).elevator(0, 3);
+    tb.walk({{21.6, 0.5}, {21.6, 3}, {13.2, 3}, {13.2, 0.8}}).stairs(2, false);
+    for (int level = 1; level >= 0; --level)
+      tb.walk({{11.0, 3}, {13.2, 3}, {13.2, 0.8}}).stairs(level, false);
+    tb.walk({{11.0, 3}, {3, 3}, {3, 19}, {29, 19}, {29, 3}});
+    s.trajectory = share(tb.build());
+    enable_camera(s);
+    enable_imu(s);
+    s.sim.lidar = true;
+    s.sim.lidar_beams = 32;
+    s.slam.sensors.lidar.enabled = true;
   } else if (id == "S09") {
     s.description = "Vertical flight through the atrium, camera + IMU, aerial platform";
     bc.num_floors = 3;
@@ -756,6 +776,21 @@ void apply_acceptance_criteria(const ScenarioSpec& spec, const Simulator& sim, c
              " m against a climb of " + std::to_string(*tr.delta_z) + " m");
     if (spec.id == "S13" && m.worst_height_err > 0.25)
       fail("floor height error " + std::to_string(m.worst_height_err) + " > 0.25 m");
+  } else if (spec.id == "S15") {
+    // ADR-0059: the odometry restarted after the ride at the height it measured, so the floor
+    // reached again by the stairs links to its keyframes at their height, and closes a loop with
+    // them (Elevator-VIGS Office4: left at the height before the ride, they were a floor off and
+    // every loop with the start was rejected).
+    expect_transition(strataslam::TransitionType::Elevator);
+    expect_transition(strataslam::TransitionType::Stairs);
+    check_ate(0.30);
+    // The odometry reads each flight about 0.2 m short (S11: 0.21 m for one), and the landings
+    // between them add up: 0.58 m on the third, the same before this ADR.
+    if (m.worst_height_err > 0.75)
+      fail("floor height error " + std::to_string(m.worst_height_err) + " > 0.75 m");
+    if (m.inter_session_loops == 0)
+      fail("no loop closure between the walk before the ride and the one after the stairs");
+    if (m.collapse != 0.0) fail("collapse rate " + std::to_string(m.collapse) + " != 0");
   } else if (spec.id == "S05" || spec.id == "S06") {
     expect_transition(strataslam::TransitionType::Elevator);
     const double limit = spec.id == "S05" ? 0.25 : 0.50;

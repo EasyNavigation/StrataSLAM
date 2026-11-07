@@ -47,6 +47,7 @@ METRICS: dict[str, list[tuple[str, bool]]] = {
     "S12": [("ate_rmse_m", True), ("map_coverage", False), ("inter_session_loops", False), ("floors", True)],
     "S13": [("ate_rmse_m", True), ("map_coverage", False), ("floor_height_err_m", True), ("floors", True)],
     "S14": [("ate_rmse_m", True), ("map_coverage", False), ("floors", True)],
+    "S15": [("ate_rmse_m", True), ("map_coverage", False), ("inter_session_loops", False), ("floor_height_err_m", True)],
 }
 
 

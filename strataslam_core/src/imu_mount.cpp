@@ -20,6 +20,13 @@ constexpr double kMinMotionEnergy = 4.0;
 /// Part of that acceleration the accelerometer must explain once turned by the heading: below it
 /// the two do not follow each other (a time offset, a noisy odometry) and the heading stays.
 constexpr double kMinExplained = 0.5;
+/// A heading correction smaller than this is within what the accelerations resolve (about 10 deg
+/// from kMinMotionEnergy, above): it confirms the TF rather than contradicting it, and the TF's
+/// heading stays. Applied, it replaced an exact TF: a hand-held rig whose IMU is its base frame
+/// learned -11.7 deg, over the 10 deg that makes a mounting wrong, and the gravity tracker was
+/// restarted for the 20 s of an elevator ride (Elevator-VIGS Mall-E: the 4.5 m ride became a
+/// 1.5 m ramp).
+constexpr double kHeadingResolutionDeg = 20.0;
 }  // namespace
 
 ImuMount::ImuMount(const gtsam::Rot3& R_base_imu_tf, double min_turn_deg)
@@ -142,7 +149,8 @@ std::optional<ImuMount::Estimate> ImuMount::estimate() const {
     e.explained = std::hypot(c, s) / motion_energy_;
     e.yaw_deg = yaw * 180.0 / M_PI;
     if (motion_energy_ >= kMinMotionEnergy && e.explained >= kMinExplained) {
-      e.R_base_imu = gtsam::Rot3::Yaw(yaw) * e.R_base_imu;
+      if (std::abs(e.yaw_deg) >= kHeadingResolutionDeg)
+        e.R_base_imu = gtsam::Rot3::Yaw(yaw) * e.R_base_imu;
       e.yaw_observed = true;
     }
   }

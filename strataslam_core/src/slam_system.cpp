@@ -88,6 +88,16 @@ struct SlamSystem::Impl {
   // Last pose the frontend tracked as Good: a loss is usually preceded by a few Degraded frames
   // whose pose (in particular the attitude) is the least reliable one to restart from.
   std::optional<std::pair<Timestamp, gtsam::Pose3>> last_good;
+  Timestamp last_pose_stamp = 0;  // of last_pose
+  Timestamp restart_stamp = 0;    // of the frame the frontend was last restarted at
+  Timestamp frame_stamp = 0;      // of the frame being processed
+  // The body's attitude carried by the gyroscope alone (base frame, bias removed), every 20 ms over
+  // the last 5 minutes: a frontend restarts from the last pose turned by what the body turned while
+  // the odometry was blind (a person turning round in an elevator cabin: Elevator-VIGS Office1-E's
+  // second floor was mapped heading back the way the first had come).
+  std::deque<std::pair<Timestamp, Eigen::Quaterniond>> gyro_att;
+  Eigen::Quaterniond gyro_q = Eigen::Quaterniond::Identity();
+  Timestamp gyro_last = 0;
   int since_loop = 1000;
   size_t cross_floor_seen = 0;
 
@@ -229,14 +239,49 @@ struct SlamSystem::Impl {
   }
 
   /// One IMU sample into the pipeline, corrected by what is known of the mounting.
-  void use_imu(const ImuSample& raw) {
+  /// `track_gravity` false: a sample the gravity tracker has already had (replayed after a mounting
+  /// was learned).
+  void use_imu(const ImuSample& raw, bool track_gravity = true) {
     ImuSample m = raw;
     m.accel *= imu_sign * imu_scale;
     imu_buf.push_back(m);
     while (imu_buf.size() > 600) imu_buf.pop_front();
     imu_since_update.push_back(m);
     const Eigen::Matrix3d R = ext.T_base_imu.rotation().matrix();
-    gravity.add(m.stamp, R * m.accel, R * m.gyro);
+    if (track_gravity) gravity.add(m.stamp, R * m.accel, R * m.gyro);
+    integrate_gyro(m.stamp, R * m.gyro);
+  }
+
+  void integrate_gyro(Timestamp stamp, const Eigen::Vector3d& gyro_base) {
+    if (stamp <= gyro_last) return;
+    if (gyro_last != 0) {
+      const double dt = std::min((stamp - gyro_last) * 1e-9, 0.1);
+      const Eigen::Vector3d w = (gyro_base - gravity.gyro_bias()) * dt;
+      const double angle = w.norm();
+      if (angle > 0)
+        gyro_q = (gyro_q * Eigen::Quaterniond(Eigen::AngleAxisd(angle, w / angle))).normalized();
+    }
+    gyro_last = stamp;
+    constexpr Timestamp kStep = 20'000'000, kKeep = 300'000'000'000;
+    if (gyro_att.empty() || stamp - gyro_att.back().first >= kStep)
+      gyro_att.push_back({stamp, gyro_q});
+    while (gyro_att.front().first < stamp - kKeep) gyro_att.pop_front();
+  }
+
+  /// What the body turned from `from` to `to` by the gyroscope (in the body frame at `from`), when
+  /// its record covers them and the IMU's mounting can be trusted for it: on a ground robot, only
+  /// once its heading has been learned (a TF turned half around reverses the roll and pitch rates).
+  std::optional<gtsam::Rot3> gyro_turn(Timestamp from, Timestamp to) const {
+    if (!imu_trusted || (cfg.robot.platform == Platform::Ground && !imu_learned))
+      return std::nullopt;
+    if (gyro_att.empty() || from == 0 || to <= from || from < gyro_att.front().first)
+      return std::nullopt;
+    const auto at = [&](Timestamp t) {
+      auto it = std::upper_bound(gyro_att.begin(), gyro_att.end(), t,
+                                 [](Timestamp v, const auto& e) { return v < e.first; });
+      return it == gyro_att.begin() ? it->second : std::prev(it)->second;
+    };
+    return gtsam::Rot3((at(from).conjugate() * at(to)).toRotationMatrix());
   }
 
   /// After the first second: does gravity, through the TF, point up? On a ground robot it must; if
@@ -342,14 +387,24 @@ struct SlamSystem::Impl {
                        e->tf_error_deg,
                        e->accel_sign < 0 ? ", accelerometer reports gravity pointing down" : "",
                        e->accel_scale));
+    // The gravity tracker keeps its state, turned into the new mounting, unless the accelerometer's
+    // sign was wrong (its up was down) or it has none yet.
+    const bool keep_gravity = imu_trusted && gravity.started() && e->accel_sign == imu_sign;
+    const Eigen::Matrix3d dR =
+        e->R_base_imu.matrix() * ext.T_base_imu.rotation().matrix().transpose();
     ext.T_base_imu = gtsam::Pose3(e->R_base_imu, ext.T_base_imu.translation());
     imu_sign = e->accel_sign;
     imu_scale = e->accel_scale;
     imu_buf.clear();
     imu_since_update.clear();
-    gravity.reset();
+    gyro_att.clear();  // turned through the old mounting
+    gyro_q = Eigen::Quaterniond::Identity();
+    if (keep_gravity)
+      gravity.rotate(dR);
+    else
+      gravity.reset();
     imu_trusted = true;
-    for (const auto& m : imu_mount->recent()) use_imu(m);
+    for (const auto& m : imu_mount->recent()) use_imu(m, /*track_gravity=*/!keep_gravity);
   }
 
   /// Up direction in the base frame if the last 0.4 s of IMU data are quasi-static, else nullopt.
@@ -458,7 +513,12 @@ struct SlamSystem::Impl {
     in.stamp = stamp;
     in.session = session;
     in.floor = current_floor();
-    in.T_odom_base = r.T_odom_base;
+    // Restarted at this very frame (a floor event): its pose is the restart's, not the one the
+    // frontend measured before it (raised by a ride's height since, Elevator-VIGS Mall-M: the
+    // first keyframe of floor 1 was bridged 17.7 m under the next).
+    const gtsam::Pose3 T_odom_base =
+        restart_stamp == stamp && last_pose ? *last_pose : r.T_odom_base;
+    in.T_odom_base = T_odom_base;
     in.tracking = r.quality.state;
     in.cloud = std::move(cloud);
     in.T_base_sensor = T_base_sensor;
@@ -469,7 +529,7 @@ struct SlamSystem::Impl {
     std::optional<KeyframeId> odom_from;
     if (last_kf && last_kf_pose) {
       odom_from = last_kf;
-      rel = last_kf_pose->between(r.T_odom_base);
+      rel = last_kf_pose->between(T_odom_base);
     }
     // Every keyframe entering an existing graph must be connected: without an odometry predecessor
     // it is linked to the previous keyframe of that graph with the weak bridge factor.
@@ -478,9 +538,9 @@ struct SlamSystem::Impl {
       link = last_kf_in_graph[key_floor(in.floor)];
     auto added = backend.add_keyframe(in, odom_from, rel, link);
     if (!added) log->log(LogLevel::Error, added.error().message);
-    kfs.push_back({in.id, stamp, session, in.floor, r.T_odom_base});
+    kfs.push_back({in.id, stamp, session, in.floor, T_odom_base});
     last_kf = in.id;
-    last_kf_pose = r.T_odom_base;
+    last_kf_pose = T_odom_base;
     if (in.floor >= 0) bridge_from.reset();
     ++since_loop;
     if (vis) visual_kf[in.id] = *vis;
@@ -909,8 +969,11 @@ struct SlamSystem::Impl {
     // Lost in the middle of stairs or a ramp the odometry was measuring: the frontend restarted at
     // the last pose, so the height is still continuous and the climb goes on. The session is not an
     // unobservable floor change; the transition decides its floor when it ends (on_floor_event).
-    // Relocalizing here would snap a half-way keyframe onto the floor it looks like.
-    if (mgr.in_observed_transition()) return;
+    // Relocalizing here would snap a half-way keyframe onto the floor it looks like. So would it in
+    // a ride the IMU or the barometer is measuring, which an odometry-opened transition becomes
+    // when the odometry is lost in the cabin: a glass cabin looks onto the floor it left
+    // (Elevator-VIGS Mall-E: relocalized on floor 0 half-way up, the ride was dropped).
+    if (mgr.state() == FloorState::InTransition) return;
     // With a barometer or an IMU a floor change cannot go unnoticed, so a tracking loss is not one:
     // the session stays on its floor; with `multifloor.enabled: false` there is no other floor to
     // go to. Otherwise the change is unobservable and every floor is a relocalization candidate
@@ -1106,17 +1169,28 @@ struct SlamSystem::Impl {
   /// Restarts the odometry at the corrected last pose, re-levelled. `climb_dz` is a vertical motion
   /// the robot is assumed to have made meanwhile: it raises the restart pose and, unlike the
   /// backend's correction, is not compensated in the manager, so the altitude moves by it.
-  void restart_frontend(double climb_dz = 0.0, bool level = true) {
+  /// `rebase_dz` raises it too, as a height the manager has already counted (a ride the IMU or the
+  /// barometer measured): the altitude stays, and the odometry's z is the height again.
+  void restart_frontend(double climb_dz = 0.0, bool level = true, double rebase_dz = 0.0) {
     if (!odom_fe || !last_pose) return;
+    gtsam::Pose3 start = corrected_last_pose();
+    if (const auto turn = gyro_turn(last_pose_stamp, frame_stamp)) {
+      if (debug_channel("TRACK"))
+        log->log(LogLevel::Debug,
+                 strprintf("restart: the gyroscope turned the body by %.1f deg in %.1f s blind",
+                           gtsam::Rot3::Logmap(*turn).norm() * 180.0 / M_PI,
+                           (frame_stamp - last_pose_stamp) * 1e-9));
+      start = gtsam::Pose3(start.rotation() * *turn, start.translation());
+    }
     // On stairs or a ramp the visible "ground" is the slope: only the IMU may re-level there.
-    const gtsam::Pose3 corrected =
-        level ? relevel(corrected_last_pose(), !mgr.in_observed_transition())
-              : corrected_last_pose();
-    mgr.odometry_rebased(corrected.z() - last_pose->z());
+    const gtsam::Pose3 corrected = level ? relevel(start, !mgr.in_observed_transition()) : start;
+    mgr.odometry_rebased(corrected.z() - last_pose->z() + rebase_dz);
     const gtsam::Pose3 restart(corrected.rotation(),
-                               corrected.translation() + gtsam::Point3(0, 0, climb_dz));
+                               corrected.translation() + gtsam::Point3(0, 0, climb_dz + rebase_dz));
     odom_fe->reset(restart);
     last_pose = restart;
+    last_pose_stamp = frame_stamp;
+    restart_stamp = frame_stamp;
   }
 
   /// The latest pose expressed in the optimized frame: the last keyframe's optimized pose plus the
@@ -1157,6 +1231,7 @@ struct SlamSystem::Impl {
       if (last_good &&
           (lost_since - last_good->first) * 1e-9 < cfg.multifloor.tracking_loss_timeout) {
         last_pose = last_good->second;
+        last_pose_stamp = last_good->first;
         blind_since = last_good->first;
       }
       // Lost in the middle of stairs or a ramp: the climb did not stop while the camera was blind.
@@ -1193,7 +1268,13 @@ struct SlamSystem::Impl {
     if (ev.from == ev.to && ev.type == TransitionType::Unknown) {
       // The height came back to where the transition started: no floor change, nothing to record.
       // Its keyframes join the floor (a pending session keeps waiting for its relocalization, as
-      // before).
+      // before). Ended by a ride the IMU measures from now on, a session lost before it was on
+      // the floor the ride leaves: the ride's end would otherwise place it on the floor it reaches.
+      if (ev.ride_follows && pending.active)
+        commit_pending(pending.from_floor,
+                       last_kf_on_floor.count(pending.from_floor)
+                           ? std::optional<KeyframeId>(last_kf_on_floor[pending.from_floor])
+                           : std::nullopt);
       if (!pending.active) absorb_transit_keyframes(ev.to);
       return;
     }
@@ -1204,8 +1285,11 @@ struct SlamSystem::Impl {
       absorb_transit_keyframes(ev.to);
       return;
     }
-    // A ramp or stairs tracked continuously keeps its keyframes for the floor it arrives at.
-    if (!(ev.continuous_tracking && ev.from != ev.to)) transit_kfs.clear();
+    // A ramp or stairs tracked continuously keeps its keyframes for the floor it arrives at. Not a
+    // ride the odometry did not see, even tracked: the keyframes in the cabin have the height it
+    // left (Elevator-VIGS Mall-M: one was placed on the floor reached, 17.7 m under the next).
+    if (!(ev.continuous_tracking && ev.from != ev.to) || ev.needs_frontend_reset)
+      transit_kfs.clear();
     if (odom_fe)
       odom_fe
           ->request_keyframe();  // the new floor needs its first keyframe even if the robot hovers
@@ -1222,9 +1306,11 @@ struct SlamSystem::Impl {
     if (last_kf_on_floor.count(ev.to)) bridge_from = last_kf_on_floor[ev.to];
     if (ev.needs_frontend_reset && last_pose && odom_fe) {
       // The odometry saw no vertical motion (elevator, manual change): restart the frontend at the
-      // same pose (clearing the old floor's map). The height change lives in the manager's
-      // altitude, so the odometry z is deliberately not shifted: that would count it twice.
-      restart_frontend();
+      // same pose (clearing the old floor's map), raised by the height the manager measured and
+      // told it is no motion (it is not counted twice). Left at the height before the ride, the
+      // odometry's z linked a floor reached again by the stairs to its keyframes 15 m off
+      // (Elevator-VIGS Office4: back on floor 0, its loop closures with the start were rejected).
+      restart_frontend(0.0, true, ev.reset_dz);
       last_kf.reset();
       last_kf_pose.reset();
       ++session;
@@ -1314,6 +1400,7 @@ void SlamSystem::add_rgbd(const RgbdFrame& f) {
       !s.init_gravity(depth_to_cloud(f.depth, f.K, 4, s.tuning.visual.tracker.depth),
                       s.ext.T_base_camera, f.stamp))
     return;  // waiting for the IMU to level the start
+  s.frame_stamp = f.stamp;
   s.cur_rgbd = &f;
   struct Clear {
     const RgbdFrame*& p;
@@ -1343,6 +1430,7 @@ void SlamSystem::add_rgbd(const RgbdFrame& f) {
   }
   s.lost_since = 0;
   s.last_pose = r.T_odom_base;
+  s.last_pose_stamp = f.stamp;
   if (r.quality.state == TrackingState::Good) s.last_good = {f.stamp, r.T_odom_base};
   s.learn_imu_mounting(r, f.stamp);
   s.feed_manager(r, f.stamp);
@@ -1358,6 +1446,7 @@ void SlamSystem::add_lidar(const LidarScan& scan) {
   if (!s.lidar_fe || s.modes.odometry != OdometrySource::Lidar) return;
   if (!s.gravity_done && !s.init_gravity(scan.points, s.ext.T_base_lidar, scan.stamp))
     return;  // waiting for the IMU to level the start
+  s.frame_stamp = scan.stamp;
   s.cur_scan = &scan;
   struct Clear {
     const LidarScan*& p;
@@ -1381,6 +1470,7 @@ void SlamSystem::add_lidar(const LidarScan& scan) {
   }
   s.lost_since = 0;
   s.last_pose = r.T_odom_base;
+  s.last_pose_stamp = scan.stamp;
   if (r.quality.state == TrackingState::Good) s.last_good = {scan.stamp, r.T_odom_base};
   s.learn_imu_mounting(r, scan.stamp);
   s.feed_manager(r, scan.stamp);
