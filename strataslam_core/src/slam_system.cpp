@@ -74,6 +74,7 @@ struct SlamSystem::Impl {
 
   KeyframeId next_kf = 0;
   SessionId session = 0;
+  int since_loop = 1000;
   std::optional<KeyframeId> last_kf;  // last keyframe of the current session
   std::optional<KeyframeId>
       bridge_from;  // keyframe of the target floor to link the next keyframe to
@@ -96,9 +97,10 @@ struct SlamSystem::Impl {
   // the odometry was blind (a person turning round in an elevator cabin: Elevator-VIGS Office1-E's
   // second floor was mapped heading back the way the first had come).
   std::deque<std::pair<Timestamp, Eigen::Quaterniond>> gyro_att;
-  Eigen::Quaterniond gyro_q = Eigen::Quaterniond::Identity();
+  // Unaligned: a 16-byte aligned member here pads the struct (clang-analyzer Padding).
+  Eigen::Quaternion<double, Eigen::DontAlign> gyro_q =
+      Eigen::Quaternion<double, Eigen::DontAlign>::Identity();
   Timestamp gyro_last = 0;
-  int since_loop = 1000;
   size_t cross_floor_seen = 0;
 
   // A floor change in progress whose record is completed by the first keyframe on the new floor.
