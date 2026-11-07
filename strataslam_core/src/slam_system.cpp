@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
-#include <cstdlib>
 #include <deque>
 #include <limits>
 #include <optional>
@@ -102,6 +101,10 @@ struct SlamSystem::Impl {
       Eigen::Quaternion<double, Eigen::DontAlign>::Identity();
   Timestamp gyro_last = 0;
   size_t cross_floor_seen = 0;
+  // The odometry's attitude over the last minute of tracking out of confined spaces, in the
+  // frontend's current frame (cleared at its restarts): the gyroscope's heading drift against it.
+  std::deque<std::pair<Timestamp, gtsam::Rot3>> heading_obs;
+  Timestamp last_confined = 0;  // of the last scan that saw a confined space
 
   // A floor change in progress whose record is completed by the first keyframe on the new floor.
   struct OpenTransition {
@@ -284,6 +287,53 @@ struct SlamSystem::Impl {
       return it == gyro_att.begin() ? it->second : std::prev(it)->second;
     };
     return gtsam::Rot3((at(from).conjugate() * at(to)).toRotationMatrix());
+  }
+
+  /// What the body turned between two frames by the gyroscope, interpolated between its records,
+  /// when they cover both stamps (the IMU has reached `to`).
+  std::optional<gtsam::Rot3> gyro_delta(Timestamp from, Timestamp to) const {
+    constexpr Timestamp kSlack = 20'000'000;  // ns: one record step
+    if (!gyro_turn(from, to) || gyro_last + kSlack < to) return std::nullopt;
+    const auto at = [&](Timestamp t) {
+      auto it = std::upper_bound(gyro_att.begin(), gyro_att.end(), t,
+                                 [](Timestamp v, const auto& e) { return v < e.first; });
+      // Past the last record (kept every 20 ms): towards the attitude of the last sample, or a turn
+      // of up to 20 ms is lost in every scan, and they add up (120 deg/s: 2.4 deg per scan).
+      if (it == gyro_att.end()) {
+        const auto& [tb, qb] = gyro_att.back();
+        if (gyro_last <= tb) return Eigen::Quaterniond(qb);
+        const double f =
+            std::min(1.0, static_cast<double>(t - tb) / static_cast<double>(gyro_last - tb));
+        return Eigen::Quaterniond(qb).slerp(f, Eigen::Quaterniond(gyro_q));
+      }
+      const Eigen::Quaterniond q1 = it->second, q0 = std::prev(it)->second;
+      return q0.slerp(static_cast<double>(t - std::prev(it)->first) /
+                          static_cast<double>(it->first - std::prev(it)->first),
+                      q1);
+    };
+    return gtsam::Rot3((at(from).conjugate() * at(to)).toRotationMatrix());
+  }
+
+  /// rad/s: how much faster the gyroscope turns about the vertical than the LiDAR odometry, from
+  /// the ends of the last minute out of confined spaces (0 with less than 20 s of it, or beyond
+  /// 1 deg/s: not a drift).
+  double heading_drift() const {
+    if (heading_obs.size() < 2) return 0.0;
+    const auto& [t0, R0] = heading_obs.front();
+    const auto& [t1, R1] = heading_obs.back();
+    const double span = (t1 - t0) * 1e-9;
+    if (span < 20.0) return 0.0;
+    const auto turn = gyro_turn(t0, t1);
+    if (!turn) return 0.0;
+    // About the world's vertical, whatever the body's axes (a hand-held rig may point one up).
+    const double d = gtsam::Rot3::Logmap((R0 * *turn) * R1.inverse()).z() / span;
+    return std::abs(d) < M_PI / 180.0 ? d : 0.0;
+  }
+
+  void observe_heading(Timestamp stamp, const gtsam::Rot3& R) {
+    constexpr Timestamp kKeep = 60'000'000'000;  // ns
+    heading_obs.emplace_back(stamp, R);
+    while (heading_obs.front().first < stamp - kKeep) heading_obs.pop_front();
   }
 
   /// After the first second: does gravity, through the TF, point up? On a ground robot it must; if
@@ -1190,6 +1240,7 @@ struct SlamSystem::Impl {
     const gtsam::Pose3 restart(corrected.rotation(),
                                corrected.translation() + gtsam::Point3(0, 0, climb_dz + rebase_dz));
     odom_fe->reset(restart);
+    heading_obs.clear();  // another frame
     last_pose = restart;
     last_pose_stamp = frame_stamp;
     restart_stamp = frame_stamp;
@@ -1220,8 +1271,21 @@ struct SlamSystem::Impl {
     last_fe_stamp = 0;  // the next rotation for the IMU mounting starts at the next valid pose
     if (lost_since == 0) lost_since = stamp;
     const double lost_s = (stamp - lost_since) * 1e-9;
-    if (mgr.in_unobserved_transition())
-      return;  // the lift explains the loss; the frontend restarts when it ends
+    if (mgr.in_unobserved_transition()) {
+      // The lift explains the loss; the frontend restarts when it ends. Not once out of the cabin
+      // (the scans stopped being confined a moment ago): its local map is the cabin, it would stay
+      // lost, and the ride, not seeing the walk out of it, would go on integrating the IMU. It
+      // restarts there, turned by the gyroscope, the session going on.
+      constexpr Timestamp kOutOfCabin = 30'000'000'000;  // ns
+      if (last_confined > 0 && stamp - last_confined < kOutOfCabin && stamp != last_confined &&
+          lost_s > cfg.multifloor.tracking_loss_timeout && last_pose && odom_fe) {
+        restart_frontend(0.0, /*level=*/false);
+        last_kf.reset();
+        last_kf_pose.reset();
+        lost_since = 0;
+      }
+      return;
+    }
     if (cfg.multifloor.split_on_tracking_loss && lost_s > cfg.multifloor.tracking_loss_timeout &&
         last_pose && odom_fe) {
       // New session, restarting at the last known pose; its floor is decided by relocalization. A
@@ -1346,6 +1410,7 @@ struct SlamSystem::Impl {
     FloorSample fs;
     fs.stamp = stamp;
     fs.tracking_ok = r.valid;
+    fs.vertical_observed = !r.confined;
     if (r.valid) {
       fs.position = r.T_odom_base.translation();
       fs.up_axis = Eigen::Vector3d(r.T_odom_base.rotation().matrix().col(2));
@@ -1463,7 +1528,31 @@ void SlamSystem::add_lidar(const LidarScan& scan) {
   // around reads every slope backwards.
   if (!s.planar() && s.imu_trusted && (s.cfg.robot.platform != Platform::Ground || s.imu_learned))
     f.up_base = s.gravity.up();
+  // The gyroscope's turn since the last pose, its heading drift (measured against the odometry out
+  // of confined spaces) taken out: the rotation of a scan in an elevator cabin, where the
+  // registration's goes wrong by tens of degrees as the person turns round in it.
+  std::optional<gtsam::Rot3> raw_turn;
+  if (s.last_pose) raw_turn = s.gyro_delta(s.last_pose_stamp, scan.stamp);
+  const double turn_s = (scan.stamp - s.last_pose_stamp) * 1e-9;
+  if (raw_turn) {
+    const gtsam::Rot3& R = s.last_pose->rotation();
+    // Projected on the rotations: a product of matrices is not one to the last digit, and in a
+    // confined space nothing else re-estimates the rotation it gives.
+    f.gyro_delta = gtsam::Rot3::ClosestTo(
+        (R.inverse() * gtsam::Rot3::Yaw(-s.heading_drift() * turn_s) * R * *raw_turn).matrix());
+  }
   FrontendResult r = s.lidar_fe->process(f);
+  if (r.confined) s.last_confined = scan.stamp;
+  if (r.valid && !r.confined) s.observe_heading(scan.stamp, r.T_odom_base.rotation());
+  if (debug_channel("GYRO") && r.valid && f.gyro_delta)
+    s.log->log(LogLevel::Debug,
+               strprintf("gyro t=%.3f confined=%d drift=%.3f deg/s registration off the "
+                         "gyroscope by %.2f deg",
+                         scan.stamp * 1e-9, int(r.confined), s.heading_drift() * 180.0 / M_PI,
+                         gtsam::Rot3::Logmap(f.gyro_delta->between(s.last_pose->rotation().between(
+                                                 r.T_odom_base.rotation())))
+                                 .norm() *
+                             180.0 / M_PI));
   s.to_plane(r);
   if (!r.valid) {
     s.handle_lost(scan.stamp);

@@ -243,3 +243,57 @@ TEST(LidarFrontend, TheImusGravityBoundsTheAttitudeToOneDegree) {
   EXPECT_NEAR(angle_deg(up, tilted), 1.0, 0.05);
   EXPECT_NEAR(angle_deg(up, level), 4.0, 0.1);
 }
+
+// ---------------- Confined spaces: the rotation is the gyroscope's ----------------
+
+namespace {
+
+/// An elevator cabin, 1.6 x 1.4 x 2.4 m, around the sensor (a handrail on one wall).
+std::vector<Vector3f> cabin() {
+  return sample_room({-0.8, -0.7, -1.2}, {0.8, 0.7, 1.2}, 400, 3,
+                     {{{0.7, -0.5, -0.3}, {0.8, 0.5, -0.25}}});
+}
+
+}  // namespace
+
+TEST(LidarFrontend, InAConfinedSpaceTheRotationIsTheGyroscopesAndTheTranslationIsRegistered) {
+  LidarFrontendConfig cfg;
+  cfg.min_range = 0.3;
+  LidarFrontend fe{cfg};
+  LidarScan scan;
+  scan.points = cabin();
+  SensorFrame f;
+  f.lidar = &scan;
+  scan.stamp = f.stamp = 1'000'000'000LL;
+  ASSERT_TRUE(fe.process(f).valid);
+  // Turned by 25 deg and moved 10 cm: the gyroscope reports the turn 1 deg short.
+  const gtsam::Pose3 moved(gtsam::Rot3::Yaw(25.0 * M_PI / 180), Vector3d(0.10, 0.0, 0.0));
+  scan.points = transform_points(cabin(), moved.inverse().matrix());
+  scan.stamp = f.stamp = 1'100'000'000LL;
+  f.gyro_delta = gtsam::Rot3::Yaw(24.0 * M_PI / 180);
+  const FrontendResult r = fe.process(f);
+  ASSERT_TRUE(r.valid);
+  EXPECT_TRUE(r.confined);
+  EXPECT_TRUE(r.T_odom_base.translation().allFinite());
+  EXPECT_NEAR(gtsam::Rot3::Logmap(r.T_odom_base.rotation()).z() * 180 / M_PI, 24.0, 0.05);
+  EXPECT_LT((r.T_odom_base.translation() - Vector3d(0.10, 0, 0)).norm(), 0.05);
+}
+
+TEST(LidarFrontend, OutOfConfinedSpacesTheGyroscopeIsNotUsed) {
+  LidarFrontend a{LidarFrontendConfig()}, b{LidarFrontendConfig()};
+  LidarScan scan;
+  scan.points = room();
+  SensorFrame f;
+  f.lidar = &scan;
+  scan.stamp = f.stamp = 1'000'000'000LL;
+  ASSERT_TRUE(a.process(f).valid);
+  ASSERT_TRUE(b.process(f).valid);
+  const gtsam::Pose3 moved(gtsam::Rot3::Yaw(0.1), Vector3d(0.2, 0.1, 0.0));
+  scan.points = transform_points(room(), moved.inverse().matrix());
+  scan.stamp = f.stamp = 1'100'000'000LL;
+  const FrontendResult ra = a.process(f);
+  f.gyro_delta = gtsam::Rot3::Yaw(0.3);  // wrong on purpose: not used in the open
+  const FrontendResult rb = b.process(f);
+  EXPECT_FALSE(rb.confined);
+  EXPECT_TRUE(ra.T_odom_base.equals(rb.T_odom_base, 1e-12));
+}

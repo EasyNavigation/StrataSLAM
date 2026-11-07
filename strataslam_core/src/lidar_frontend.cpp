@@ -114,6 +114,33 @@ small_gicp::RegistrationResult align_gicp(const Cloud& target, const Cloud& sour
   return registration.align(target, source, target_tree, init);
 }
 
+/// The same with the rotation held at the initial guess's: the translation only.
+small_gicp::RegistrationResult align_gicp_translation(const Cloud& target, const Cloud& source,
+                                                      const Tree& target_tree,
+                                                      const Eigen::Isometry3d& init,
+                                                      double max_correspondence, int max_iterations,
+                                                      int threads) {
+  small_gicp::Registration<small_gicp::GICPFactor, ChunkedReduction, small_gicp::RestrictDoFFactor>
+      registration;
+  registration.general_factor.set_rotation_mask(Eigen::Array3d::Zero());
+  registration.reduction.num_threads = std::max(1, threads);
+  registration.rejector.max_dist_sq = max_correspondence * max_correspondence;
+  registration.criteria.translation_eps = 1e-4;
+  registration.criteria.rotation_eps = 0.01 * M_PI / 180.0;
+  registration.optimizer.max_iterations = max_iterations;
+  return registration.align(target, source, target_tree, init);
+}
+
+/// Whether 95 % of the points lie within `range` of the sensor.
+bool confined_scan(const std::vector<Eigen::Vector3f>& pts, double range) {
+  if (range <= 0 || pts.size() < 100) return false;
+  std::vector<float> r(pts.size());
+  for (size_t i = 0; i < pts.size(); ++i) r[i] = pts[i].norm();
+  const auto k = r.begin() + static_cast<std::ptrdiff_t>(0.95 * static_cast<double>(r.size()));
+  std::nth_element(r.begin(), k, r.end());
+  return *k < range;
+}
+
 std::vector<Eigen::Vector4d> to_homogeneous(const std::vector<Eigen::Vector3f>& pts) {
   std::vector<Eigen::Vector4d> out(pts.size());
   for (size_t i = 0; i < pts.size(); ++i)
@@ -166,6 +193,8 @@ struct LidarFrontend::Impl {
   std::vector<Eigen::Vector3f> last_kf_cloud;
   int lost_count = 0;
   bool force_kf = false;
+  bool confined = false;        // the last scan saw a confined space (kept across restarts)
+  Timestamp left_confined = 0;  // when the scans last came out of a confined space
 
   void rebuild_map(const gtsam::Pose3& T_odom_lidar_now) {
     std::vector<Eigen::Vector3f> pts;
@@ -294,7 +323,15 @@ FrontendResult LidarFrontend::process(const SensorFrame& frame) {
       pts.push_back(scan.points[i]);
     }
   }
-  const auto cloud = voxel_downsample(pts, s.cfg.scan_voxel);
+  // A confined space (with hysteresis: in once the scan is within the range, out once it sees twice
+  // as far, since the door of a cabin, half open, still shows mostly the cabin and the registration
+  // turns wrong there) is sampled twice as finely: a cabin of 1.5 m is about a hundred cells of
+  // 0.4 m, and below that the scan is not tracked at all.
+  res.confined = confined_scan(pts, s.confined ? 2.0 * s.cfg.confined_range : s.cfg.confined_range);
+  if (s.confined && !res.confined) s.left_confined = frame.stamp;
+  s.confined = res.confined;
+  const bool gyro_led = res.confined && frame.gyro_delta;
+  const auto cloud = voxel_downsample(pts, gyro_led ? 0.5 * s.cfg.scan_voxel : s.cfg.scan_voxel);
   if (cloud.size() < 100) {
     s.last_quality.state = TrackingState::Lost;
     res.quality = s.last_quality;
@@ -303,6 +340,9 @@ FrontendResult LidarFrontend::process(const SensorFrame& frame) {
 
   const gtsam::Pose3 T_lidar_base = s.T_base_lidar.inverse();
   if (!s.initialized) {
+    // Started some scans after the restart (they were not tracked): turned by the gyroscope since.
+    if (gyro_led)
+      s.T_odom_base = s.T_odom_base * gtsam::Pose3(*frame.gyro_delta, gtsam::Point3(0, 0, 0));
     const gtsam::Pose3 T_ol = s.T_odom_base * s.T_base_lidar;
     Impl::Keyframe kf{T_ol, voxel_downsample(pts, s.cfg.keyframe_cloud_voxel)};
     s.keyframes.push_back(kf);
@@ -319,14 +359,39 @@ FrontendResult LidarFrontend::process(const SensorFrame& frame) {
     return res;
   }
 
-  // Predict with the constant-velocity model, then register against the local map.
-  const gtsam::Pose3 pred_base = s.T_odom_base * s.velocity;
-  const gtsam::Pose3 pred_lidar = pred_base * s.T_base_lidar;
+  // Predict with the constant-velocity model, then register against the local map. In a confined
+  // space the rotation is the gyroscope's and only the translation is registered.
+  const auto gyro_pred = [&] {
+    return s.T_odom_base * gtsam::Pose3(*frame.gyro_delta, s.velocity.translation()) *
+           s.T_base_lidar;
+  };
+  const gtsam::Pose3 pred_lidar =
+      gyro_led ? gyro_pred() : s.T_odom_base * s.velocity * s.T_base_lidar;
   const auto h = to_homogeneous(cloud);
   small_gicp::PointCloud raw(h);
   auto sp = preprocess(raw, s.cfg.scan_voxel * 0.5, s.cfg.num_neighbors, s.cfg.threads);
-  const auto r = align_gicp(*s.map_cloud, *sp.first, *s.map_tree, to_iso(pred_lidar),
-                            s.cfg.max_correspondence, s.cfg.max_iterations, s.cfg.threads);
+  auto r = gyro_led ? align_gicp_translation(*s.map_cloud, *sp.first, *s.map_tree,
+                                             to_iso(pred_lidar), s.cfg.max_correspondence,
+                                             s.cfg.max_iterations, s.cfg.threads)
+                    : align_gicp(*s.map_cloud, *sp.first, *s.map_tree, to_iso(pred_lidar),
+                                 s.cfg.max_correspondence, s.cfg.max_iterations, s.cfg.threads);
+  // Just out of a confined space the local map is still mostly the cabin, and a registration can
+  // turn by tens of degrees in one scan at the door. Turned away from the gyroscope by far more
+  // than the registration's noise (10 deg and half the turn), the scan takes the gyroscope's
+  // rotation.
+  bool rotation_from_gyro = gyro_led;
+  constexpr Timestamp kAfterConfined = 10'000'000'000;  // ns
+  if (!gyro_led && frame.gyro_delta && s.left_confined > 0 &&
+      frame.stamp - s.left_confined < kAfterConfined) {
+    const gtsam::Rot3 turn = s.T_odom_base.rotation().between(
+        (from_iso(r.T_target_source) * s.T_base_lidar.inverse()).rotation());
+    const double off = gtsam::Rot3::Logmap(frame.gyro_delta->between(turn)).norm();
+    if (off > 10.0 * M_PI / 180.0 + 0.5 * gtsam::Rot3::Logmap(*frame.gyro_delta).norm()) {
+      r = align_gicp_translation(*s.map_cloud, *sp.first, *s.map_tree, to_iso(gyro_pred()),
+                                 s.cfg.max_correspondence, s.cfg.max_iterations, s.cfg.threads);
+      rotation_from_gyro = true;
+    }
+  }
 
   TrackingQuality q;
   const double n_src = static_cast<double>(sp.first->size());
@@ -347,6 +412,8 @@ FrontendResult LidarFrontend::process(const SensorFrame& frame) {
   }
   s.lost_count = 0;
   gtsam::Pose3 T_ol = from_iso(r.T_target_source);
+  if (rotation_from_gyro)  // the rotation was held: keep it a rotation to the last digit
+    T_ol = gtsam::Pose3(gtsam::Rot3::ClosestTo(T_ol.rotation().matrix()), T_ol.translation());
   if (q.state == TrackingState::Degraded && s.cfg.pin_degenerate) {
     // Along weak directions registration is noise: keep the prediction in those directions.
     const Eigen::Matrix3d Ht = Hn.block<3, 3>(3, 3);

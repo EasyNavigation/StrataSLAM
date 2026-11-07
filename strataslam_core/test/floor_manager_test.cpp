@@ -23,11 +23,13 @@ struct Rig {
 
   explicit Rig(FloorManagerConfig c = {}) : mgr(c) {}
 
+  /// `confined`: the odometry tracks but cannot see the vertical (FloorSample::vertical_observed).
   void step(const Vector3d& p, std::optional<double> baro_h = std::nullopt,
-            std::optional<double> az = std::nullopt, bool ok = true) {
+            std::optional<double> az = std::nullopt, bool ok = true, bool confined = false) {
     FloorSample s;
     s.stamp = t;
     s.tracking_ok = ok;
+    s.vertical_observed = !confined;
     s.position = p;
     s.baro_height = baro_h;
     s.imu_vertical_accel = az;
@@ -888,4 +890,44 @@ TEST(FloorManager, AJoltThatWasNoRideLeavesTheNextRideToItsOwnStart) {
       e = &ev;
   ASSERT_NE(e, nullptr);
   EXPECT_NEAR(e->delta_z, 11.25, 0.4);
+}
+
+// In a cabin, a LiDAR registering the translation only can see the shaft move through the door's
+// gaps and "descend" while the cabin rises; that climb of the odometry kept the IMU from taking the
+// ride, and a short ramp was mapped instead. Confined, the odometry's height is held: the IMU
+// measures the ride.
+TEST(FloorManager, ARideSeenFromAConfinedCabinIsTheImusWhateverTheOdometryInventsVertically) {
+  FloorManagerConfig c;
+  c.floor_height_prior.reset();
+  Rig r(c);
+  for (int i = 0; i < 30; ++i) r.step(r.pos, std::nullopt, 0.0);
+  const Vector3d cabin = r.pos;
+  for (int i = 0; i < 20; ++i) r.step(cabin, std::nullopt, 0.0, true, true);  // in the cabin
+  // 15 m up (0.6 m/s^2 for 2.5 s, 7.5 s at 1.5 m/s, 2.5 s braking); the odometry sinks 1.5 m.
+  const auto steps = [](double sec) { return static_cast<int>(std::lround(sec / kDt)); };
+  const int n = steps(2.5) * 2 + steps(7.5);
+  for (int i = 0; i < n; ++i) {
+    const double az = i < steps(2.5) ? 0.6 : i < steps(2.5) + steps(7.5) ? 0.0 : -0.6;
+    r.step(cabin - Vector3d(0, 0, 1.5 * (i + 1) / n), std::nullopt, az, true, true);
+  }
+  for (int i = 0; i < 30; ++i) r.step(r.pos, std::nullopt, 0.0, true, true);  // doors open
+  r.walk(5.0);                                                                // out of the cabin
+  const FloorEvent* e = r.ended();
+  ASSERT_NE(e, nullptr);
+  EXPECT_EQ(e->type, TransitionType::Elevator);
+  EXPECT_NEAR(e->delta_z, 15.0, 0.5);
+}
+
+// Out of a confined space, the odometry's height goes on from where it was held: what its z did in
+// the cabin (here a jump of 0.8 m) opens no transition.
+TEST(FloorManager, OutOfAConfinedSpaceTheHeightGoesOnFromWhereItWasHeld) {
+  FloorManagerConfig c;
+  c.floor_height_prior.reset();
+  Rig r(c);
+  for (int i = 0; i < 30; ++i) r.step(r.pos, std::nullopt, 0.0);
+  for (int i = 0; i < 30; ++i)
+    r.step(r.pos + Vector3d(0, 0, i < 10 ? 0.08 : 0.0), std::nullopt, 0.0, true, true);
+  r.walk(6.0);
+  EXPECT_EQ(r.count(FloorEvent::Kind::TransitionStarted), 0);
+  EXPECT_EQ(r.mgr.floor(), 0);
 }

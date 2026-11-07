@@ -368,7 +368,16 @@ FloorManager::Motion FloorManager::update_odometry(const FloorSample& s) {
   } else {
     lost_since_ = 0;
     last_tracked_ = s.stamp;
-    altitude_ = s.position.z() + altitude_offset_;
+    // In a confined space the odometry tracks the cabin, which climbs with the body: its altitude
+    // is held there (no climb, no departure by height; the IMU measures the ride), and out of it
+    // the odometry's z takes over from the held altitude, whatever it did in the cabin.
+    if (!s.vertical_observed) {
+      vertical_hidden_ = true;
+    } else {
+      if (vertical_hidden_) altitude_offset_ = altitude_ - s.position.z();
+      vertical_hidden_ = false;
+      altitude_ = s.position.z() + altitude_offset_;
+    }
     push(alt_hist_, s.stamp, altitude_, 1.0);
     m.vz = rate(alt_hist_);
     push(odom_vz_win_, s.stamp, m.vz, 6.0);

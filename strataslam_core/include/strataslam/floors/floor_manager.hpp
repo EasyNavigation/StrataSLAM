@@ -71,6 +71,9 @@ struct FloorSample {
   std::optional<Eigen::Vector3d> up_axis;
   std::optional<double> baro_height;         ///< m, filtered, relative to boot
   std::optional<double> imu_vertical_accel;  ///< m/s^2, gravity-free, world frame
+  /// false: the odometry tracks but cannot see the body's vertical motion (a confined space, an
+  /// elevator cabin: it tracks the cabin, which climbs with the body). Its altitude is then held.
+  bool vertical_observed = true;
 };
 
 struct FloorEvent {
@@ -195,6 +198,7 @@ class FloorManager {
   double altitude_offset_ = 0;
   Timestamp last_tracked_ = 0;  ///< stamp of the last sample with valid odometry
   bool started_ = false;
+  bool vertical_hidden_ = false;  // the last tracked samples did not observe the vertical
   // OnFloor reference
   double ref_alt_ = 0;
   std::optional<double> baro_ref_;

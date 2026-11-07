@@ -34,6 +34,12 @@ struct LidarFrontendConfig {
   /// this of it, beyond it brought back to the bound (as the visual frontend does). A drifting
   /// attitude turns forward motion into a climb: on a ramp it is the error of the floor's height.
   double max_tilt_error_deg = 1.0;
+  /// m. A scan whose points lie within this (95th percentile of their range) sees a confined
+  /// space, an elevator cabin: a box of 1-2 m, often reflective, whose turns the registration
+  /// gets wrong by tens of degrees. There, with the gyroscope (`SensorFrame::gyro_delta`), the
+  /// rotation is the gyroscope's and the registration solves the translation only. Elsewhere the
+  /// gyroscope is not used. Out of it once the scan sees twice as far. 0: never.
+  double confined_range = 3.0;
 };
 
 /// Scan-to-local-map LiDAR odometry with GICP (small_gicp).

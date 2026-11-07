@@ -288,21 +288,19 @@ is open work. The height fix of ADR-0026 is what changed those results.
 
 ## ADR-0028 · A plateau is a level, whatever its height
 
-A change of height was a level only if, with a `floor_height_prior`, it was within 0.4 priors of a whole number of floors
-(or, without one, at least `min_vertical_change`). On `prueba_03` the ramps climb 4.2 m and then 1.5 m: with the default
-prior of 3 m the first is valid by 0.01 m and the second is not, and a run that measures 4.6 m instead of 4.2 m merges
-both into one transition that ends as terrain (one floor). A transition now also closes as a level when the robot
-stays calm for `plateau_s` (20 s) while travelling `plateau_travel_m` (10 m) after a change of at least
-`plateau_min_change` (1 m): a stair landing lasts seconds, a floor is lived on. Levels closer than half of that change
-are one. Tests: `ALongPlateauAfterAClimbThatIsNotAWholeFloorIsALevel`, `AShortLandingIsNotAPlateau`,
+A change of height was a level only if, with a `floor_height_prior`, it was within 0.4 priors of a whole number of
+floors (or, without one, at least `min_vertical_change`). Buildings have levels that are not whole floors (split
+levels, a car park's mezzanine): a climb of 4.2 m followed by one of 1.5 m with a prior of 3 m kept the first by 0.01
+m and dropped the second, and a run that measured 4.6 m merged both into one transition that ended as terrain. A
+transition now also closes as a level when the robot stays calm for `plateau_s` (20 s) while travelling
+`plateau_travel_m` (10 m) after a change of at least `plateau_min_change` (1 m): a stair landing lasts seconds, a
+floor is lived on. Levels closer than half of that change are one. Tests:
+`ALongPlateauAfterAClimbThatIsNotAWholeFloorIsALevel`, `AShortLandingIsNotAPlateau`,
 `ALevelNearAnExistingOneIsNotANewLevel`, and the forced-close test now feeds terrain that never calms.
 
-Measured on the Summit bags, one run at a time at 2x playback (the first attempts ran in parallel and the CPU load
-distorted them): with the default prior `prueba_00` gave one transition of 2.7 m (two floors) and `prueba_03` three
-floors (-1.8, -2.8, +1.8 m); with `floor_height_prior: null` `prueba_00` gave 3 floors (+2.5 and +4.3 m) and `prueba_03`
-four (-1.1, -3.2, +3.1 m). Earlier runs of the same bags split the same climbs differently (for example `prueba_03`
--3.95 and +1.54 m): the result varies from run to run, so no single run says which configuration is right, and the
-Gazebo garage, which has a ground truth, is unchanged (4 ramps, 0.05 and 0.15 m from the truth). The thresholds are heuristics for a case with no ground truth: open work.
+On real bags without ground truth (the Summit's) the split of the same climbs varied from run to run, so no single run
+says which configuration is right; the Gazebo garage, which has one, is unchanged (0.05 and 0.15 m from the truth).
+The thresholds are heuristics: open work.
 
 ## ADR-0029 · Offline bag processing, and the floor reference does not follow a sustained climb
 
@@ -809,105 +807,128 @@ odometry when the profile enables it (TF, or `nav_msgs/Odometry` on its topic).
 ## ADR-0057 · LiDAR loops: the residual is judged against the scan's own
 
 `loop_max_mean_error` (0.12) is the GICP residual per inlier, whose scale depends on the sensor, the voxel and the
-scene. Outdoors it rejected nearly every right loop (ADR-0022): on KITTI 06, 112 verifications of revisits had
-fitness 0.99 and residuals from 0.10 to 0.25, and only the 17 under 0.12 were accepted; KITTI 07 never closed its
-loop (residuals 0.34 to 0.44 with fitness 0.995). A right registration of the same scan sets the scale: the current
-keyframe against the submap of its predecessors (as many keyframes as the loop submap), from their graph poses.
+scene. Outdoors it rejected nearly every right loop (ADR-0022): on KITTI right revisits registered with fitness 0.99
+and residuals of 0.10-0.44. A right registration of the same scan sets the scale: the current keyframe against the
+submap of its predecessors (as many keyframes as the loop submap), from their graph poses.
 
 - A loop is accepted when the residual is under `loop_max_mean_error`, as before, or at most `loop_max_error_ratio`
   (4) times that reference. The reference is computed only for a candidate that passes fitness and degeneracy, once
   per keyframe.
-- Measured with `STRATASLAM_DEBUG_LOOPS` on the four KITTI bags with ground truth: the right loops have a ratio from
-  0.4 to 2.9 (06, 07, 09), and up to 8.6 on 05, where those over 4 are still rejected; every wrong candidate
-  (repeated straight streets) had a ratio of 6.8 or more and was also degenerate.
-- Results: 07 ATE 0.81 to 0.41 m (max 1.94 to 0.77 m); 05 1.55 to 1.51 m with 32 loops instead of 20; 06 and 09
-  unchanged. The Summit bags of ADR-0022 (`2024_03_21_*_wp`) accept 10 loops each (0 and 3 before) and their fit to the
-  GPS (no RTK: 6 to 7 m median) is unchanged, with no displaced part like the 23 m of a fixed bound of 0.4.
-- Indoors the fixed bound was short too: `prueba_00` 6 to 25 loops, `prueba_03` 1 to 17, the Tiago corridor
-  (`tiago_lidar_camera`) 5 to 17, with the same floors (3, 4, 1). Every new loop agrees within 0.2 m with the distance
-  the map without it already gave its two keyframes, so none bends the map. The simulated scenarios S01-S14 (seeds
-  1001-1020) give the same results, except millimetres in the S10 modality comparison.
-- No indoor/outdoor setting in the profile: the residual depends on the sensor and the scene, not on the label, and
-  the reference measures it on each scan; the same ratio held on KITTI, the Summit (indoors and outdoors) and the Tiago.
-- Limits: the Summit GPS cannot label single loops; a place that repeats with the same geometry (a car park of
-  identical bays) can still give a low ratio, so fitness and the degeneracy check stay in front.
+- No indoor/outdoor setting in the profile: the residual depends on the sensor and the scene, not on a label, and the
+  reference measures it on each scan.
+- **Evidence.** On the KITTI bags with ground truth the right loops have a ratio of 0.4-2.9 (a few up to 8.6, still
+  rejected) and every wrong candidate (repeated straight streets) 6.8 or more, and degenerate too. ATE improves where
+  loops were missing (KITTI 07: 0.81 -> 0.41 m) and is unchanged elsewhere. Indoors (Summit, Tiago) 3-17 times more
+  loops are accepted, with the same floors, each within 0.2 m of the distance the map already gave its keyframes; the
+  simulated scenarios are unchanged.
+- **Limits.** Without ground truth single loops cannot be labelled; a place that repeats with the same geometry (a car
+  park of identical bays) can still give a low ratio, so fitness and the degeneracy check stay in front.
 
 ## ADR-0058 · The IMU's heading on a ground robot comes from its accelerations; its gravity bounds the LiDAR
 
-In `prueba_03` (Summit XL, LiDAR only) the map had a fourth floor 2.18 m under floor 0, over the same ground: the
-LiDAR odometry read a climb of +2.39 m where the robot drove on the flat (the wheel speed times the IMU's pitch
-gives no climb there, and floors 2 and 3 of that map were already known to be one level). Its pitch drifts, and on a
-long drive a degree of pitch is a climb of a metre per 60 m. The IMU's gravity had no effect on it: only the visual
-frontend used it.
+A LiDAR odometry's pitch drifts, and on a long drive a degree of pitch is a climb of a metre per 60 m: on a ground
+robot that is a false floor over the same ground. The IMU's gravity can bound it, but only the visual frontend used
+it. On a ground robot there is a catch: its turns are all about the vertical, so learning the IMU's mounting from them
+leaves its heading about the vertical free, and a TF with the IMU turned (a driver reading x and y backwards, for
+example) reverses the sign of every slope the IMU reports.
 
 - The LiDAR frontend keeps the base's roll and pitch within `max_tilt_error_deg` (1 deg) of the IMU's gravity
   (`GravityTracker`), as the visual frontend does with its own bound (2 deg); within it they are the registration's.
-  On `prueba_03` 2 deg left a spurious +1.01 m step; 1 and 0.5 deg remove it (ramps -1.18 and -3.31 m, against about
-  -1.3 and -3.0 m from the wheel speed times the IMU's pitch).
-- The Summit's TF has `imu_link` on the base's axes, but its IMU reads x and y backwards (its x against the wheels'
-  acceleration: slope -0.90; its y against v * w: -0.96). With that TF every slope reads with the opposite sign, and
-  bounding the LiDAR by it made the first ramp a climb. Learning the mounting from the turns (Wahba on the gyroscope)
-  cannot see it: a ground robot only turns about the vertical, which leaves the IMU's heading about it free.
-- `ImuMount` now also pairs, over the same 1 s windows, the base's acceleration by the odometry (dv/dt + w x v in the
-  base frame, the velocity at the window's edges a mean of the last 5 frames: differentiated per frame, the
-  registration's jitter was ten times the signal) with the accelerometer's mean specific force minus gravity. The turn
-  about the base's z that best maps one onto the other is the heading. It is decided once the horizontal acceleration
-  adds up to 4 (m/s^2)^2 and the accelerometer explains half of it: on `prueba_03` the estimate is within about 10 deg
-  of its final value (174 deg) from there, 20 deg at 2. An error e of the heading tilts the slope only by
+- `ImuMount` also pairs, over the same 1 s windows, the base's acceleration by the odometry (dv/dt + w x v in the base
+  frame, the velocity at the window's edges a mean of the last 5 frames: differentiated per frame, the registration's
+  jitter is ten times the signal) with the accelerometer's mean specific force minus gravity. The turn about the
+  base's z that best maps one onto the other is the IMU's heading. It is decided once the horizontal acceleration adds
+  up to 4 (m/s^2)^2 and the accelerometer explains half of it. An error e of the heading tilts a slope only by
   tilt * sin(e).
 - Until the heading is seen, the IMU of a ground robot does not bound the LiDAR (its tilts have no known direction);
   the visual frontend keeps using it as before. The mounting check goes on until then (`imu_learned`), and a mounting
   learned from the turns alone is applied at once, as before, then refined.
-- The Summit's profile enables the IMU (`/imu/data`, `floor_changes: false`; the robot profiles are kept out of the
-  repository since). `prueba_03`: 3 floors instead of 4,
-  floor 2 at -4.49 m (about -4.3 m by the wheels and the IMU), no floor over floor 0. `prueba_00`: the same 3 floors,
-  ramps +2.81 and +2.07 m (+2.95 and +1.99 without the IMU; about +3.0 and +1.65 by the wheels and the IMU).
-- Limits: the first ramp of `prueba_03` comes before the heading is learned (762 deg of turning) and is still the
-  LiDAR's alone. A robot that only turns in place never shows its heading, and its IMU then stays out of the LiDAR.
+- **Evidence.** On the Summit XL bags (an IMU whose TF has it turned half around) the false floor of `prueba_03`
+  disappears (3 floors instead of 4) and the ramps of both bags come within 0.1-0.4 m of the climb given by the wheel
+  speed times the IMU's pitch; once decided, the heading stays within about 10 deg of its final value. A 2 deg bound
+  left a spurious step; 1 and 0.5 deg do not.
+- **Limits.** A ramp driven before the heading is learned is the LiDAR's alone. A robot that only turns in place never
+  shows its heading, and its IMU then stays out of the LiDAR.
 
 ## ADR-0059 · Elevator rides the IMU measures while the odometry is lost, or still in the cabin
 
-Elevator-VIGS (Hugging Face `Rui5125/Elevator-VIGS`, CC BY-NC 4.0: a hand-held LiDAR and 400 Hz IMU riding 1 to 15
-floors, 16 real sequences with laser-measured rises or round trips and 16 simulated ones with exact ground truth; not
-redistributed) lost most rides: the LiDAR odometry, lost in the cabin or seeing it still, had often opened a transition
-of its own before the ride (its drift while walking, a jump as the doors closed), and the IMU never took it over.
-Offline (`threads: 1`) against `aad8e44`, every real sequence comes closer to its truth: one-way rises within 0.06-0.9
-m (Residential2 +50.31 m against +49.98, before +8.11; Office2 +16.08 against +16.78, before nothing), round trips
-closing within 0.07-2.6 m (before 3.2-13.9; Office4 up 14.77 m by elevator, down the stairs to floor 0 and a loop
-closed with its start). The simulated rides are measured (per-floor ATE 0.07-0.39 m, before up to 23 m: the arrival
-floor was mapped into the one left).
+An elevator ride is the IMU's to measure when the odometry does not see it. The odometry, though, often opens a
+transition of its own just before the ride (its drift while walking, a jump as the doors close) and is then lost in
+the cabin, or sees the cabin still. The IMU never took such a transition over, and the ride was lost, or closed as a
+short ramp; the floor reached was mapped into the one left.
 
 - **Takeover.** An odometry-opened transition is taken by the IMU when its 1 s mean of vertical acceleration passes
   the departure threshold for `imu_depart_s`, it has gained a cabin's speed (0.3 m/s) and the odometry did not follow:
   lost all along, or tracking at less than half that speed (a cabin is still to it), with the IMU smooth as a cabin
-  is (`kCabinSpread`: under 0.45 m/s^2 of spread over 1 s; 0.1-0.4 in cabins, 0.5-4.4 on stairs and steps, which the
-  odometry tracks half-way and whose 1 s means look like a push). What the odometry's transition held until the onset
-  ends on the floor it left (`ride_follows`), with any session lost before it; the ride counts from its onset.
-- **The ride.** Push and brake are the integrals of the 1 s mean beyond 0.2 m/s^2 (a cruising cabin vibrates by
-  +-0.16), counted from the onset, from the mean of the 5 s before it (the slow bias estimate drifts while walking:
-  0.13 m/s^2 on Mall-M). It ends braked (60 % of the push) and calm for `ride_stop_s`, or when the odometry walks out
-  once the cabin has slowed to half its top speed and its last pulse is over (not out of a cabin still moving or
-  braking: Office3, Campus6). A ride that never comes back to rest was one pulse: a jolt, or the brake of a ride whose
-  push stayed under the threshold (Station3, Residential3: 0.23 m/s^2). It is dropped once the IMU jolts as steps do
-  for 3 s while the odometry walks (a cabin does not, even when the odometry drifts 10 m in it: Office2), or after
-  30 m; first, the push is looked for in 60 s of history (an opposite pulse of most of its speed before a cabin's
-  calm) and the ride measured from it. A ride whose height is no floor's goes back to the odometry too. The level it
-  reaches is known to 5 % of the ride (per-level sigma), so a stair back down closes on the level it left.
+  is (`kCabinSpread`: under 0.45 m/s^2 of spread over 1 s; cabins measure 0.1-0.4, stairs and steps, which the
+  odometry tracks half-way and whose 1 s means look like a push, 0.5-4.4). What the odometry's transition held until
+  the onset ends on the floor it left (`ride_follows`), with any session lost before it; the ride counts from its onset.
+- **The ride.** Push and brake are the integrals of the 1 s mean beyond 0.2 m/s^2 (a cruising cabin vibrates by about
+  +-0.16), counted from the onset, from the mean of the 5 s before it (the slow bias estimate drifts while walking).
+  It ends braked (60 % of the push) and calm for `ride_stop_s`, or when the odometry walks out once the cabin has
+  slowed to half its top speed and its last pulse is over (not out of a cabin still moving or braking). A ride that
+  never comes back to rest was one pulse: a jolt, or the brake of a ride whose push stayed under the threshold. It is
+  dropped once the IMU jolts as steps do for 3 s while the odometry walks (a cabin does not, even when the odometry
+  drifts in it), or after 30 m; first, the push is looked for in 60 s of history (an opposite pulse of most of its
+  speed before a cabin's calm) and the ride measured from it. A ride whose height is no floor's goes back to the
+  odometry. The level it reaches is known to 5 % of the ride (per-level sigma), so a stair back down closes on the
+  level it left.
 - **The map.** The frontend restarted after the ride is raised by its height, which the manager is told is no motion
   (`odometry_rebased`): the odometry's z is the height again. Left at the height before the ride, a floor reached
-  again by the stairs was linked to its keyframes a ride's height off and every loop with them was rejected (Office4:
-  15 m; scenario S15, three floors up by elevator and down the stairs: ATE 3.45 m and no loop, now 0.05 m and 22). The
-  keyframes taken in the cabin of such a ride are dropped, as when the odometry is lost there: they have the height
-  it left. A restart is turned by what the gyroscope measured while the odometry was blind (a person turning round).
-- **The IMU itself.** A mounting learned from the motion turns the gravity tracker's state instead of resetting it (a
-  moving body waited 31 s for gravity: Factory-M's 20 m ride went unmeasured); a heading under 20 deg from the TF keeps
-  the TF (Elevator-VIGS learned 11-22 deg on an IMU that is the base frame: its gyroscope matches the ground truth's
-  rates within 0.1 deg).
-- **Limits.** On the simulated walks without a ride the gravity tracker errs by 2-5 deg (the simulator's IMU; 0.5-0.9
-  deg on the real one) and the LiDAR's 1 deg bound (ADR-0058) follows it: Office2-Walk keeps a false floor of -2.49 m
-  (-2.02 m before, when a wrong mounting reset the tracker and left the LiDAR unbounded for 31 s), Factory-Walk's ATE
-  is 0.50 m (0.29). Loosening the bound or the tracker's gate fixed those walks and lost real rides. On the Summit
-  (`floor_changes: false`) only the tracker turn applies: `prueba_03` ramps -1.18 and -3.02 m (-3.31 before; about
-  -3.0 by the wheels and the IMU's pitch), `prueba_00` +2.49 and +1.71 (+2.81 and +2.07; about +3.0 and +1.65). KITTI
-  and the OAK bags are unchanged; S05, S06 and S11 are closer (ATE 0.13 -> 0.04 m, 0.11 -> 0.02 m; heights 0.065 ->
-  0.003 m, 0.230 -> 0.212 m).
+  again by the stairs was linked to its keyframes a ride's height off and every loop with them was rejected (scenario
+  S15, three floors up by elevator and down the stairs: ATE 3.45 m and no loop, now 0.05 m and 22). The keyframes
+  taken in the cabin of such a ride are dropped, as when the odometry is lost there: they have the height it left. A
+  restart is turned by what the gyroscope measured while the odometry was blind.
+- **The IMU itself.** A mounting learned from the motion turns the gravity tracker's state instead of resetting it
+  (reset, a moving body waited tens of seconds for gravity and missed a ride); a heading under 20 deg from the TF keeps
+  the TF (the learned heading is that noisy on an IMU that is the base frame).
+- **Evidence** (offline, Elevator-VIGS: 16 real sequences with measured rises or round trips and 16 simulated ones
+  with exact ground truth, CC BY-NC 4.0, not redistributed; against `aad8e44`). Every real sequence comes closer to
+  its truth: one-way rises within 0.06-0.9 m, round trips closing within 0.07-2.6 m (3.2-13.9 m before). The simulated
+  rides are measured (per-floor ATE 0.07-0.39 m, up to 23 m before). KITTI and the OAK bags are unchanged; of the four
+  Summit ramps, which move by up to 0.4 m with the tracker turn, two come closer to the wheels-and-IMU estimate, one
+  moves away and one is unchanged.
+- **Limits.** On the simulator's walks without a ride its IMU's gravity errs by 2-5 deg (0.5-0.9 on real IMUs) and the
+  LiDAR's 1 deg bound (ADR-0058) follows it: a simulated walk keeps a false floor of about 2.5 m. Loosening the bound
+  or the tracker's gate fixed those walks and lost real rides.
+
+## ADR-0060 · In a confined space the rotation is the gyroscope's
+
+In a space a metre or two across, such as an elevator cabin, a LiDAR registration has little geometry, often reflective
+walls and moving doors: as the person turns round in it, or walks in and out, its rotation can go wrong by tens of
+degrees within a few scans. After an elevator ride the floor reached was then mapped turned against the one left, live
+and in the saved map, with no loop closure to correct it. The gyroscope measures those turns to a fraction of a degree
+over a minute. Registering the floors on each other (`floor_stacking`, ADR-0027) does not help: the area explored
+around a lift lobby is too small for an unambiguous match.
+
+- **Confined.** A scan whose points lie within `confined_range` (3 m, 95th percentile of their range) sees a confined
+  space; it is out of it once it sees twice as far (a half-open door still shows mostly the cabin). 3 m separates a
+  cabin (its scans mostly under 2.5 m) from open spaces: corridors, streets and car parks never come under 5.9 m on
+  the bags checked, lift lobbies down to about 4 m; a rig laid on the floor can (see Limits).
+- **The rotation.** There, with a trusted IMU, the scan's rotation is the gyroscope's turn since the last pose, with
+  its heading drift against the odometry over the minute before taken out, projected on the rotations (nothing else
+  re-estimates it, and a product of matrices drifts off them); the registration solves the translation only
+  (small_gicp's `RestrictDoFFactor`), on a scan sampled twice as finely (a cabin has too few cells of 0.4 m to be
+  tracked). A frontend started some scans after its restart is turned by the gyroscope since. For 10 s out of a
+  confined space, a registration turned away from the gyroscope by more than 10 deg and half the turn takes the
+  gyroscope's rotation: the local map is still the cabin. Elsewhere the gyroscope is not used, and the result is the
+  same bit for bit.
+- **The gyroscope's record.** Its attitude is kept every 20 ms; a turn asked for past the last record goes on to the
+  last sample's attitude. Without it up to 20 ms of turn was lost at every scan, and in a fast turn those add up.
+- **The floors.** A confined scan tells the floor manager that its odometry does not observe the vertical
+  (`FloorSample::vertical_observed`): in a moving cabin it tracks the cabin, or sees the shaft move through the gaps
+  of the door. The altitude is held there and taken up again from where it was held. Lost during a ride once its scans
+  are no longer confined (out of the cabin), the frontend restarts turned by the gyroscope instead of waiting for the
+  ride's end: its local map is the cabin, it would stay lost, and the ride would not see the walk out.
+- **Evidence** (offline, Elevator-VIGS, against `9fcde3d`). On the real sequences whose arrival floor was turned by
+  11-162 deg against the one left, it is now within 0-13 deg (but one, whose ground truth itself drifts in the cabin),
+  and the per-floor ATE is lower where it was worst (up to 17.8 -> 1.0 m). Floor changes: 3 sequences closer, 28 the
+  same, 1 worse (see Limits). Bags without a confined space (KITTI, the Summit and Tiago bags, the OAK bags, the
+  simulated walks) give identical maps; the scenarios with an elevator (S11, S15) change by less than a millimetre.
+- **Limits.** A confined scan does not always mean an unobserved vertical: a rig laid on the floor gives confined
+  scans while its lift is visible, and the IMU can take that lift for a short ride (one sequence, a false floor of
+  1.5 m). Telling them apart by the agreement of the odometry's vertical motion with the IMU's fails on glass lifts,
+  whose scans see out. The gyroscope's residual heading drift accumulates on long rides (2-3 deg a minute in
+  simulation); estimating it more finely (a line over the window, the bias at rest) did not hold on real data. The
+  3 m range is checked on a few platforms only; the exit guard (10 deg, 10 s) and the restart out of the cabin rest on
+  few cases and are the least validated parameters.

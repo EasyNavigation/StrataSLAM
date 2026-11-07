@@ -32,6 +32,9 @@ struct SensorFrame {
       nullptr;  ///< the robot's own odometry (wheels) at this stamp: a motion prior
   std::optional<Eigen::Vector3d>
       up_base;  ///< up in the base frame from the IMU's gravity: the pose's roll and pitch
+  /// What the base turned since the frontend's last pose, by the gyroscope (in the base frame at
+  /// that pose, its heading drift taken out), when the IMU is trusted and covers both stamps.
+  std::optional<gtsam::Rot3> gyro_delta;
 };
 
 struct FrontendResult {
@@ -39,6 +42,8 @@ struct FrontendResult {
   gtsam::Pose3 T_odom_base;  ///< base pose in the (continuous) odometry frame
   bool is_keyframe = false;
   TrackingQuality quality;
+  /// The scan saw a confined space (an elevator cabin): its rotation is the gyroscope's.
+  bool confined = false;
   /// Pose increment since the previous result, expressed in the base frame.
   gtsam::Pose3 delta;
 };

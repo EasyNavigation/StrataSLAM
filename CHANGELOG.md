@@ -114,6 +114,11 @@
 - `docs/user/install.md` rewritten and tested; `docs/data_format.md` documents `fused/`, the optional payload folders and the integrity checks.
 
 ### Fixed
+- After an elevator ride the floor reached was mapped turned against the one left (Elevator-VIGS: 29-162 deg on the
+  real sequences that had it): the LiDAR odometry turns wrong in a cabin. In a confined space (95 % of the scan within
+  3 m) the rotation is now the gyroscope's and the registration solves the translation only; the floor manager holds
+  the odometry's height there (ADR-0060). Those floors are within 0-13 deg; maps without a cabin are identical. The
+  gyroscope's record no longer loses up to 20 ms of turn at each scan.
 - Elevator rides were lost when the odometry had opened a transition before them (its drift while walking, a jump as
   the doors closed) and was then lost in the cabin or saw it still: the IMU now takes such a ride, measures it from its
   onset to the cabin's stop, and leaves what came before on the floor it left (ADR-0059). On Elevator-VIGS the 16 real
