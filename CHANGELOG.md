@@ -117,8 +117,10 @@
 - A hand-held camera with an IMU (OAK-D Lite) mapped almost nothing: three false floor transitions, one ending as a
   63 m lift. Three causes, all fixed:
   - The start was never levelled: it was tried once, on the first frame, before the IMU had reached the pipeline
-    (0.3 s in). The start now waits for the IMU at rest over half a second, up to 2 s, and says so when it gives up.
-    A ground robot's start is still levelled by the ground plane it stands on: until the accelerations show its
+    (0.3 s in). When the first frame does not show the floor either, the start now waits for the IMU at rest over
+    half a second, up to 2 s, and says so when it gives up. It does not wait when the floor is in view: a start that
+    is already moving accelerates in a straight line, which the IMU cannot tell from a tilt (S06 walks off at
+    0.8 m/s^2: 4.7 deg of pitch, a corridor climbed as a 2.3 m ramp). A ground robot's start is still levelled by the ground plane it stands on: until the accelerations show its
     heading, a TF with the IMU turned half around reads its tilt backwards (the Summit's `prueba_03` got a fourth
     floor that way).
   - The floor manager read the IMU's vertical acceleration through the odometry's attitude, so an unlevelled start

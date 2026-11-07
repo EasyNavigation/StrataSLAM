@@ -362,13 +362,17 @@ struct SlamSystem::Impl {
   }
 
   /// Aligns the odometry frame with gravity before its first frame: from the IMU at rest over its
-  /// last half second, otherwise from the dominant ground plane of the frame's cloud. With an IMU
-  /// it waits for one (frames arrive before the IMU has half a second: a camera that starts with
-  /// it) and for a moment at rest (a hand-held sensor), skipping the frames meanwhile (false), up
-  /// to `kWait` from the first frame. A ground robot's IMU is not used for it: until the
-  /// accelerations have shown its heading, a TF that has it turned half around reads every tilt
-  /// backwards (ADR-0058: the Summit's 0.46 deg became a start 0.9 deg off and a fourth floor in
-  /// `prueba_03`), and a ground robot sees the ground plane it stands on.
+  /// last half second, otherwise from the dominant ground plane of the frame's cloud. When neither
+  /// is there yet and the IMU can level it, it waits for one (frames arrive before the IMU has half
+  /// a second: a camera that starts with it, looking at the ceiling or held upright) and for a
+  /// moment at rest (a hand-held sensor), skipping the frames meanwhile (false), up to `kWait` from
+  /// the first frame. It does not wait when the frame shows the floor: a start that is already
+  /// moving accelerates in a straight line without turning, which the IMU cannot tell from a tilt
+  /// (S06 walks off at 0.8 m/s^2: 4.7 deg of pitch, a corridor climbed as a 2.3 m ramp). A ground
+  /// robot's IMU is not used for it: until the accelerations have shown its heading, a TF that has
+  /// it turned half around reads every tilt backwards (ADR-0058: the Summit's 0.46 deg became a
+  /// start 0.9 deg off and a fourth floor in `prueba_03`), and a ground robot sees the ground plane
+  /// it stands on.
   bool init_gravity(const std::vector<Eigen::Vector3f>& cloud, const gtsam::Pose3& T_base_sensor,
                     Timestamp stamp) {
     constexpr Timestamp kWindow = 500'000'000, kWait = 2'000'000'000;  // ns
@@ -383,9 +387,7 @@ struct SlamSystem::Impl {
         if (const auto g = estimate_gravity_from_imu(w, 0.05, 0.5))
           up_base = ext.T_base_imu.rotation().matrix() * g->up_body;
       }
-      if (!up_base && stamp - first_frame < kWait) return false;
     }
-    gravity_done = true;
     if (!up_base && !cloud.empty()) {
       const Eigen::Matrix3d R_bs = T_base_sensor.rotation().matrix();
       const auto up_sensor = estimate_up_from_ground_plane(
@@ -397,6 +399,8 @@ struct SlamSystem::Impl {
       // 0.14 m of floor height on average and S07 3 seeds in 20.
       if (up_sensor) up_base = (R_bs * *up_sensor).normalized();
     }
+    if (!up_base && imu_levels && stamp - first_frame < kWait) return false;
+    gravity_done = true;
     if (!up_base) {
       log->log(
           LogLevel::Warn,
