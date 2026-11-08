@@ -108,7 +108,8 @@ Short ADRs: context, decision, alternatives, consequences.
   U-shaped stairwell (the velocity model extrapolates through the turn), while the unpinned GICP solution
   stayed within 0.25 m.
 - **Decision:** `pin_degenerate` is off. `Degraded` still (a) widens the odometry covariance of the
-  keyframe by `degraded_scale` in the backend and (b) vetoes LiDAR loop closures.
+  keyframe by `degraded_scale` in the backend and (b) vetoes LiDAR loop closures. Along the weak direction the
+  registration is bounded by a physical acceleration instead (ADR-0061).
 
 ## ADR-0013 · Relocalization policy after a tracking loss
 
@@ -932,3 +933,30 @@ around a lift lobby is too small for an unambiguous match.
   simulation); estimating it more finely (a line over the window, the bias at rest) did not hold on real data. The
   3 m range is checked on a few platforms only; the exit guard (10 deg, 10 s) and the restart out of the cabin rest on
   few cases and are the least validated parameters.
+
+## ADR-0061 · A degenerate LiDAR registration moves no further than a physical acceleration allows
+
+Where the registration is degenerate (`Degraded`, ADR-0012), the scan's geometry barely constrains one direction, and
+along it GICP can slide to a structure that repeats, such as the next flight of a stairwell between identical floors.
+Going down such a stairwell in scenario S15 the weak direction is the vertical: in two scans the registration left the
+constant-velocity prediction by +0.6 and +0.5 m upwards (about 60 m/s^2), the velocity model took that as a climb at
+over 5 m/s and carried it on, and the scans locked onto the flight above. The descent was not measured, the floor
+below took the height of the one above, the walk back was not recognised. Pinning the weak direction to the prediction
+(`pin_degenerate`) was rejected in ADR-0012: the prediction itself is wrong through a turn.
+
+- **Decision.** When `Degraded` and not pinned, the registration leaves the prediction along the weak direction by at
+  most `max_acceleration` x (scan interval)^2: 30 m/s^2, 0.3 m at 10 Hz. A sensor carried by a robot or a person does
+  not accelerate at 3 g; a turn (1-2 m/s^2) or a step is taken as registered, and after a gap in the scans the bound
+  grows with it. Elsewhere nothing changes. `0` turns it off.
+- **Evidence** (seeds 1001-1020, against `c7eaa80`). S15 passes on 20 of 20 seeds (16 before; its failures, like the 3
+  of `3fe1a90`, share one signature, and the five looked into were that slide); S11 20 of 20 (19), its fused error
+  unchanged on average (0.069 m) and lower at worst (0.101 -> 0.092 m); every other scenario identical. 10 and 20
+  m/s^2 also fix S15, but leave a seed of S11 just over its 0.10 m threshold. KITTI 0027, the Summit bags prueba_00
+  and prueba_03 and the Tiago bag: identical maps. Elevator-VIGS: 19 of 32 sequences change, through a few bounded
+  scans each (0.3-0.7 m, mostly in cabins), and their effect downstream goes both ways: floor changes 1 closer
+  (Residential3, 3.4 -> 1.7 m), 29 the same, 2 further (Station3 2.2 -> 2.6 m; simulated Mall-M, 0.25 -> 1.3 m, an
+  extra floor on its last ramp); the arrival floor's heading better on 4 sequences (Station2 13 -> 1 deg) and worse on
+  3 (Station3 5.5 -> 13.6 deg).
+- **Limits.** The bound acts along the weakest direction only, and only when the registration is `Degraded`; a slide
+  slower than the bound, scan after scan, is not stopped. A platform that does accelerate harder (a drone's flip, a
+  dropped sensor) needs a larger value.

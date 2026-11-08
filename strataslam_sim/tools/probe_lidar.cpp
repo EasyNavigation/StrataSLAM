@@ -8,7 +8,8 @@
 
 int main(int argc, char** argv) {
   const std::string id = argc > 1 ? argv[1] : "S02";
-  auto spec = strataslam_sim::make_scenario(id);
+  const char* seed = std::getenv("PROBE_SEED");
+  auto spec = strataslam_sim::make_scenario(id, seed ? std::strtoull(seed, nullptr, 10) : 42);
   if (const char* b = std::getenv("PROBE_BEAMS")) spec.sim.lidar_beams = std::atoi(b);
   if (const char* b = std::getenv("PROBE_COLUMNS")) spec.sim.lidar_columns = std::atoi(b);
   strataslam_sim::Simulator sim(spec.building, spec.trajectory, spec.sim);

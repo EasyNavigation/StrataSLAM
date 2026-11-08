@@ -27,6 +27,12 @@ struct LidarFrontendConfig {
   /// default: it diverged at the turn of a U-shaped stairwell (ADR-0012); the backend already
   /// widens the odometry covariance of degraded keyframes.
   bool pin_degenerate = false;
+  /// m/s^2. When `Degraded` (and not pinned), how far the registration may leave the
+  /// constant-velocity prediction along the weak direction in one scan: this acceleration over the
+  /// scan interval squared (0.3 m at 10 Hz). Along that direction the registration can slide to a
+  /// repeated structure, such as the next flight of a stairwell, and the velocity model would then
+  /// carry the slide on; no robot or person moves its sensor at 3 g. 0 = no bound.
+  double max_acceleration = 30.0;
   double min_fitness = 0.25;  ///< below: `Lost`
   /// Voxel size of the downsampled scans kept in keyframes (loop closure / mapping).
   double keyframe_cloud_voxel = 0.3;

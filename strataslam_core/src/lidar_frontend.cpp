@@ -404,6 +404,7 @@ FrontendResult LidarFrontend::process(const SensorFrame& frame) {
                                                             : TrackingState::Good;
   s.last_quality = q;
   res.quality = q;
+  const double scan_dt = (frame.stamp - s.last_stamp) * 1e-9;
   s.last_stamp = frame.stamp;
 
   if (q.state == TrackingState::Lost) {
@@ -423,6 +424,18 @@ FrontendResult LidarFrontend::process(const SensorFrame& frame) {
     const Eigen::Vector3d weak = pred_lidar.rotation().matrix() * es.eigenvectors().col(0);
     const Eigen::Vector3d fixed = dt_world - weak * weak.dot(dt_world);
     T_ol = gtsam::Pose3(T_ol.rotation(), Eigen::Vector3d(pred_lidar.translation() + fixed));
+  } else if (q.state == TrackingState::Degraded && s.cfg.max_acceleration > 0 && scan_dt > 0) {
+    // Along the weak direction the registration may slide to a repeated structure (the next
+    // flight of a stairwell): it leaves the prediction by no more than a physical acceleration
+    // allows, so that a slide is not taken, nor carried on by the velocity model.
+    Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> es(Hn.block<3, 3>(3, 3));
+    const Eigen::Vector3d weak = pred_lidar.rotation().matrix() * es.eigenvectors().col(0);
+    const double along = weak.dot(T_ol.translation() - pred_lidar.translation());
+    const double bound = s.cfg.max_acceleration * scan_dt * scan_dt;
+    if (std::abs(along) > bound)
+      T_ol = gtsam::Pose3(
+          T_ol.rotation(),
+          Eigen::Vector3d(T_ol.translation() - weak * (along - std::copysign(bound, along))));
   }
   if (frame.up_base)
     T_ol = level_lidar(T_ol, s.T_base_lidar, *frame.up_base, s.cfg.max_tilt_error_deg);

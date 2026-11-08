@@ -297,3 +297,51 @@ TEST(LidarFrontend, OutOfConfinedSpacesTheGyroscopeIsNotUsed) {
   EXPECT_FALSE(rb.confined);
   EXPECT_TRUE(ra.T_odom_base.equals(rb.T_odom_base, 1e-12));
 }
+
+// ---------------- Degenerate registration: bounded by a physical acceleration ----------------
+
+namespace {
+
+/// Where the frontend puts a sensor that stood still for two scans and then shows up `jump`
+/// metres along a corridor in the next one, 0.1 s later. Along the corridor only a small box
+/// constrains the registration: it is `Degraded`, but sees the jump.
+Vector3d after_a_jump(double jump, double max_acceleration, TrackingState* state) {
+  LidarFrontendConfig cfg;
+  cfg.max_acceleration = max_acceleration;
+  LidarFrontend fe{cfg};
+  const auto corridor =
+      sample_room({-20, -1, -1.2}, {20, 1, 1.3}, 60, 7, {{{1.0, 0.6, -1.2}, {1.3, 1.0, -0.9}}});
+  LidarScan scan;
+  scan.points = corridor;
+  SensorFrame f;
+  f.lidar = &scan;
+  for (int i = 0; i < 2; ++i) {
+    scan.stamp = f.stamp = 1'000'000'000LL + i * 100'000'000LL;
+    EXPECT_TRUE(fe.process(f).valid);
+  }
+  scan.points =
+      transform_points(corridor, gtsam::Pose3(gtsam::Rot3(), Vector3d(-jump, 0, 0)).matrix());
+  scan.stamp = f.stamp = 1'200'000'000LL;
+  const FrontendResult r = fe.process(f);
+  EXPECT_TRUE(r.valid);
+  *state = r.quality.state;
+  return r.T_odom_base.translation();
+}
+
+}  // namespace
+
+TEST(LidarFrontend, ADegenerateRegistrationMovesNoFurtherThanAPhysicalAccelerationAllows) {
+  TrackingState state;
+  // Without the bound the registration follows the box: the jump is seen.
+  const Vector3d free = after_a_jump(0.8, 0.0, &state);
+  ASSERT_EQ(state, TrackingState::Degraded);
+  ASSERT_NEAR(free.x(), 0.8, 0.1);
+  // 30 m/s^2 over 0.1 s: 0.3 m along the corridor; across it nothing changes.
+  const Vector3d bounded = after_a_jump(0.8, 30.0, &state);
+  EXPECT_NEAR(bounded.x(), 0.3, 0.02);
+  EXPECT_NEAR(bounded.y(), free.y(), 0.02);
+  EXPECT_NEAR(bounded.z(), free.z(), 0.02);
+  // A step a sensor can make (0.1 m from standing, 20 m/s^2) is taken as registered.
+  const Vector3d step = after_a_jump(0.1, 30.0, &state);
+  EXPECT_NEAR(step.x(), 0.1, 0.03);
+}

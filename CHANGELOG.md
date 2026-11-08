@@ -119,6 +119,11 @@
 - `docs/user/install.md` rewritten and tested; `docs/data_format.md` documents `fused/`, the optional payload folders and the integrity checks.
 
 ### Fixed
+- Going down a stairwell between identical floors the LiDAR odometry could slide to the flight above: the registration
+  was degenerate along the vertical, jumped by half a metre in a scan and the velocity model carried that on (S15
+  failed on 4 of 20 seeds, the floor reached 3-6 m off). A degenerate registration now leaves the prediction along its
+  weak direction by no more than a physical acceleration allows (`max_acceleration`, 30 m/s^2, ADR-0061): S15 and S11
+  pass on 20 of 20 seeds, KITTI and the Summit and Tiago bags are unchanged.
 - After an elevator ride the floor reached was mapped turned against the one left (Elevator-VIGS: 29-162 deg on the
   real sequences that had it): the LiDAR odometry turns wrong in a cabin. In a confined space (95 % of the scan within
   3 m) the rotation is now the gyroscope's and the registration solves the translation only; the floor manager holds
