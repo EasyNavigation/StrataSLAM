@@ -161,6 +161,32 @@ TEST(MapIo, MapsSavedBeforeTheRenameStillLoad) {
   EXPECT_TRUE(r.value() == original);
 }
 
+TEST(MapIo, KeyframeCloudsWithoutAFrameAreThoseOfOlderMapsInTheSensorFrame) {
+  TempDir dir;
+  const MapData original = make_map(1);
+  ASSERT_TRUE(write_map(dir.str(), original).ok());
+  const fs::path meta = dir.path() / "floor_000" / "metadata.yaml";
+  std::string text;
+  {
+    std::ifstream in(meta);
+    text.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+  }
+  const auto at = text.find("cloud_frame: base");
+  ASSERT_NE(at, std::string::npos);
+  // Written before the field: the clouds are in the sensor frame.
+  std::ofstream(meta) << text.substr(0, at) +
+                             text.substr(at + std::string("cloud_frame: base").size());
+  auto r = read_map(dir.str());
+  ASSERT_TRUE(r.ok()) << r.error().message;
+  EXPECT_EQ(r.value().floors[0].metadata.cloud_frame, "sensor");
+  // Any other frame is an error, not a guess.
+  std::ofstream(meta) << text.substr(0, at) + "cloud_frame: lidar" +
+                             text.substr(at + std::string("cloud_frame: base").size());
+  r = read_map(dir.str());
+  ASSERT_FALSE(r.ok());
+  EXPECT_NE(r.error().message.find("cloud_frame"), std::string::npos) << r.error().message;
+}
+
 TEST(MapIo, UnknownFormatVersionIsRejected) {
   TempDir dir;
   ASSERT_TRUE(write_map(dir.str(), make_map(1)).ok());

@@ -205,6 +205,7 @@ std::string metadata_to_yaml(const FloorMetadata& m) {
     out << *m.altitude_m;
   else
     out << YAML::Null;
+  out << YAML::Key << "cloud_frame" << YAML::Value << m.cloud_frame;
   out << YAML::EndMap;
   return out.c_str();
 }
@@ -223,6 +224,10 @@ FloorMetadata metadata_from_yaml(const std::string& text) {
   m.alignment_residual_rad = n["alignment_residual_rad"].as<double>();
   if (n["altitude_m"].IsDefined() && !n["altitude_m"].IsNull())
     m.altitude_m = n["altitude_m"].as<double>();
+  // Absent in maps written before the field: their clouds are in the sensor frame.
+  m.cloud_frame = n["cloud_frame"].IsDefined() ? n["cloud_frame"].as<std::string>() : "sensor";
+  if (m.cloud_frame != "base" && m.cloud_frame != "sensor")
+    throw IoError("metadata.cloud_frame: expected base or sensor, not '" + m.cloud_frame + "'");
   return m;
 }
 

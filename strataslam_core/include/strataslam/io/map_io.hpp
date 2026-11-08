@@ -50,12 +50,16 @@ struct FloorMetadata {
   std::vector<SessionId> sessions;
   double alignment_residual_rad = 0.0;  ///< gravity alignment residual at submap close
   std::optional<double> altitude_m;     ///< estimated height of the floor frame above floor 0
+  /// Frame of the per-keyframe clouds (`clouds/<id>.pcd`): "base", the keyframe's base frame,
+  /// placed in the floor by the keyframe's pose alone. Maps written before the field have
+  /// "sensor": the frame of the sensor that took them, whose mounting the map does not record.
+  std::string cloud_frame = "base";
 
   bool operator==(const FloorMetadata& o) const {
     return id == o.id && gravity == o.gravity && ground_normal == o.ground_normal &&
            reference_pressure_pa == o.reference_pressure_pa && sensors == o.sensors &&
            sessions == o.sessions && alignment_residual_rad == o.alignment_residual_rad &&
-           altitude_m == o.altitude_m;
+           altitude_m == o.altitude_m && cloud_frame == o.cloud_frame;
   }
 };
 

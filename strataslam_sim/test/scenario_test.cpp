@@ -5,7 +5,10 @@
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
+#include <set>
+#include <tuple>
 
+#include "strataslam/mapping/voxel_grid.hpp"
 #include "strataslam_sim/scenarios.hpp"
 
 using namespace strataslam_sim;
@@ -53,6 +56,40 @@ TEST(Scenario, S02_MapSurvivesDiskRoundTrip) {
   ASSERT_EQ(r.map.floors.size(), 1u);
   EXPECT_GT(r.map.floors[0].floor_cloud->points.size(), 5000u);
   EXPECT_FALSE(r.map.floors[0].lidar.empty());
+}
+
+TEST(Scenario, KeyframeCloudsArePlacedByTheirKeyframePoseAlone) {
+  // S01's camera is mounted turned (optical z forward): a cloud saved in its frame would land
+  // turned away from the floor's.
+  const ScenarioResult r = run_scenario(make_scenario("S01"));
+  ASSERT_EQ(r.map.floors.size(), 1u);
+  const auto& f = r.map.floors[0];
+  EXPECT_EQ(f.metadata.cloud_frame, "base");
+  ASSERT_TRUE(f.floor_cloud);
+  const double cell = 0.2;
+  const auto key = [&](const Eigen::Vector3f& p) {
+    return std::make_tuple(static_cast<long>(std::floor(p.x() / cell)),
+                           static_cast<long>(std::floor(p.y() / cell)),
+                           static_cast<long>(std::floor(p.z() / cell)));
+  };
+  std::set<std::tuple<long, long, long>> occupied;
+  for (const auto& p : f.floor_cloud->points)
+    for (int dx = -1; dx <= 1; ++dx)
+      for (int dy = -1; dy <= 1; ++dy)
+        for (int dz = -1; dz <= 1; ++dz)
+          occupied.insert(key(p + Eigen::Vector3f(dx, dy, dz) * static_cast<float>(cell)));
+  size_t placed = 0, on_floor_cloud = 0;
+  for (const auto& kf : f.keyframes) {
+    const auto it = f.clouds.find(kf.id);
+    if (it == f.clouds.end()) continue;
+    const gtsam::Pose3 X(gtsam::Rot3(kf.q.toRotationMatrix()), kf.t);
+    for (const auto& p : strataslam::transform_points(it->second.points, X.matrix())) {
+      ++placed;
+      on_floor_cloud += occupied.count(key(p));
+    }
+  }
+  ASSERT_GT(placed, 10000u);
+  EXPECT_GT(static_cast<double>(on_floor_cloud) / placed, 0.95);
 }
 
 namespace {

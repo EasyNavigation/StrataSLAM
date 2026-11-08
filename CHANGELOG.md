@@ -119,6 +119,10 @@
 - `docs/user/install.md` rewritten and tested; `docs/data_format.md` documents `fused/`, the optional payload folders and the integrity checks.
 
 ### Fixed
+- The per-keyframe clouds of a saved map (`clouds/<id>.pcd`) were in the frame of the sensor that took them, with
+  neither that frame nor the sensor's mounting recorded: a reader could not place them (a camera's landed turned by
+  90 deg). They are now saved in the keyframe's base frame, placed by its pose, and `metadata.yaml` says so
+  (`cloud_frame: base`; older maps read as `sensor`). The floor and global clouds are unchanged (ADR-0062).
 - Going down a stairwell between identical floors the LiDAR odometry could slide to the flight above: the registration
   was degenerate along the vertical, jumped by half a metre in a scan and the velocity model carried that on (S15
   failed on 4 of 20 seeds, the floor reached 3-6 m off). A degenerate registration now leaves the prediction along its

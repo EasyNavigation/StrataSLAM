@@ -1712,8 +1712,9 @@ MapData SlamSystem::finalize(const std::string& profile_yaml) {
       }
       const auto* cloud = s.backend.cloud(id);
       if (cloud && !cloud->empty()) {
+        // Saved in the keyframe's base frame (`cloud_frame: base`): placed by its pose alone.
         PointCloud pc;
-        pc.points = *cloud;
+        pc.points = transform_points(*cloud, s.backend.keyframe(id).T_base_sensor.matrix());
         fd.clouds[id] = std::move(pc);
         const auto w =
             transform_points(*cloud, (X * s.backend.keyframe(id).T_base_sensor).matrix());

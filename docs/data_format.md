@@ -10,10 +10,10 @@ marks a complete map. Readers reject any `format_version` other than 1.
 ├── transitions.yaml     list of transition records
 ├── floor_000/
 │   ├── metadata.yaml    floor_id, gravity, ground_normal, reference_pressure_pa, sensors,
-│   │                    sessions, alignment_residual_rad, altitude_m
+│   │                    sessions, alignment_residual_rad, altitude_m, cloud_frame
 │   ├── keyframes.csv    id,stamp_ns,session,x,y,z,qx,qy,qz,qw   (pose in the floor frame)
 │   ├── edges.csv        type,from,to,measurement,info_dim,information
-│   ├── clouds/<id>.pcd  per-keyframe cloud (binary PCD v0.7: x y z [rgb], float32)
+│   ├── clouds/<id>.pcd  per-keyframe cloud (binary PCD v0.7: x y z [rgb], float32), in the frame `cloud_frame` names
 │   ├── visual/<id>.bin  keypoints + descriptors (only keyframes with a camera observation)
 │   ├── lidar/<id>.bin   Scan Context + metadata (only when loop closure uses the LiDAR)
 │   └── floor_cloud.pcd  voxelized floor cloud (optional)
@@ -30,6 +30,12 @@ them (a camera + LiDAR map whose loops are closed by the camera has no `lidar/`,
 
 Conventions: SI units, radians, timestamps in integer nanoseconds, quaternions as (x, y, z, w),
 floor frames gravity-aligned (z up).
+
+Per-keyframe clouds: with `cloud_frame: base` (every map written since the field exists) a cloud is in its
+keyframe's base frame, and the keyframe's pose in `keyframes.csv` places it in the floor frame. Maps written before
+have no `cloud_frame` field, which reads as `sensor`: their clouds are in the frame of the sensor that took them
+(camera optical frame or LiDAR frame), whose mounting the map does not record. `floor_cloud.pcd` and the fused
+`global_cloud.pcd` are in the floor and map frames in both. ADR-0062.
 
 ## Binary containers (`visual/*.bin`, `lidar/*.bin`)
 

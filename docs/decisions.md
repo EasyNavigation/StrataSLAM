@@ -960,3 +960,21 @@ below took the height of the one above, the walk back was not recognised. Pinnin
 - **Limits.** The bound acts along the weakest direction only, and only when the registration is `Degraded`; a slide
   slower than the bound, scan after scan, is not stopped. A platform that does accelerate harder (a drone's flip, a
   dropped sensor) needs a larger value.
+
+## ADR-0062 · Per-keyframe clouds are saved in the keyframe's base frame
+
+A map saved each keyframe's cloud (`clouds/<id>.pcd`) as the sensor took it, in the camera's optical frame or the
+LiDAR's, but recorded neither that frame nor the sensor's mounting: a reader could not place the clouds, and the
+format did not say which frame they were in. With a LiDAR mounted near the base the error went unnoticed; a camera
+cloud placed by the keyframe's pose alone lands turned by 90 deg (3 % of its points on the floor's cloud, in S01).
+Nothing in StrataSLAM reads those clouds back (the floor and global clouds were always placed with the mounting), so
+only other readers of the format were affected.
+
+- **Decision.** The clouds are saved in the keyframe's base frame, so the keyframe's pose places them, and the floor's
+  `metadata.yaml` says so: `cloud_frame: base`. A map without the field, written before it, reads as
+  `cloud_frame: sensor`, its clouds as they were; any other value is an error. The floor and global clouds are
+  computed as before, bit for bit.
+- **Not a new format version.** The files and their layout are those of version 1, and a version-1 reader still reads
+  every map; it only learns from the new field how to place the per-keyframe clouds. Recording the mounting instead
+  would have needed it per keyframe (a camera + LiDAR map can hold clouds of either sensor) and every reader to apply
+  it.
