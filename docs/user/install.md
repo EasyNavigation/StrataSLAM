@@ -47,7 +47,7 @@ git clone <this repository> strataslam && cd strataslam
 scripts/install_deps.sh core
 cmake -S superbuild -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
-ctest --test-dir build --output-on-failure      # unit tests and the scenarios S01-S14
+ctest --test-dir build --output-on-failure      # unit tests and the scenarios S01-S15
 ```
 
 `install_deps.sh core` installs Ubuntu's `libgtsam-dev` plus the libraries its CMake export needs (Boost,

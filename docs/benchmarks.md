@@ -12,9 +12,11 @@ Recorded per release. Real-data runs do not block CI (nightly or manual).
 | fr1/xyz | 798 / 798 | 0.0137 m | 0.0570 m | unreleased (audit follow-up) | 2026-11-03 |
 | fr2/xyz | 3669 / 3669 | 0.0150 m | 0.0397 m | unreleased (audit follow-up) | 2026-11-03 |
 | fr1/xyz | 798 / 798 | 0.0143 m | 0.0551 m | unreleased (ORB on valid depth only) | 2026-11-03 |
+| fr2/xyz | 3669 / 3669 | 0.0152 m | 0.0326 m | unreleased (ORB on valid depth only) | 2026-11-03 |
 | fr1/xyz | 798 / 798 | 0.0143 m | 0.0551 m | unreleased (audit fixes, `make_results.sh`) | 2026-11-05 |
 | fr2/xyz | 3669 / 3669 | 0.0152 m | 0.0326 m | unreleased (audit fixes, `make_results.sh`) | 2026-11-05 |
-| fr2/xyz | 3669 / 3669 | 0.0152 m | 0.0326 m | unreleased (ORB on valid depth only) | 2026-11-03 |
+| fr1/xyz | 798 / 798 | 0.0143 m | 0.0551 m | unreleased (fa5b931, `make_results.sh`) | 2026-11-08 |
+| fr2/xyz | 3669 / 3669 | 0.0152 m | 0.0326 m | unreleased (fa5b931, `make_results.sh`) | 2026-11-08 |
 
 A rise above 10 % relative to the previous release is a regression.
 
@@ -26,29 +28,31 @@ against the OXTS GPS/INS solution. KITTI is CC BY-NC-SA 3.0: used for evaluation
 | Drive | Length | Scans | ATE RMSE | ATE max | Loops | Time per scan | Version | Date |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 2011_09_30_drive_0027 (odometry 07) | 692 m | 1106 | 0.82 m | 2.03 m | 0 | 58 ms (1 thread) | unreleased | 2026-11-03 |
-| 2011_09_30_drive_0027 (odometry 07) | 692 m | 1106 | 0.40 m | 0.76 m | 1 | 58 ms (1 thread) | unreleased (LiDAR loop gate, ADR-0057) | 2026-11-06 |
 | 2011_09_30_drive_0027 (odometry 07) | 692 m | 1106 | 0.77 m | 1.79 m | 0 | 54 ms (1 thread) | unreleased (audit fixes, `make_results.sh`) | 2026-11-05 |
+| 2011_09_30_drive_0027 (odometry 07) | 692 m | 1106 | 0.40 m | 0.76 m | 1 | 58 ms (1 thread) | unreleased (LiDAR loop gate, ADR-0057) | 2026-11-06 |
+| 2011_09_30_drive_0027 (odometry 07) | 692 m | 1106 | 0.40 m | 0.76 m | 1 | 54 ms (1 thread) | unreleased (fa5b931, `make_results.sh`) | 2026-11-08 |
 
-No loop closure was accepted at the revisit near the end of the drive: Scan Context is configured for buildings
-(50 m range, indoor rooms). That is an open item, not a tuned result.
+Until 2026-11-05 no loop closure was accepted at the revisit near the end of the drive. Since the LiDAR loop gate of
+ADR-0057 (the GICP residual judged against the scan's own registration) one is, and the ATE halves; Scan Context is
+still configured for buildings (50 m range), not tuned for this drive.
 
 ## Performance budgets (Google Benchmark, `strataslam_benchmarks`)
 
 Host: 20-thread x86-64 @ up to 5.2 GHz, Release build, CPU scaling enabled (timings noisy).
 Not measured on Jetson-class hardware (not available here).
 
-| Benchmark | Measured (`make_results.sh`, 2026-11-05) | Budget (spec 12.8) |
-|---|---|---|
-| ORB extraction, 640×480, 783 features | 13.8 ms | ≤ 33 ms |
-| Visual tracking (simulated RGB-D, per frame) | 0.62 ms | — |
-| LiDAR frontend (64 beams, GICP, per scan) | 4.0 ms | ≤ 50 ms |
-| iSAM2 update (per keyframe, 400-keyframe chain) | 0.081 ms | ≤ 20 ms |
+| Benchmark | 2026-11-05 (`make_results.sh`) | 2026-11-08 (fa5b931, `make_results.sh`) | Budget (spec 12.8) |
+|---|---|---|---|
+| ORB extraction, 640×480, 783 features | 13.8 ms | 13.7 ms | ≤ 33 ms |
+| Visual tracking (simulated RGB-D, per frame) | 0.62 ms | 0.60 ms | — |
+| LiDAR frontend (64 beams, GICP, per scan) | 4.0 ms | 3.8 ms | ≤ 50 ms |
+| iSAM2 update (per keyframe, 400-keyframe chain) | 0.081 ms | 0.087 ms | ≤ 20 ms |
 
 The ORB benchmark warms OpenCV up outside the timed loop: the first call in a process costs about 2 s
 (initialisation of its backends), which a single measured iteration reported once as the cost of an extraction.
 
 The iSAM2 figure is for a mostly sequential graph with sparse loops; graphs with dense loop
-closures cost more (relinearisation), see the S01–S12 reports for end-to-end runtimes.
+closures cost more (relinearisation), see the S01–S15 reports for end-to-end runtimes.
 The tracking number uses simulated feature-level frames (descriptor matching and PnP, no
 image processing), so it is a lower bound for real images.
 
@@ -61,10 +65,14 @@ several threads.
 
 ## Quality gates
 
-- Line coverage of `strataslam_core` (gcovr, `scripts/check_coverage.py`, audit follow-up): geometry 96.1 %,
-  backend/factors 91.9 %, floors 88.2 %, config 89.7 %, overall 67.5 %.
-- All 145 core tests pass under ASan + UBSan (`-DSTRATASLAM_ENABLE_SANITIZERS=ON`), with no sanitizer report.
-- clang-tidy (`.clang-tidy`): no warning on `strataslam_core/src`.
+Measured by the CI on every push (`.github/workflows/ci.yml`); the figures are those of commit fa5b931 (2026-11-08).
+
+- Line coverage of `strataslam_core` (gcovr, `scripts/check_coverage.py`, job `coverage`): geometry 97.1 %,
+  backend/factors 93.9 %, floors 86.7 %, config 94.9 %, overall 76.7 % (gates: 85 % per module, 65 % overall).
+  On 2026-11-05: 96.1 %, 91.9 %, 88.2 %, 89.7 % and 67.5 %.
+- All 216 core tests pass under ASan + UBSan (`-DSTRATASLAM_ENABLE_SANITIZERS=ON`, job `sanitizers`), with no
+  sanitizer report.
+- clang-tidy (`.clang-tidy`, job `lint-cpp`): no warning on `strataslam_core/src`.
 
 ## Summit rosbags: StrataSLAM vs lidarslam_ros2 (informal, not reproducible, do not cite)
 

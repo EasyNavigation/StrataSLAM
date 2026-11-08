@@ -86,6 +86,11 @@
 - `scripts/install_deps.sh` and `scripts/check_install.sh` (install guide tested in clean containers), `.clang-tidy` with a CI job (ADR-0037), the `ldd` check of linked libraries in `license_audit.py` (ADR-0036).
 
 ### Changed
+- Published results regenerated (`docs/results.md`, `docs/scenarios.md`, `docs/benchmarks.md`) at fa5b931, with S15
+  in the 20-seed table and the regression baseline (`run_seeds.py` stopped at S14). Against the previous run no
+  scenario passes on fewer seeds; S11 goes from 17 to 19 of 20, S06's height error from 0.060 to 0.022 m mean; TUM
+  and KITTI are unchanged. `make_results.sh` refuses to start when one of its binaries cannot load its libraries
+  (each step goes on past a failed run, so that published zero passes everywhere).
 - The pixel thresholds of the visual tracking (matching windows, RANSAC, the reprojection weight) are for a VGA focal
   length (525 px) and grow with a longer one: the same motion and calibration errors cover more pixels. A hand-held
   OAK-D Lite at 720p (1000 px) lost tracking in 46 % of its frames, now 25 %, as at 360p; VGA cameras and the

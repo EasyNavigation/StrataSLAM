@@ -127,11 +127,11 @@ Sanitizers: `-DSTRATASLAM_ENABLE_SANITIZERS=ON`. Coverage: `-DSTRATASLAM_ENABLE_
 
 ## Results
 
-[docs/results.md](docs/results.md): the fourteen synthetic scenarios on 20 seeds (pass rate, mean, deviation and worst
+[docs/results.md](docs/results.md): the fifteen synthetic scenarios on 20 seeds (pass rate, mean, deviation and worst
 case of every criterion, each failure with its seed), a camera-noise study, the fusion ablation, TUM RGB-D fr1/fr2 and
-a KITTI drive. [docs/scenarios.md](docs/scenarios.md) has the full report of every scenario on the CI seed and
-[docs/benchmarks.md](docs/benchmarks.md) the performance figures. Everything is regenerated with
-`scripts/make_results.sh` (ADR-0035).
+a KITTI drive. [docs/scenarios.md](docs/scenarios.md) has the full report of every scenario on the CI seed. Both are
+written by `scripts/make_results.sh` (ADR-0035). [docs/benchmarks.md](docs/benchmarks.md) keeps the history of the
+real-data and performance figures, one row per measurement, taken from the same script's output.
 
 ## Citing
 
