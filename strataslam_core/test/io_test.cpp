@@ -187,6 +187,54 @@ TEST(MapIo, KeyframeCloudsWithoutAFrameAreThoseOfOlderMapsInTheSensorFrame) {
   EXPECT_NE(r.error().message.find("cloud_frame"), std::string::npos) << r.error().message;
 }
 
+TEST(MapIo, TheBuildingAsTheOdometryLeftItIsSavedWithTheFloors) {
+  TempDir dir;
+  MapData m = make_map(5);
+  m.floors[0].metadata.placement = Eigen::Vector4d(0, 0, 0, 0);
+  m.floors[1].metadata.placement = Eigen::Vector4d(M_PI / 2, 1, 2, 3);
+  ASSERT_TRUE(write_map(dir.str(), m).ok());
+  const auto r = read_map(dir.str());
+  ASSERT_TRUE(r.ok()) << r.error().message;
+  EXPECT_TRUE(r.value() == m);
+  // global_cloud.pcd: every floor cloud placed by its placement (floor 1 turned 90 deg, moved).
+  const auto global = read_pcd((dir.path() / "global_cloud.pcd").string());
+  ASSERT_TRUE(global.ok());
+  const auto& c0 = *m.floors[0].floor_cloud;
+  const auto& c1 = *m.floors[1].floor_cloud;
+  ASSERT_EQ(global.value().points.size(), c0.points.size() + c1.points.size());
+  EXPECT_TRUE(global.value().points[0].isApprox(c0.points[0]));
+  const Eigen::Vector3f p = c1.points[0];
+  EXPECT_TRUE(global.value().points[c0.points.size()].isApprox(
+      Eigen::Vector3f(-p.y() + 1, p.x() + 2, p.z() + 3), 1e-5f));
+  // Saved again with a floor that has no placement: no building to place, and none left behind.
+  m.floors[1].metadata.placement.reset();
+  ASSERT_TRUE(write_map(dir.str(), m).ok());
+  EXPECT_FALSE(fs::exists(dir.path() / "global_cloud.pcd"));
+}
+
+TEST(MapIo, FloorsWithoutAPlacementAreThoseOfOlderMaps) {
+  TempDir dir;
+  MapData original = make_map(1);
+  original.floors[0].metadata.placement = Eigen::Vector4d(0.5, 1, 2, 3);
+  ASSERT_TRUE(write_map(dir.str(), original).ok());
+  const fs::path meta = dir.path() / "floor_000" / "metadata.yaml";
+  std::string text;
+  {
+    std::ifstream in(meta);
+    text.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+  }
+  const auto at = text.find("placement:");
+  ASSERT_NE(at, std::string::npos);
+  std::ofstream(meta) << text.substr(0, at);  // the last field: written before it existed
+  auto r = read_map(dir.str());
+  ASSERT_TRUE(r.ok()) << r.error().message;
+  EXPECT_FALSE(r.value().floors[0].metadata.placement);
+  std::ofstream(meta) << text.substr(0, at) + "placement: [1, 2]\n";
+  r = read_map(dir.str());
+  ASSERT_FALSE(r.ok());
+  EXPECT_NE(r.error().message.find("placement"), std::string::npos) << r.error().message;
+}
+
 TEST(MapIo, UnknownFormatVersionIsRejected) {
   TempDir dir;
   ASSERT_TRUE(write_map(dir.str(), make_map(1)).ok());

@@ -35,6 +35,7 @@ from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
 from sensor_msgs.msg import PointCloud2
 from sensor_msgs_py import point_cloud2
+from std_srvs.srv import Trigger
 from strataslam_tools.live_view import LiveView
 from tf2_msgs.msg import TFMessage
 
@@ -99,6 +100,8 @@ class Viewer(Node):
         self.transit_z0: float | None = None  # height when the current transition began
         self.direction_told = False
         self.floors_seen: set[int] = set()
+        self.keyframes: dict[int, int] = {}  # keyframes of each floor (its latest path): what discarding loses
+        self.discard_client = self.create_client(Trigger, f"{NODE_NAME}/discard_map")
         self.early_events: list[tuple[str, str]] = []  # log lines before the first data (no data time yet)
         self.baro_offset: float | None = None  # robot height minus barometric height at the first reading
         reliable = QoSProfile(depth=200, reliability=ReliabilityPolicy.RELIABLE)
@@ -117,6 +120,16 @@ class Viewer(Node):
         self.create_subscription(Log, "/rosout", self.on_log, rosout)
         # The last stretch of path is sent even when poses stop arriving (end of a bag, robot stopped).
         self.create_timer(0.5, self.view.flush_paths)
+
+    def discard_map(self, executor: SingleThreadedExecutor, timeout_s: float = 5.0) -> bool:
+        """Asks the SLAM node not to save its map when it stops (~/discard_map); whether it agreed."""
+        if not self.discard_client.wait_for_service(timeout_sec=timeout_s):
+            return False
+        future = self.discard_client.call_async(Trigger.Request())
+        end = time.monotonic() + timeout_s
+        while not future.done() and time.monotonic() < end:
+            executor.spin_once(timeout_sec=0.1)
+        return bool(future.done() and future.result() is not None and future.result().success)
 
     def slam_running(self) -> bool:
         """Whether the SLAM node of this launch (same namespace) is in the ROS graph."""
@@ -204,6 +217,7 @@ class Viewer(Node):
         floor = floor_of_frame(m.header.frame_id)
         if floor is None or not m.poses:
             return
+        self.keyframes[floor] = len(m.poses)
         if floor not in self.floor_from_odom:
             self.pending_paths[floor] = m
             return
@@ -232,23 +246,30 @@ PATH_GAP_S = 5.0  # keyframes further apart in time are drawn as separate pieces
 
 # Exit code of the viewer when the user closed only the viewer and the SLAM goes on: the launch does not end then.
 VIEWER_ONLY = 3
-REOPEN, CLOSE_VIEWER, STOP_SLAM = 10, 11, 12  # answers of the dialog
+REOPEN, STOP_SLAM, DISCARD = 10, 12, 13  # answers of the dialog
 
 # The question when the window is closed while the SLAM runs, in a process of its own (Tk wants the main thread, and
-# the viewer keeps spinning meanwhile). Closing the dialog itself is "no, keep it": the window is opened again.
+# the viewer keeps spinning meanwhile): reopen, stop and save, or stop without saving (asked again, with what would be
+# lost). Closing the dialog itself is "no, keep it": the window is opened again. argv: floors, keyframes.
 DIALOG = r"""
 import sys
 import tkinter as tk
+from tkinter import messagebox
+floors, keyframes = int(sys.argv[1]), int(sys.argv[2])
 root = tk.Tk()
 root.title("StrataSLAM")
 root.attributes("-topmost", True)
 answer = [10]
 def pick(code):
+    if code == 13 and not messagebox.askyesno(
+            "StrataSLAM", f"Discard the map of this run ({floors} floor(s), {keyframes} keyframes)?\n"
+                          "It will not be saved.", icon="warning", default="no", parent=root):
+        return
     answer[0] = code
     root.destroy()
 tk.Label(root, text="The viewer window was closed, but the SLAM is still running.", padx=20, pady=12).pack()
-for text, code in (("Reopen the viewer", 10), ("Close the viewer (the SLAM goes on)", 11),
-                   ("Stop the SLAM and save the map", 12)):
+for text, code in (("Reopen the viewer", 10), ("Stop the SLAM and save the map", 12),
+                   ("Stop the SLAM without saving the map", 13)):
     tk.Button(root, text=text, width=34, command=lambda c=code: pick(c)).pack(padx=20, pady=3)
 tk.Label(root, text="", pady=4).pack()
 root.protocol("WM_DELETE_WINDOW", lambda: pick(10))
@@ -322,11 +343,13 @@ def main(args: list[str] | None = None) -> None:
                 if answer == REOPEN:
                     view, window = open_window(view)
                     continue
-                if answer == CLOSE_VIEWER:
-                    node.get_logger().info("the viewer is closed; the SLAM goes on")
-                    code = VIEWER_ONLY
-                elif answer == STOP_SLAM:
+                if answer == STOP_SLAM:
                     node.get_logger().info("stopping the SLAM: it saves its map")
+                elif answer == DISCARD:
+                    if node.discard_map(executor):
+                        node.get_logger().warn("stopping the SLAM without saving its map")
+                    else:  # an old node, or no answer: stopping saves, which loses nothing
+                        node.get_logger().error("the SLAM did not accept discarding its map: it saves it as it stops")
                 else:  # no Tk (python3-tk is not installed): the viewer closes, as before
                     node.get_logger().warn("no dialog (python3-tk is missing): the viewer is closed, the SLAM goes on")
                     code = VIEWER_ONLY
@@ -335,7 +358,8 @@ def main(args: list[str] | None = None) -> None:
                 window = None
                 if finished or not node.slam_running():
                     break  # nothing runs any more: the launch ends
-                dialog = subprocess.Popen([sys.executable, "-c", DIALOG])
+                dialog = subprocess.Popen([sys.executable, "-c", DIALOG, str(max(len(node.keyframes), 1)),
+                                           str(sum(node.keyframes.values()))])
     except KeyboardInterrupt:
         pass
     finally:

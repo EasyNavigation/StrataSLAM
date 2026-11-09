@@ -996,3 +996,39 @@ no relocalization, a floor: three floors in a one-storey house.
   warns once, with the frames TF has under the odometry frame, and the camera keeps tracking on its own as before.
 - **Not a frame of the profile.** Naming both frames (`frame: odom`, plus the frame the odometry moves) would have put
   in the profile what TF already says.
+
+## ADR-0064 · The map keeps the building as the odometry left it
+
+A map held every floor in its own frame and, of their placement, only each floor's height: the building the live
+view shows at the end of a run (every floor where the odometry left it) could not be rebuilt from the saved map, and
+the only whole cloud was `strataslam fuse`'s. Fusing with the defaults at save time was considered and set aside: it
+is not always better than the odometry (the Elevator-VIGS map: floor 1 at 15.93 m in the live view, 14.51 m fused,
+no ground truth to tell which), and a floor no constraint links it left at the origin, on top of floor 0, which would
+read as the building.
+
+- **Decision.** Each floor's `metadata.yaml` records its `placement`: where the odometry left it (the origin of the
+  floor frame in the odometry frame, yaw and translation) relative to the lowest floor of the map. `write_map` also
+  writes the root `global_cloud.pcd`: the floor clouds placed by it, the building as the live view showed it,
+  with the odometry's drift. `strataslam fuse` stays an explicit step and writes `fused/` as before;
+  `strataslam export` takes the fused building when there is one, the saved one otherwise.
+- **Fusion uses it only where nothing was measured.** A floor that no measured relative pose (a transition tracked
+  without a break, a cross-floor match, anchors) links to the root gets a constraint `odometry_placement` to it,
+  the weakest of all (0.1 rad, 1 m), and a warning; heights from a barometer, a declared level or a height prior
+  still override its height. A floor already linked is not given one, so the placement never counts twice.
+- **Not a new format version.** A new optional field and an optional file: version-1 readers ignore them, and maps
+  written before them read with no placement (no root cloud, and `fuse` as before).
+
+## ADR-0065 · Closing the live view: reopen, stop and save, or stop without saving
+
+Closing the viewer's window while the SLAM ran offered to reopen it, to close only the viewer while the SLAM went
+on, or to stop the SLAM and save the map. Stopping without saving was missing: Ctrl+C always saves, so a false start
+or a failed test left a map to delete by hand. Closing a window while the SLAM goes on is rarely what closing it
+means, and mapping without a window is launching without `viewer:=true`.
+
+- **Decision.** The question offers to reopen the viewer (also when the question itself is closed), to stop the SLAM
+  and save the map, or to stop it without saving. Discarding asks again, with the floors and keyframes that would be
+  lost: one wrong click must not throw away an hour of mapping.
+- **The node decides what it saves.** The viewer cannot prevent the save, which the node makes as it stops: it calls
+  the node's new `~/discard_map`, after which the node does not save when it stops (live or at the end of a bag) and
+  logs it. An explicit `~/save_map` still saves. If the node does not answer, stopping saves, which loses nothing.
+  Ctrl+C keeps saving.

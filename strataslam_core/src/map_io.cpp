@@ -206,6 +206,15 @@ std::string metadata_to_yaml(const FloorMetadata& m) {
   else
     out << YAML::Null;
   out << YAML::Key << "cloud_frame" << YAML::Value << m.cloud_frame;
+  out << YAML::Key << "placement" << YAML::Value;
+  if (m.placement) {
+    out << YAML::BeginMap << YAML::Key << "theta" << YAML::Value << (*m.placement)(0) << YAML::Key
+        << "t" << YAML::Value;
+    emit_vec3(out, m.placement->tail<3>());
+    out << YAML::EndMap;
+  } else {
+    out << YAML::Null;
+  }
   out << YAML::EndMap;
   return out.c_str();
 }
@@ -228,6 +237,16 @@ FloorMetadata metadata_from_yaml(const std::string& text) {
   m.cloud_frame = n["cloud_frame"].IsDefined() ? n["cloud_frame"].as<std::string>() : "sensor";
   if (m.cloud_frame != "base" && m.cloud_frame != "sensor")
     throw IoError("metadata.cloud_frame: expected base or sensor, not '" + m.cloud_frame + "'");
+  // Absent in maps written before the field, null when the floor was not placed.
+  if (n["placement"].IsDefined() && !n["placement"].IsNull()) {
+    const YAML::Node pl = n["placement"];
+    if (!pl.IsMap() || !pl["theta"].IsDefined())
+      throw IoError("metadata.placement: expected {theta, t: [x, y, z]}");
+    Eigen::Vector4d v;
+    v << pl["theta"].as<double>(), read_vec3(pl["t"], "metadata.placement.t");
+    if (!v.allFinite()) throw IoError("metadata.placement: not finite");
+    m.placement = v;
+  }
   return m;
 }
 
@@ -377,6 +396,12 @@ Result<void> write_map(const std::string& dir, const MapData& map) {
     write_text(root / "profile.yaml", map.profile_yaml);
     write_text(root / "transitions.yaml", transitions_to_yaml(map.transitions));
     for (const auto& f : map.floors) write_floor(root / floor_dir_name(f.metadata.id), f);
+    // The building as the live view shows it; a map saved again without placements drops a stale
+    // one.
+    if (const auto global = placed_global_cloud(map))
+      check(write_pcd((root / "global_cloud.pcd").string(), *global));
+    else
+      fs::remove(root / "global_cloud.pcd");
 
     YAML::Emitter out;
     setup_emitter(out);
@@ -397,6 +422,28 @@ Result<void> write_map(const std::string& dir, const MapData& map) {
   } catch (const std::exception& e) {
     return Error{e.what()};
   }
+}
+
+std::optional<PointCloud> placed_global_cloud(const MapData& map) {
+  PointCloud global;
+  bool any = false;
+  for (const auto& f : map.floors) {
+    if (!f.floor_cloud || f.floor_cloud->points.empty()) continue;
+    if (!f.metadata.placement) return std::nullopt;
+    any = true;
+    const Eigen::Vector4d& p = *f.metadata.placement;
+    const Eigen::Matrix3f R =
+        Eigen::AngleAxisf(static_cast<float>(p(0)), Eigen::Vector3f::UnitZ()).toRotationMatrix();
+    const Eigen::Vector3f t = p.tail<3>().cast<float>();
+    const PointCloud& cloud = *f.floor_cloud;
+    for (size_t i = 0; i < cloud.points.size(); ++i) {
+      global.points.push_back(R * cloud.points[i] + t);
+      if (!cloud.colors.empty()) global.colors.push_back(cloud.colors[i]);
+    }
+  }
+  if (!any) return std::nullopt;
+  if (!global.colors.empty() && global.colors.size() != global.points.size()) global.colors.clear();
+  return global;
 }
 
 /// More floors than any building has: a manifest listing more is corrupt or hostile.

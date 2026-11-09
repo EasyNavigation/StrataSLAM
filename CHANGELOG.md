@@ -18,6 +18,11 @@
   `strataslam doctor --preset-dir` and the node's `preset_dir` parameter are gone.
 
 ### Added
+- A saved map holds the whole building as the live view showed it: every floor's `metadata.yaml` records where the
+  odometry left it (`placement`) and the map root has `global_cloud.pcd`, the floor clouds placed by it.
+  `strataslam export` takes it when the map was not fused. `strataslam fuse` places a floor that no measurement
+  links to the others where the odometry left it (`odometry_placement`, the weakest constraint, with a warning)
+  instead of at the origin (ADR-0064).
 - `log_level:=` for the launch file (default `info`): `log_level:=debug` shows the traces of the
   `STRATASLAM_DEBUG_<CHANNEL>` channels. The troubleshooting guide told to pass `--ros-args --log-level`, which never
   reached the node in its container.
@@ -86,6 +91,10 @@
 - `scripts/install_deps.sh` and `scripts/check_install.sh` (install guide tested in clean containers), `.clang-tidy` with a CI job (ADR-0037), the `ldd` check of linked libraries in `license_audit.py` (ADR-0036).
 
 ### Changed
+- Closing the live view's window while the SLAM runs offers to reopen it, to stop the SLAM and save the map, or to
+  stop it without saving (asked again, with the floors and keyframes that would be lost). "Close only the viewer"
+  is gone: launch without `viewer:=true` to map without a window. The node has `~/discard_map` for it: no save when
+  it stops; an explicit `~/save_map` still saves (ADR-0065).
 - Published results regenerated (`docs/results.md`, `docs/scenarios.md`, `docs/benchmarks.md`) at fa5b931, with S15
   in the 20-seed table and the regression baseline (`run_seeds.py` stopped at S14). Against the previous run no
   scenario passes on fewer seeds; S11 goes from 17 to 19 of 20, S06's height error from 0.060 to 0.022 m mean; TUM

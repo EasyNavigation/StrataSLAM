@@ -1677,12 +1677,25 @@ MapData SlamSystem::finalize(const std::string& profile_yaml) {
   m.strataslam_version = kVersion;
   m.profile_yaml = profile_yaml;
   m.transitions = s.transitions;
-  for (FloorId f : s.backend.floors()) {
+  // Every floor where the odometry left it, in the frame of the lowest one: the building as the
+  // live view draws it (ADR-0064).
+  const auto floors = s.backend.floors();
+  const std::optional<Pose4> root_origin =
+      floors.empty()
+          ? std::nullopt
+          : std::optional<Pose4>(
+                s.backend.floor(*std::min_element(floors.begin(), floors.end())).origin());
+  for (FloorId f : floors) {
     const FloorGraph& g = s.backend.floor(f);
     FloorData fd;
     fd.metadata.id = f;
     if (static_cast<size_t>(f) < s.mgr.num_floors())
       fd.metadata.altitude_m = s.mgr.level_altitude(f);
+    {
+      const Pose4 X = root_origin->inverse() * g.origin();
+      fd.metadata.placement =
+          Eigen::Vector4d(X.theta(), X.translation().x(), X.translation().y(), X.translation().z());
+    }
     // Every sensor the run used, the odometry's first (audit A6-05: only the odometry sensor was
     // listed).
     fd.metadata.sensors = {s.modes.odometry == OdometrySource::Lidar ? "lidar" : "camera"};

@@ -256,6 +256,45 @@ TEST(Fusion, AFloorWithoutConstraintsIsReportedNotInvented) {
   EXPECT_EQ(unconnected, 2);
 }
 
+TEST(Fusion, AFloorNoMeasurementLinksIsPlacedWhereTheOdometryLeftIt) {
+  // Elevators with neither IMU nor barometer: no transition measured anything, but the map
+  // records where the odometry left every floor (ADR-0064).
+  Synthetic s;
+  s.map.transitions.clear();
+  for (auto& f : s.map.floors) {
+    const Pose4& X = s.truth.at(f.metadata.id);
+    f.metadata.placement =
+        Eigen::Vector4d(X.theta(), X.translation().x(), X.translation().y(), X.translation().z());
+  }
+  const auto r = fuse(s.map, FusionOptions{});
+  ASSERT_TRUE(r.ok());
+  for (FloorId f : {1, 2}) {
+    const Pose4& X = r.value().floor_to_map.at(f);
+    EXPECT_LT(std::abs(Pose4::WrapAngle(X.theta() - s.truth.at(f).theta())), 1e-6) << f;
+    EXPECT_LT((X.translation() - s.truth.at(f).translation()).norm(), 1e-6) << f;
+  }
+  int placed = 0, kinds = 0;
+  for (const auto& w : r.value().warnings)
+    placed += w.find("placed where the odometry left it") != std::string::npos;
+  for (const auto& c : r.value().constraints) kinds += c.kind == "odometry_placement";
+  EXPECT_EQ(placed, 2);
+  EXPECT_EQ(kinds, 2);
+}
+
+TEST(Fusion, AMeasuredLinkIsNotOverriddenByThePlacement) {
+  // Transitions tracked continuously: the placement (here 2 m off) is not used at all.
+  Synthetic s;
+  for (auto& f : s.map.floors) f.metadata.placement = Eigen::Vector4d(0.3, 2, 2, 0);
+  s.map.floors[0].metadata.placement = Eigen::Vector4d::Zero();
+  const auto r = fuse(s.map, FusionOptions{});
+  ASSERT_TRUE(r.ok());
+  for (FloorId f : {1, 2})
+    EXPECT_LT((r.value().floor_to_map.at(f).translation() - s.truth.at(f).translation()).norm(),
+              1e-3)
+        << f;
+  for (const auto& c : r.value().constraints) EXPECT_NE(c.kind, "odometry_placement");
+}
+
 TEST(Fusion, ReportAndOutputsAreWritten) {
   const Synthetic s;
   FusionOptions opt;

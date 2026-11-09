@@ -80,13 +80,16 @@ def cmd_export(args: argparse.Namespace) -> int:
     reader = {".pcd": mapio.read_pcd, ".ply": mapio.read_ply}
     writer = mapio.write_ply if args.format == "ply" else mapio.write_pcd
     count = 0
-    fused = [p for p in (root / "fused" / "global_cloud.pcd", root / "fused" / "global_cloud.ply") if p.exists()][:1]  # PCD first, PLY from older maps
+    # The building: fused if `strataslam fuse` ran (PCD first, PLY from older maps), otherwise as the odometry left
+    # the floors (written with the map, ADR-0064).
+    candidates = (root / "fused" / "global_cloud.pcd", root / "fused" / "global_cloud.ply", root / "global_cloud.pcd")
+    fused = [p for p in candidates if p.exists()][:1]
     sources = fused + sorted(root.glob("floor_*/floor_cloud.pcd"))
     for src in sources:
         if not src.exists():
             continue
         pts, colors = reader[src.suffix](src)
-        name = "global_cloud" if src.parent.name == "fused" else src.parent.name
+        name = "global_cloud" if src.name.startswith("global_cloud") else src.parent.name
         writer(out / f"{name}.{args.format}", pts, colors)
         count += 1
     print(f"exported {count} cloud(s) to {out}")

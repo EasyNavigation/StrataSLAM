@@ -5,9 +5,12 @@
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
+#include <map>
+#include <optional>
 #include <set>
 #include <tuple>
 
+#include "strataslam/fusion/fusion.hpp"
 #include "strataslam/mapping/voxel_grid.hpp"
 #include "strataslam_sim/scenarios.hpp"
 
@@ -112,6 +115,47 @@ double max_translation_diff(const ScenarioResult& a, const ScenarioResult& b) {
 // Spec 12.9: same seed + single thread is bit-identical; multi-thread agrees to < 1e-6 m. The LiDAR
 // registration groups its sums in fixed chunks whatever the number of threads (ADR-0048), so every
 // thread count gives the same bits.
+TEST(Scenario, TheSavedBuildingIsContinuousAcrossTheStairs) {
+  // Every floor in its own frame, placed where the odometry left it (ADR-0064): the keyframe at the
+  // top of a stairway tracked without a break lands where the climb measured from the one at the
+  // bottom, as in the live view; with each floor at its own origin it is a floor height away.
+  using strataslam::Pose4;
+  const ScenarioResult r = run_scenario(make_scenario("S03"));
+  ASSERT_GE(r.map.floors.size(), 2u);
+  std::map<strataslam::FloorId, const strataslam::FloorData*> floor;
+  for (const auto& f : r.map.floors) {
+    ASSERT_TRUE(f.metadata.placement) << f.metadata.id;
+    floor[f.metadata.id] = &f;
+  }
+  EXPECT_TRUE(r.map.floors.front().metadata.placement->isZero());  // the lowest floor is the map
+  const auto pose4 = [](const Eigen::Vector4d& v) { return Pose4(v(0), v.tail<3>()); };
+  const auto keyframe = [&](strataslam::FloorId f,
+                            strataslam::KeyframeId id) -> std::optional<Pose4> {
+    for (const auto& k : floor.at(f)->keyframes)
+      if (k.id == id) return strataslam::keyframe_pose4(k);
+    return std::nullopt;
+  };
+  size_t checked = 0;
+  for (const auto& t : r.map.transitions) {
+    if (!t.continuous_tracking || !t.relative || !floor.count(t.from) || !floor.count(t.to) ||
+        t.from == t.to)
+      continue;
+    const auto ka = keyframe(t.from, t.kf_before), kb = keyframe(t.to, t.kf_after);
+    ASSERT_TRUE(ka && kb);
+    const auto& rel = *t.relative;
+    const Pose4 climb(rel[0], Eigen::Vector3d(rel[1], rel[2], rel[3]));
+    const Pose4 expected = pose4(*floor.at(t.from)->metadata.placement) * *ka * climb;
+    const Pose4 placed = pose4(*floor.at(t.to)->metadata.placement) * *kb;
+    EXPECT_LT((placed.translation() - expected.translation()).norm(), 0.5)
+        << t.from << "->" << t.to;
+    const Pose4 at_origin = *kb;  // floor `to` left at the origin of the map
+    EXPECT_GT((at_origin.translation() - expected.translation()).norm(), 2.0)
+        << t.from << "->" << t.to;
+    ++checked;
+  }
+  EXPECT_GE(checked, 1u);
+}
+
 TEST(Scenario, DeterministicSingleThread) {
   const ScenarioResult a = run_with_threads(1), b = run_with_threads(1);
   EXPECT_EQ(max_translation_diff(a, b), 0.0);

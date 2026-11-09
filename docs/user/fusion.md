@@ -9,7 +9,9 @@ strataslam eval <map_dir> --gt <ground_truth_dir> [--json]
 `fuse` puts every floor in the frame of the lowest floor, optimizing one `Pose4 = SE(2)×R` per floor (yaw
 about gravity + 3D translation). Constraints, most to least reliable: transitions with continuous tracking,
 barometric height, verified cross-floor matches, structural anchors, the floor height prior. A wrong
-constraint is rejected (graduated non-convexity). It writes `<map_dir>/fused/`: `floor_transforms.yaml`,
+constraint is rejected (graduated non-convexity). A floor that no measurement links to the others (an elevator with
+neither IMU nor barometer, a floor opened after a tracking loss) is placed where the odometry left it, the weakest
+constraint of all, and the report says so (`odometry_placement`): give anchors to place it better. It writes `<map_dir>/fused/`: `floor_transforms.yaml`,
 `global_cloud.pcd` and `fusion_report.yaml` (accepted/rejected constraints, residuals, marginal sigma of
 every floor, warnings such as "floor 2 has no usable rotation constraint").
 

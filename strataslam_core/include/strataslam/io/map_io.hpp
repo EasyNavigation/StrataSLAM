@@ -54,12 +54,16 @@ struct FloorMetadata {
   /// placed in the floor by the keyframe's pose alone. Maps written before the field have
   /// "sensor": the frame of the sensor that took them, whose mounting the map does not record.
   std::string cloud_frame = "base";
+  /// Where the odometry left the floor, as the live view draws it: T_map_floor as (yaw rad, x, y,
+  /// z m) in the frame of the lowest floor of the map, gravity-aligned. `strataslam fuse` refines
+  /// it (fused/floor_transforms.yaml). Absent in maps written before the field (ADR-0064).
+  std::optional<Eigen::Vector4d> placement;
 
   bool operator==(const FloorMetadata& o) const {
     return id == o.id && gravity == o.gravity && ground_normal == o.ground_normal &&
            reference_pressure_pa == o.reference_pressure_pa && sensors == o.sensors &&
            sessions == o.sessions && alignment_residual_rad == o.alignment_residual_rad &&
-           altitude_m == o.altitude_m && cloud_frame == o.cloud_frame;
+           altitude_m == o.altitude_m && cloud_frame == o.cloud_frame && placement == o.placement;
   }
 };
 
@@ -92,8 +96,13 @@ struct MapData {
   }
 };
 
-/// Writes `map` into `dir` (created if needed). Floor ids must be >= 0 and unique.
+/// Writes `map` into `dir` (created if needed). Floor ids must be >= 0 and unique. When every
+/// floor with a cloud has a `placement`, also `global_cloud.pcd`: the floor clouds placed by it,
+/// the building as the live view shows it at the end of the run.
 Result<void> write_map(const std::string& dir, const MapData& map);
+/// The floor clouds of `map` in the frame of its lowest floor, each placed by its `placement`;
+/// nullopt when a floor with a cloud has none (a map written before the field).
+std::optional<PointCloud> placed_global_cloud(const MapData& map);
 /// Reads a map directory; unknown format versions are rejected with a clear error.
 Result<MapData> read_map(const std::string& dir);
 

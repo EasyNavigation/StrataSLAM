@@ -19,7 +19,7 @@ ros2 bag play ~/strataslam_demo/bag
 ros2 service call /strataslam_node/save_map std_srvs/srv/Trigger   # prints the map folder
 # 4. Clouds (PCD), the fusion of the two floors into one building, and the error against the ground truth.
 MAP=$(ls -dt ~/strataslam_maps/*/ | head -1)   # the most recent map (the path save_map printed)
-strataslam export $MAP      # -> $MAP/export/floor_000.pcd, floor_001.pcd
+strataslam export $MAP      # -> $MAP/export/global_cloud.pcd (the building as saved), floor_000.pcd, floor_001.pcd
 strataslam fuse $MAP        # -> $MAP/fused/global_cloud.pcd, floor_transforms.yaml, fusion_report.yaml
 strataslam eval $MAP --gt ~/strataslam_demo   # ATE against trajectory.tum
 ```
@@ -73,14 +73,17 @@ and nothing starts.
   publish on the same topics. The frames are not namespaced: two robots in one domain need different
   `robot.odom_frame`/`base_frame` in their profiles.
 - **Services.** `~/save_map`, `~/new_session`, `~/mark_floor_change` (tell it you just changed floor, with an
-  optional transition type).
+  optional transition type), `~/discard_map` (do not save the map when the node stops; an explicit `~/save_map`
+  still saves).
 - **Floors.** The system never closes a loop between two different floors. Stairs, ramps, elevators (with
   a barometer or an IMU) and vertical flight are detected and recorded. With neither an IMU nor a
   barometer an elevator ride is unobservable: a new floor is opened when the session cannot relocalize and the
   transition is recorded as `unknown`; give anchors when fusing (see [fusion](fusion.md)).
 - **Sessions.** After a tracking loss a new session starts; it is reconnected to the floor by loop closure.
 - **Stopping.** Ctrl+C saves the map of the run to `output.map_dir`, live as with `bag:=`, unless nothing was mapped
-  since the last `~/save_map`.
+  since the last `~/save_map`. The map holds every floor in its own frame and, in `global_cloud.pcd`, the whole
+  building as the live view showed it at the end: each floor where the odometry left it, with its drift.
+  `strataslam fuse` refines it into `fused/global_cloud.pcd`.
 
 ## Processing a rosbag offline
 
@@ -145,8 +148,10 @@ the floor cloud is refreshed every second; the map is the same as without the vi
 
 The window lives with the launch. **Ctrl+C** closes it along with everything else (the SLAM saves its map). **Closing
 the window while the SLAM runs** asks what to do: reopen the viewer (also when the question itself is closed; the
-paths and floor clouds come back, the earlier timeline does not), close only the viewer (the SLAM goes on and the
-launch ends with it), or stop the SLAM and save the map. **When a bag has been processed** the window stays, to look
+paths and floor clouds come back, the earlier timeline does not), stop the SLAM and save the map, or stop it without
+saving (asked again, with the floors and keyframes that would be lost; the node's `~/discard_map`, after which an
+explicit `~/save_map` still saves). To map without a window, launch without `viewer:=true`. **When a bag has been
+processed** the window stays, to look
 at the result, until you close it or press Ctrl+C. The question needs Tk (`python3-tk`, installed by
 `scripts/install_deps.sh ros`); without it, closing the window closes only the viewer. A Rerun window that was
 already open is reused and left open.

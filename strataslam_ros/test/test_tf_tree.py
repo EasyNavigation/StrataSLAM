@@ -16,6 +16,7 @@ from geometry_msgs.msg import TransformStamped
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import PointCloud2
+from std_srvs.srv import Trigger
 from test_malformed_clouds import PROFILE, ROOM, ROOM_N, cloud
 from tf2_msgs.msg import TFMessage
 
@@ -28,7 +29,8 @@ def ros_domain(monkeypatch):  # type: ignore[no-untyped-def]
     rclpy.shutdown()
 
 
-def run_node(tmp_path: Path, wheel_odometry: bool, localizer: bool = False, publish_tf: bool = True) -> set[tuple[str, str]]:
+def run_node(tmp_path: Path, wheel_odometry: bool, localizer: bool = False, publish_tf: bool = True,
+             discard: bool = False) -> set[tuple[str, str]]:
     """Runs the node on 30 identical scans; returns the (parent, child) pairs the node published on /tf. `localizer`:
     another node also publishes map -> odom, as AMCL does."""
     profile = tmp_path / "profile.yaml"
@@ -74,6 +76,12 @@ def run_node(tmp_path: Path, wheel_odometry: bool, localizer: bool = False, publ
         stop = time.monotonic() + 1.0
         while time.monotonic() < stop:
             rclpy.spin_once(node, timeout_sec=0.05)
+        if discard:  # the live view's "stop without saving"
+            client = node.create_client(Trigger, "/strataslam_node/discard_map")
+            assert client.wait_for_service(timeout_sec=10.0)
+            future = client.call_async(Trigger.Request())
+            rclpy.spin_until_future_complete(node, future, timeout_sec=10.0)
+            assert future.done() and future.result().success
     finally:
         proc.send_signal(2)
         try:
@@ -98,6 +106,15 @@ def test_without_a_robot_odometry_the_node_completes_the_tree(ros_domain, tmp_pa
     # Ctrl+C on a live run saves the map, as with a bag (audit AUD-092).
     assert "not saved: saving the map" in text, text[-2000:]
     assert (tmp_path / "map" / "manifest.yaml").exists()
+
+
+def test_a_discarded_map_is_not_saved_when_the_node_stops(ros_domain, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
+    run_node(tmp_path, wheel_odometry=False, discard=True)
+    text = (tmp_path / "node.log").read_text()
+    assert "discarded at the user's request" in text, text[-2000:]
+    assert "the map was discarded" in text, text[-2000:]
+    assert "not saved: saving the map" not in text
+    assert not (tmp_path / "map" / "manifest.yaml").exists()
 
 
 def test_with_a_robot_odometry_the_node_publishes_the_correction_on_top_of_it(ros_domain, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]

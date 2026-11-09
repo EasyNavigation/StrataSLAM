@@ -8,9 +8,10 @@ marks a complete map. Readers reject any `format_version` other than 1.
 ├── manifest.yaml        strataslam_version (easyslam_version in maps from 0.2.x), format_version, profile, transitions, floors[{id,dir,keyframes}]
 ├── profile.yaml         verbatim copy of the profile used for capture
 ├── transitions.yaml     list of transition records
+├── global_cloud.pcd     every floor cloud placed by its `placement`: the building as the live view showed it (ADR-0064)
 ├── floor_000/
 │   ├── metadata.yaml    floor_id, gravity, ground_normal, reference_pressure_pa, sensors,
-│   │                    sessions, alignment_residual_rad, altitude_m, cloud_frame
+│   │                    sessions, alignment_residual_rad, altitude_m, cloud_frame, placement
 │   ├── keyframes.csv    id,stamp_ns,session,x,y,z,qx,qy,qz,qw   (pose in the floor frame)
 │   ├── edges.csv        type,from,to,measurement,info_dim,information
 │   ├── clouds/<id>.pcd  per-keyframe cloud (binary PCD v0.7: x y z [rgb], float32), in the frame `cloud_frame` names
@@ -36,6 +37,13 @@ keyframe's base frame, and the keyframe's pose in `keyframes.csv` places it in t
 have no `cloud_frame` field, which reads as `sensor`: their clouds are in the frame of the sensor that took them
 (camera optical frame or LiDAR frame), whose mounting the map does not record. `floor_cloud.pcd` and the fused
 `global_cloud.pcd` are in the floor and map frames in both. ADR-0062.
+
+Floor placement: `placement: {theta, t: [x, y, z]}` in `metadata.yaml` is where the odometry left the floor, as
+T_map_floor (Pose4: yaw about gravity and a translation) in the frame of the map's lowest floor (whose placement is
+zero); the root `global_cloud.pcd` is the floor clouds placed by it. It keeps the odometry's drift, the height
+across an unmeasured change included: `strataslam fuse` refines it into `fused/`, and uses it only for a floor that
+no measurement links to the others. Maps written before the field have no `placement` and no root
+`global_cloud.pcd`; `placement: null` is a floor that was not placed. ADR-0064.
 
 ## Binary containers (`visual/*.bin`, `lidar/*.bin`)
 

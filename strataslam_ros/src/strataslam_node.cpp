@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <ament_index_cpp/get_package_share_directory.hpp>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -290,6 +291,20 @@ class StrataslamNode : public rclcpp::Node {
             res->message = "internal error (see the node log)";
           }
         });
+    // The live view's "stop without saving": the node will not save the map when it stops (Ctrl+C,
+    // the end of a bag). An explicit ~/save_map still saves.
+    discard_srv_ = create_service<std_srvs::srv::Trigger>(
+        "~/discard_map", [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+                                std::shared_ptr<std_srvs::srv::Trigger::Response> res) {
+          discard_on_stop_ = true;
+          const size_t kfs = slam_ ? slam_->keyframes().size() : 0;
+          RCLCPP_WARN(get_logger(),
+                      "the map of this run will not be saved when the node stops (%zu keyframes): "
+                      "discarded at the user's request",
+                      kfs);
+          res->success = true;
+          res->message = "the map will not be saved when the node stops";
+        });
     mark_srv_ = create_service<strataslam_msgs::srv::MarkFloorChange>(
         "~/mark_floor_change",
         [this](const std::shared_ptr<strataslam_msgs::srv::MarkFloorChange::Request> req,
@@ -341,6 +356,11 @@ class StrataslamNode : public rclcpp::Node {
     if (!bag_path_.empty() || !slam_) return;
     const size_t kfs = slam_->keyframes().size();
     if (kfs == 0 || kfs == keyframes_at_last_save_) return;
+    if (discard_on_stop_) {
+      RCLCPP_WARN(get_logger(), "stopping: %zu keyframe(s) not saved, the map was discarded",
+                  kfs - keyframes_at_last_save_);
+      return;
+    }
     RCLCPP_WARN(get_logger(), "stopping with %zu keyframe(s) not saved: saving the map",
                 kfs - keyframes_at_last_save_);
     try {
@@ -885,6 +905,10 @@ class StrataslamNode : public rclcpp::Node {
     RCLCPP_INFO(get_logger(),
                 "bag %s: %zu messages, %zu LiDAR scans and %zu camera frames processed",
                 bag_path_.c_str(), n_total, n_lidar, n_camera);
+    if (discard_on_stop_) {
+      RCLCPP_WARN(get_logger(), "no map saved: it was discarded");
+      return;
+    }
     auto res = std::make_shared<std_srvs::srv::Trigger::Response>();
     on_save_map(res);
     if (!res->success) RCLCPP_ERROR(get_logger(), "no map saved: %s", res->message.c_str());
@@ -1643,7 +1667,8 @@ class StrataslamNode : public rclcpp::Node {
   Timestamp newest_camera_ = 0, last_ext_stamp_ = 0;
   bool ext_tf_reported_ = false, ext_odom_warned_ = false;
   std::optional<Timestamp> first_unodometered_;  ///< first camera frame without external odometry
-  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr save_srv_, session_srv_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr save_srv_, session_srv_, discard_srv_;
+  std::atomic<bool> discard_on_stop_{false};  ///< ~/discard_map: no save when the node stops
   rclcpp::Service<strataslam_msgs::srv::MarkFloorChange>::SharedPtr mark_srv_;
   rclcpp::TimerBase::SharedPtr cloud_timer_;
 };

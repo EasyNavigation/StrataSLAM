@@ -88,7 +88,8 @@ struct FusionOptions {
 };
 
 struct ConstraintReport {
-  std::string kind;  ///< transition, baro_height, floor_height_prior, cross_floor_match, anchor
+  std::string kind;  ///< transition, baro_height, floor_height_prior, cross_floor_match, anchor,
+                     ///< odometry_placement
   std::string label;
   FloorId a = 0, b = 0;
   bool accepted = true;

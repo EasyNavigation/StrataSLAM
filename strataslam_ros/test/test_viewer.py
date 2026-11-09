@@ -193,9 +193,18 @@ def life(monkeypatch, tmp_path):  # type: ignore[no-untyped-def]
     WindowView.windows, WindowView.reopened = [], 0
     slams: list[subprocess.Popen] = []
 
-    def slam() -> subprocess.Popen:
-        p = subprocess.Popen([sys.executable, "-c", "import rclpy; rclpy.init(); rclpy.spin(rclpy.create_node('strataslam_node'))"],
-                             env=os.environ.copy())
+    def slam(discarded: Path | None = None) -> subprocess.Popen:
+        """A node named as the SLAM's; with `discarded`, it answers ~/discard_map by writing that file."""
+        code = "import rclpy; rclpy.init(); n = rclpy.create_node('strataslam_node')\n"
+        if discarded is not None:
+            code += ("from std_srvs.srv import Trigger\n"
+                     "def on_discard(req, res):\n"
+                     f"    open({str(discarded)!r}, 'w').write('discarded')\n"
+                     "    res.success = True\n"
+                     "    return res\n"
+                     "n.create_service(Trigger, '~/discard_map', on_discard)\n")
+        code += "rclpy.spin(n)\n"
+        p = subprocess.Popen([sys.executable, "-c", code], env=os.environ.copy())
         slams.append(p)
         return p
 
@@ -230,13 +239,31 @@ def test_ctrl_c_closes_the_window(life) -> None:  # type: ignore[no-untyped-def]
     assert not asked.exists()
 
 
-def test_closing_the_window_while_the_slam_runs_asks_first(life) -> None:  # type: ignore[no-untyped-def]
-    life.slam()
+def test_closing_the_window_while_the_slam_runs_asks_first(life, tmp_path) -> None:  # type: ignore[no-untyped-def]
+    discarded = tmp_path / "discarded"
+    life.slam(discarded)
     WindowView.seconds = [4.0, 1.0]  # the user closes the window, reopens it, and closes it again
-    asked = life.answers(viewer_mod.REOPEN, viewer_mod.CLOSE_VIEWER)
-    assert life.run() == viewer_mod.VIEWER_ONLY  # the launch does not end: the SLAM goes on
+    asked = life.answers(viewer_mod.REOPEN, viewer_mod.STOP_SLAM)
+    assert life.run() == 0  # the launch ends: the SLAM stops and saves its map
     assert WindowView.reopened == 1
     assert asked.read_text().count("q") == 2
+    assert not discarded.exists()
+
+
+def test_stopping_without_saving_tells_the_slam_to_discard_its_map(life, tmp_path) -> None:  # type: ignore[no-untyped-def]
+    discarded = tmp_path / "discarded"
+    life.slam(discarded)
+    WindowView.seconds = [4.0]
+    life.answers(viewer_mod.DISCARD)
+    assert life.run() == 0  # the launch ends
+    assert discarded.exists()  # and the SLAM was told before it stops
+
+
+def test_the_question_is_a_valid_program_with_the_three_answers() -> None:
+    compile(viewer_mod.DIALOG, "dialog", "exec")
+    for code in (viewer_mod.REOPEN, viewer_mod.STOP_SLAM, viewer_mod.DISCARD):
+        assert f", {code})" in viewer_mod.DIALOG
+    assert "11)" not in viewer_mod.DIALOG  # "close only the viewer" is gone: launch without the viewer instead
 
 
 def test_after_the_slam_the_window_stays_until_it_is_closed(life) -> None:  # type: ignore[no-untyped-def]

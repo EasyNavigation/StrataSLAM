@@ -73,6 +73,20 @@ def test_export_converts_floor_clouds(tmp_path: Path) -> None:
     assert pts_pcd.shape == pts.shape
 
 
+def test_export_takes_the_fused_building_or_else_the_one_saved_with_the_map(tmp_path: Path) -> None:
+    root = make_map(tmp_path / "map")
+    placed = np.asarray([[1.0, 2.0, 3.0]] * 4, dtype=np.float32)
+    mapio.write_pcd(root / "global_cloud.pcd", placed, None)  # as the odometry left the floors
+    assert cli.main(["export", str(root), "--format", "ply"]) == 0
+    pts, _ = mapio.read_ply(root / "export" / "global_cloud.ply")
+    assert pts.shape == (4, 3)
+    (root / "fused").mkdir()
+    mapio.write_pcd(root / "fused" / "global_cloud.pcd", placed[:2], None)  # refined by `strataslam fuse`
+    assert cli.main(["export", str(root), "--format", "ply"]) == 0
+    pts, _ = mapio.read_ply(root / "export" / "global_cloud.ply")
+    assert pts.shape == (2, 3)
+
+
 def test_eval_on_a_tiny_map(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     root = make_map(tmp_path / "map")
     gt = tmp_path / "gt"

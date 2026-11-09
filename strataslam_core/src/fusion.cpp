@@ -57,7 +57,14 @@ gtsam::Key key_of(FloorId f) { return gtsam::Symbol('f', static_cast<uint64_t>(f
 
 /// A relative constraint between two floor frames, in the Pose4 tangent space.
 struct Constraint {
-  enum class Kind { Transition, BaroHeight, FloorHeightPrior, Match, Anchor } kind;
+  enum class Kind {
+    Transition,
+    BaroHeight,
+    FloorHeightPrior,
+    Match,
+    Anchor,
+    OdometryPlacement
+  } kind;
   std::string label;
   FloorId a = 0, b = 0;
   Pose4 z;  // relative pose X_a^-1 X_b (Transition, Match, Anchor closed form)
@@ -81,6 +88,8 @@ const char* kind_name(Constraint::Kind k) {
       return "cross_floor_match";
     case Constraint::Kind::Anchor:
       return "anchor";
+    case Constraint::Kind::OdometryPlacement:
+      return "odometry_placement";
   }
   return "?";
 }
@@ -357,6 +366,51 @@ void add_height_constraints(FusionContext& c) {
 }
 
 /// 2. Initial values: relative constraints, then heights, propagated from the root.
+/// A floor that no measured relative pose links to the root (an elevator with neither IMU nor
+/// barometer, a floor opened after a tracking loss) would be left at the origin, on top of the
+/// root. The map records where the odometry left it (`placement`, ADR-0064): that becomes its
+/// constraint, the weakest of all, so that any measurement (heights, anchors, a declared level)
+/// overrides it.
+void add_placement_constraints(FusionContext& c) {
+  std::map<FloorId, Eigen::Vector4d> placement;
+  for (const auto& f : c.map.floors)
+    if (f.metadata.placement) placement[f.metadata.id] = *f.metadata.placement;
+  if (!placement.count(c.root)) return;
+  std::set<FloorId> linked{c.root};
+  for (bool grew = true; grew;) {
+    grew = false;
+    for (const auto& k : c.cons) {
+      if (!k.has_relative) continue;
+      if (linked.count(k.a) != linked.count(k.b)) {
+        linked.insert(k.a);
+        linked.insert(k.b);
+        grew = true;
+      }
+    }
+  }
+  const auto pose = [&](FloorId f) {
+    const Eigen::Vector4d& v = placement.at(f);
+    return Pose4(v(0), v.tail<3>());
+  };
+  for (FloorId f : c.floors) {
+    if (linked.count(f) || !placement.count(f)) continue;
+    Constraint k;
+    k.kind = Constraint::Kind::OdometryPlacement;
+    k.label = "floor " + std::to_string(f);
+    k.a = c.root;
+    k.b = f;
+    k.z = pose(c.root).inverse() * pose(f);
+    // (yaw, x, y, z): the odometry across an unmeasured change, weaker than any measurement.
+    k.cov = Eigen::Vector4d(0.1 * 0.1, 1.0, 1.0, 1.0).asDiagonal();
+    k.has_relative = true;
+    c.cons.push_back(k);
+    c.res.warnings.push_back("floor " + std::to_string(f) + " is not linked to floor " +
+                             std::to_string(c.root) +
+                             " by any measured relative pose; placed where the odometry left it "
+                             "(weak: give anchors)");
+  }
+}
+
 void propagate_initial_values(FusionContext& c) {
   std::vector<Constraint>& cons = c.cons;
   std::map<FloorId, Pose4>& init = c.init;
@@ -693,6 +747,7 @@ Result<FusionResult> fuse(const MapData& map, const FusionOptions& opt) {
   add_transition_constraints(c);
   add_match_and_anchor_constraints(c);
   add_height_constraints(c);
+  add_placement_constraints(c);
   // 2. initial values propagated from the root, then the structural stacking of every pair of
   // floors
   propagate_initial_values(c);
