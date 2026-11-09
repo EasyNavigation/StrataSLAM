@@ -603,6 +603,7 @@ class StrataslamNode : public rclcpp::Node {
     while (!camera_queue_.empty()) {
       const Timestamp stamp = camera_queue_.front().first;
       if (wait && stamp > last_ext_stamp_ && stamp + kCameraWait > newest_camera_) break;
+      if (cfg_.sensors.external_odometry.enabled) warn_if_no_ext_odometry(stamp);
       const auto process = std::move(camera_queue_.front().second);
       camera_queue_.pop_front();
       process();
@@ -622,16 +623,88 @@ class StrataslamNode : public rclcpp::Node {
   }
 
   /// The external odometry from TF: the transforms `external_odometry.frame` -> robot.base_frame
-  /// (wheels).
+  /// (wheels). The odometry may move a frame above the base instead (odom -> base_footprint, with
+  /// base_footprint -> base_link fixed in the URDF, while the profile names base_link): the moving
+  /// transform is composed with the fixed chain below it. A transform from the odometry frame to a
+  /// frame that is not an ancestor of the base is not the robot's motion and is skipped.
   void on_ext_tf(const tf2_msgs::msg::TFMessage& m) {
+    const std::string& odom = cfg_.sensors.external_odometry.frame;
+    const std::string& base = cfg_.robot.base_frame;
     for (const auto& t : m.transforms) {
-      if (t.header.frame_id != cfg_.sensors.external_odometry.frame ||
-          t.child_frame_id != cfg_.robot.base_frame)
-        continue;
-      if (slam_) slam_->add_odom({stamp_ns(t.header.stamp), to_pose(t.transform)});
+      if (t.header.frame_id != odom) continue;
+      gtsam::Pose3 T_odom_base = to_pose(t.transform);
+      if (t.child_frame_id != base) {
+        const auto below = fixed_chain_to_base(t.child_frame_id);
+        if (!below) continue;
+        T_odom_base = T_odom_base * *below;
+      }
+      if (!ext_tf_reported_) {
+        ext_tf_reported_ = true;
+        const std::string chain = t.child_frame_id == base ? ""
+                                                           : " composed with the fixed " +
+                                                                 t.child_frame_id + " -> " + base;
+        RCLCPP_INFO(get_logger(), "wheel odometry: TF %s -> %s%s", odom.c_str(),
+                    t.child_frame_id.c_str(), chain.c_str());
+      }
+      if (slam_) slam_->add_odom({stamp_ns(t.header.stamp), T_odom_base});
       last_ext_stamp_ = std::max(last_ext_stamp_, stamp_ns(t.header.stamp));
     }
     drain_camera(false);
+  }
+
+  /// `frame` -> robot.base_frame when `frame` is an ancestor of the base below the odometry frame
+  /// (the base's parents are followed up to it); nullopt otherwise, or while TF does not have the
+  /// chain yet (its static transforms arrive after the first odometry).
+  std::optional<gtsam::Pose3> fixed_chain_to_base(const std::string& frame) {
+    const std::string& base = cfg_.robot.base_frame;
+    const std::string& odom = cfg_.sensors.external_odometry.frame;
+    std::string f = base, parent;
+    bool ancestor = false;
+    for (int depth = 0; depth < 32 && tf_buffer_->_getParent(f, tf2::TimePointZero, parent);
+         ++depth) {
+      if (parent == frame) {
+        ancestor = true;
+        break;
+      }
+      if (parent == odom) break;
+      f = parent;
+    }
+    if (!ancestor) return std::nullopt;
+    try {
+      return to_pose(tf_buffer_->lookupTransform(frame, base, tf2::TimePointZero).transform);
+    } catch (const tf2::TransformException&) {
+      return std::nullopt;
+    }
+  }
+
+  /// Frames that went on without the external odometry because none had arrived: after 2 s of them
+  /// (camera time) the profile and the robot's TF disagree, which is said once with what TF has.
+  void warn_if_no_ext_odometry(Timestamp stamp) {
+    constexpr Timestamp kGrace = 2'000'000'000;  // ns
+    if (ext_odom_warned_ || last_ext_stamp_ != 0) return;
+    if (!first_unodometered_) first_unodometered_ = stamp;
+    if (stamp - *first_unodometered_ < kGrace) return;
+    ext_odom_warned_ = true;
+    const auto& ext = cfg_.sensors.external_odometry;
+    if (!ext.topic.empty()) {
+      RCLCPP_WARN(get_logger(),
+                  "external_odometry: nothing on %s after 2 s of camera frames: the camera "
+                  "tracks without the wheel odometry (check the topic)",
+                  ext.topic.c_str());
+      return;
+    }
+    std::string children;
+    for (const auto& name : tf_buffer_->getAllFrameNames()) {
+      std::string parent;
+      if (tf_buffer_->_getParent(name, tf2::TimePointZero, parent) && parent == ext.frame)
+        children += (children.empty() ? "" : ", ") + name;
+    }
+    RCLCPP_WARN(get_logger(),
+                "external_odometry: no TF %s -> %s after 2 s of camera frames: the camera tracks "
+                "without the wheel odometry. TF has %s -> {%s}: set robot.base_frame to the frame "
+                "the odometry moves, or one fixed below it",
+                ext.frame.c_str(), cfg_.robot.base_frame.c_str(), ext.frame.c_str(),
+                children.empty() ? "nothing" : children.c_str());
   }
 
   /// A sensor topic of the profile that the bag does not have is a mistake (a namespace, a typo):
@@ -1568,6 +1641,8 @@ class StrataslamNode : public rclcpp::Node {
   std::deque<std::pair<Timestamp, std::function<void()>>>
       camera_queue_;  ///< frames waiting for the external odometry
   Timestamp newest_camera_ = 0, last_ext_stamp_ = 0;
+  bool ext_tf_reported_ = false, ext_odom_warned_ = false;
+  std::optional<Timestamp> first_unodometered_;  ///< first camera frame without external odometry
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr save_srv_, session_srv_;
   rclcpp::Service<strataslam_msgs::srv::MarkFloorChange>::SharedPtr mark_srv_;
   rclcpp::TimerBase::SharedPtr cloud_timer_;

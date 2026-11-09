@@ -119,6 +119,11 @@
 - `docs/user/install.md` rewritten and tested; `docs/data_format.md` documents `fused/`, the optional payload folders and the integrity checks.
 
 ### Fixed
+- The wheel odometry from TF (`external_odometry.frame`) reached the node only as a transform to `robot.base_frame`
+  itself: a robot whose odometry moves a frame above it (`odom -> base_footprint`, with `base_footprint -> base_link`
+  fixed and `base_frame: base_link`, the Kobuki) mapped without it, silently, and in the simulated Kobuki every
+  tracking loss opened a floor. The moving transform is now composed with the fixed chain below it, and an odometry
+  that does not arrive is reported after 2 s of camera frames with the frames TF has under it (ADR-0063).
 - The per-keyframe clouds of a saved map (`clouds/<id>.pcd`) were in the frame of the sensor that took them, with
   neither that frame nor the sensor's mounting recorded: a reader could not place them (a camera's landed turned by
   90 deg). They are now saved in the keyframe's base frame, placed by its pose, and `metadata.yaml` says so

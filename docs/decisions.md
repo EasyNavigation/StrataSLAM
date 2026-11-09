@@ -978,3 +978,21 @@ only other readers of the format were affected.
   every map; it only learns from the new field how to place the per-keyframe clouds. Recording the mounting instead
   would have needed it per keyframe (a camera + LiDAR map can hold clouds of either sensor) and every reader to apply
   it.
+
+## ADR-0063 · The wheel odometry may move a frame above the base
+
+`external_odometry.frame` took only the transforms `odom -> robot.base_frame` themselves. A robot whose odometry moves
+a frame above the one the profile names (the Kobuki: `odom -> base_footprint` from the driver, `base_footprint ->
+base_link` fixed in the URDF, `base_frame: base_link`) gave the node no odometry at all, and nothing said so:
+`strataslam doctor` found a TF path `odom -> base_link` and passed, the node's start-up log said the TF came from the
+robot, and the camera tracked on its own. In the simulated Kobuki every tracking loss then opened a session and, with
+no relocalization, a floor: three floors in a one-storey house.
+
+- **Decision.** A transform `odom -> X` is the robot's motion when X is the base or one of its ancestors below `odom`
+  (followed up the base's parents in TF): it is composed with the fixed chain `X -> base` (looked up at the latest
+  time: the robot's own joints). A transform from `odom` to a frame that is not above the base (another robot's, a
+  sensor's) is skipped. The start-up log says which chain the odometry comes through.
+- **Said when it does not arrive.** After 2 s of camera frames (their time) that went on without any odometry, the node
+  warns once, with the frames TF has under the odometry frame, and the camera keeps tracking on its own as before.
+- **Not a frame of the profile.** Naming both frames (`frame: odom`, plus the frame the odometry moves) would have put
+  in the profile what TF already says.

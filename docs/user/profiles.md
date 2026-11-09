@@ -48,7 +48,10 @@ Rules (validated before anything starts, all errors reported at once as `config 
   `enabled: false`.
 - A camera needs `rgb_topic`, `depth_topic` and `info_topic`.
 - `external_odometry` needs a `topic` (nav_msgs/Odometry) or a `frame` (the TF `frame -> base_frame`, what the
-  wheel odometry of most ROS robots publishes), not both; `odometry_from: camera|lidar` needs that sensor.
+  wheel odometry of most ROS robots publishes), not both; `odometry_from: camera|lidar` needs that sensor. The TF may
+  move a frame above the base (`odom -> base_footprint`, with `base_footprint -> base_link` fixed in the URDF and
+  `base_frame: base_link`): it is composed with that fixed chain (ADR-0063). If no odometry arrives the node says so
+  after 2 s of camera frames, with the frames TF has under `frame`.
 - `barometer.reference_topic`: the sensor_msgs/FluidPressure of a fixed base station; the robot's height becomes the
   difference between the two, which cancels the weather (a front moving through changes the pressure by about 1 hPa,
   8 m, in an hour). `settle_time_s` is how long the low-pass filter of the barometric height takes to settle within
