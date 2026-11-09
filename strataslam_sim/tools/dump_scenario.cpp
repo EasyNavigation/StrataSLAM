@@ -6,6 +6,7 @@
 #include <fstream>
 #include <string>
 
+#include "strataslam/io/map_io.hpp"
 #include "strataslam_sim/scenarios.hpp"
 
 int main(int argc, char** argv) {
@@ -21,6 +22,9 @@ int main(int argc, char** argv) {
   strataslam_sim::Simulator sim(spec.building, spec.trajectory, spec.sim);
 
   std::ofstream(out + "/report.md") << r.report.to_markdown();
+  // The map itself, with every floor's placement: keyframes in one continuous frame (ADR-0064).
+  if (const auto w = strataslam::write_map(out + "/map", r.map); !w.ok())
+    std::fprintf(stderr, "map not written: %s\n", w.error().message.c_str());
   {
     std::ofstream f(out + "/boxes.csv");
     f << "level,cx,cy,cz,hx,hy,hz,r00,r01,r10,r11,dynamic,door\n";

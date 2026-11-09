@@ -43,7 +43,7 @@ def with_fixed_child(src: Path, dst: Path, parent: str, child: str) -> Path:
     for t in topics:
         writer.create_topic(t)
     if not any(t.name == "/tf_static" for t in topics):
-        writer.create_topic(rosbag2_py.TopicMetadata(name="/tf_static", type="tf2_msgs/msg/TFMessage",
+        writer.create_topic(rosbag2_py.TopicMetadata(id=0, name="/tf_static", type="tf2_msgs/msg/TFMessage",
                                                      serialization_format="cdr"))
     added = False
     while reader.has_next():
