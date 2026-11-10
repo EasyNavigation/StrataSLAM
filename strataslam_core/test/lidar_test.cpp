@@ -7,6 +7,7 @@
 
 #include "strataslam/frontend/lidar_frontend.hpp"
 #include "strataslam/mapping/voxel_grid.hpp"
+#include "strataslam/pipeline/slam_system.hpp"
 #include "strataslam/place_recognition/scan_context.hpp"
 
 using namespace strataslam;
@@ -491,4 +492,166 @@ TEST(PlanarScan, ASweepOfAFewCellsIsTrackedNotDropped) {
   LidarFrontendConfig as_3d = planar_config();
   as_3d.min_points = 100;
   EXPECT_FALSE(second_valid(as_3d));
+}
+
+// ---------------- A planar scanner with a camera, the whole pipeline (ADR-0066, 0068, 0069)
+// ----------------
+
+namespace {
+
+constexpr double kScannerHeight = 0.3, kCameraHeight = 1.0, kWallHeight = 2.0;
+
+/// The colour of each wall and box face of `floor_plan()` (its segment index).
+std::array<uint8_t, 3> wall_colour(size_t segment) {
+  return {static_cast<uint8_t>(40 + 13 * segment), static_cast<uint8_t>(200 - 11 * segment),
+          static_cast<uint8_t>(segment % 2 ? 230 : 20)};
+}
+
+/// What a camera 1 m up on a base at (x, y, heading), looking along the base's x, sees of the
+/// plan's walls (2 m high): a 64 x 48 RGB-D frame, each wall in its colour, the floor and beyond
+/// the walls' top invalid.
+RgbdFrame camera_view(double x, double y, double heading, Timestamp stamp) {
+  RgbdFrame f;
+  f.stamp = stamp;
+  f.K.width = 64;
+  f.K.height = 48;
+  f.K.fx = f.K.fy = 50;
+  f.K.cx = 31.5;
+  f.K.cy = 23.5;
+  f.depth.width = f.rgb.width = 64;
+  f.depth.height = f.rgb.height = 48;
+  f.depth.meters.assign(64 * 48, 0.0f);
+  f.rgb.data.assign(64 * 48 * 3, 0);
+  const auto plan = floor_plan();
+  const double c = std::cos(heading), s = std::sin(heading);
+  for (int v = 0; v < 48; ++v)
+    for (int u = 0; u < 64; ++u) {
+      // Optical (x right, y down, z forward) -> base (x forward, y left, z up) -> plan.
+      const double ox = (u - f.K.cx) / f.K.fx, oy = (v - f.K.cy) / f.K.fy;
+      const Eigen::Vector2d d(c * 1.0 - s * (-ox), s * 1.0 + c * (-ox));  // per unit of z-depth
+      const double dz = -oy;
+      double best = 1e9;
+      size_t hit = 0;
+      for (size_t k = 0; k < plan.size(); ++k) {
+        const Eigen::Vector2d e = plan[k].second - plan[k].first,
+                              w = plan[k].first - Eigen::Vector2d(x, y);
+        const double den = d.x() * e.y() - d.y() * e.x();
+        if (std::abs(den) < 1e-12) continue;
+        const double tt = (w.x() * e.y() - w.y() * e.x()) / den,
+                     uu = (w.x() * d.y() - w.y() * d.x()) / den;
+        if (tt > 0.05 && uu >= 0 && uu <= 1 && tt < best) {
+          best = tt;
+          hit = k;
+        }
+      }
+      const double z = kCameraHeight + best * dz;
+      if (best > 6.0 || z < 0.0 || z > kWallHeight) continue;
+      const size_t i = static_cast<size_t>(v) * 64 + u;
+      f.depth.meters[i] = static_cast<float>(best);
+      const auto col = wall_colour(hit);
+      std::copy(col.begin(), col.end(), f.rgb.data.begin() + static_cast<std::ptrdiff_t>(3 * i));
+    }
+  return f;
+}
+
+/// A run along x then turning, a sweep and an image every 100 ms; the camera's stamps 40 ms ahead
+/// of the sweeps (they come first, as on the TIAGo). Returns the saved map.
+MapData planar_run(int views, double image_scale, PointCloud* live = nullptr) {
+  Config cfg;
+  cfg.robot.platform = Platform::Ground;
+  cfg.sensors.lidar.enabled = true;
+  cfg.sensors.lidar.type = LidarType::Planar;
+  cfg.sensors.lidar.min_range = 0.1;
+  cfg.sensors.lidar.max_range = 10.0;
+  cfg.sensors.camera.enabled = true;
+  cfg.fusion.odometry_from = OdometryFrom::Lidar;
+  cfg.fusion.colorize_cloud = true;
+  cfg.fusion.colorize_views = views;
+  cfg.fusion.colorize_image_scale = image_scale;
+  cfg.multifloor.mode = LevelMode::Planar;
+  Extrinsics ext;
+  ext.T_base_lidar = gtsam::Pose3(gtsam::Rot3(), gtsam::Point3(0, 0, kScannerHeight));
+  ext.T_base_camera =
+      gtsam::Pose3(gtsam::Rot3((Eigen::Matrix3d() << 0, 0, 1, -1, 0, 0, 0, -1, 0).finished()),
+                   gtsam::Point3(0, 0, kCameraHeight));
+  SlamSystem slam(cfg, ext);
+  double x = -1.5, y = 0.0, th = 0.0;
+  for (int k = 0; k <= 50; ++k) {
+    if (k > 0) {
+      if (k <= 25) {
+        x += 0.05;
+      } else {
+        th += 0.06;
+        x += 0.04 * std::cos(th);
+        y += 0.04 * std::sin(th);
+      }
+    }
+    const Timestamp t = 1'000'000'000LL + k * 100'000'000LL;
+    slam.add_rgbd(camera_view(x, y, th, t + 40'000'000LL));
+    LidarScan scan;
+    scan.points = sweep(x, y, th);
+    scan.stamp = t;
+    slam.add_lidar(scan);
+  }
+  if (live) *live = slam.floor_cloud_colored(0, 0.05);
+  return slam.finalize("");
+}
+
+double coloured_share(const std::map<KeyframeId, PointCloud>& clouds) {
+  size_t n = 0, c = 0;
+  for (const auto& [id, pc] : clouds) {
+    n += pc.points.size();
+    for (const auto& k : pc.colors) c += !(k[0] == 128 && k[1] == 128 && k[2] == 128);
+  }
+  return n ? static_cast<double>(c) / n : 0.0;
+}
+
+}  // namespace
+
+TEST(PlanarScanWithCamera, TheMapIsTheCamerasDepthInColourPlacedByTheScan) {
+  PointCloud live;
+  const MapData m = planar_run(8, 1.0, &live);
+  ASSERT_EQ(m.floors.size(), 1u);
+  const FloorData& f = m.floors[0];
+  ASSERT_GT(f.keyframes.size(), 5u);
+  // Every keyframe has its depth cloud (an image 40 ms from each sweep), in its base frame and
+  // coloured.
+  EXPECT_EQ(f.depth_clouds.size(), f.keyframes.size());
+  ASSERT_TRUE(f.metadata.depth_origin && f.metadata.cloud_origin);
+  EXPECT_NEAR(f.metadata.depth_origin->z(), kCameraHeight, 1e-9);
+  EXPECT_NEAR(f.metadata.cloud_origin->z(), kScannerHeight, 1e-9);
+  // The floor cloud is 3D (the walls up to 2 m, where the scan sees one line at 0.3 m) and in the
+  // walls' colours.
+  ASSERT_TRUE(f.floor_cloud.has_value());
+  const PointCloud& fc = *f.floor_cloud;
+  ASSERT_EQ(fc.colors.size(), fc.points.size());
+  size_t high = 0, right_wall = 0, right_wall_ok = 0;
+  for (size_t i = 0; i < fc.points.size(); ++i) {
+    const Eigen::Vector3f& p = fc.points[i];
+    high += p.z() > 1.2f;
+    // The wall x = 4 of the plan (segment 1) is at x = 5.5 in the floor frame, which starts at the
+    // first keyframe.
+    if (std::abs(p.x() - 5.5f) < 0.05f && p.z() > 0.5f && p.z() < 1.5f && std::abs(p.y()) < 2.5f) {
+      ++right_wall;
+      right_wall_ok += fc.colors[i] == wall_colour(1);
+    }
+  }
+  EXPECT_GT(high, 100u);
+  ASSERT_GT(right_wall, 20u);
+  EXPECT_GT(static_cast<double>(right_wall_ok) / right_wall, 0.9);
+  // The live view's cloud: the same, coloured.
+  ASSERT_FALSE(live.points.empty());
+  EXPECT_EQ(live.colors.size(), live.points.size());
+}
+
+TEST(PlanarScanWithCamera, TheImagesAroundColourWhatAKeyframesOwnImageMissed) {
+  // The scan sees 190 deg, the camera 65: the scan's points behind and beside the camera are grey
+  // with its own image alone, and the images of the keyframes around colour part of them (also from
+  // images kept at half size).
+  const double own = coloured_share(planar_run(0, 1.0).floors[0].clouds);
+  const double around = coloured_share(planar_run(8, 1.0).floors[0].clouds);
+  const double half = coloured_share(planar_run(8, 0.5).floors[0].clouds);
+  EXPECT_GT(own, 0.05);
+  EXPECT_GT(around, own + 0.05);
+  EXPECT_GT(half, own + 0.05);
 }
