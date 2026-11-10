@@ -101,7 +101,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: scripts/install_deps.sh core  # runtime libraries of the downloaded binaries
+      # The libraries the downloaded binaries load, and those Open3D's wheel loads (EGL, GL, OpenMP, libusb) for the
+      # cloud tests: `core` downloaded 241 MB of -dev packages, which a slow mirror held past the job's 30 minutes.
+      - run: |
+          scripts/install_deps.sh runtime
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y --no-install-recommends \
+            libegl1 libgl1 libgomp1 libusb-1.0-0
       - uses: actions/download-artifact@v4
         with:
           name: core-binaries

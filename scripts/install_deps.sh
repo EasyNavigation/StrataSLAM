@@ -4,6 +4,8 @@
 #
 #   scripts/install_deps.sh ros    # full system: core, simulator, ROS 2 node, messages, CLI (needs ROS 2 Jazzy apt repo)
 #   scripts/install_deps.sh core   # core + simulator only, plain Ubuntu, no ROS at all
+#   scripts/install_deps.sh runtime  # only the shared libraries a core + simulator built with `core` loads (to run
+#                                    # binaries built elsewhere, as the CI's Python job does)
 #
 # Runs apt through sudo when not root.
 set -euo pipefail
@@ -40,8 +42,17 @@ case "$mode" in
     # Empty placeholder for the missing file: it is checked for existence, never linked.
     [ -e "$lib" ] || $SUDO touch "$lib"
     ;;
+  runtime)
+    $SUDO "${apt[@]}" update
+    # What `ldd` lists for the core's and the simulator's libraries and executables, without the -dev packages:
+    # 65 MB instead of `core`'s 478 MB on a clean Ubuntu (241 MB on the CI's runner), which a slow mirror took over
+    # half an hour to serve.
+    $SUDO "${install[@]}" libgtsam4 libboost-filesystem1.83.0 libboost-serialization1.83.0 libboost-timer1.83.0 \
+      libtbb12 libyaml-cpp0.8 libopencv-core406t64 libopencv-imgproc406t64 libopencv-flann406t64 \
+      libopencv-features2d406t64 libopencv-calib3d406t64
+    ;;
   *)
-    echo "usage: $0 ros|core" >&2
+    echo "usage: $0 ros|core|runtime" >&2
     exit 2
     ;;
 esac

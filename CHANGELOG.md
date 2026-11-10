@@ -148,6 +148,9 @@
 - `docs/user/install.md` rewritten and tested; `docs/data_format.md` documents `fused/`, the optional payload folders and the integrity checks.
 
 ### Fixed
+- The CI's Python job installs only the shared libraries the downloaded binaries and Open3D load
+  (`scripts/install_deps.sh runtime`, 66 MB on a clean Ubuntu) instead of the build's -dev packages (241 MB on the
+  runner): an Azure mirror serving 142 kB/s held it past its 30 minutes twice.
 - `fusion.colorize_cloud` did nothing with camera odometry: a camera's map is now coloured with the pixels of its
   depth points (ADR-0068). Per-keyframe clouds keep their colours too.
 - The wheel odometry from TF (`external_odometry.frame`) reached the node only as a transform to `robot.base_frame`
