@@ -20,6 +20,7 @@ ros2 service call /strataslam_node/save_map std_srvs/srv/Trigger   # prints the 
 # 4. Clouds (PCD), the fusion of the two floors into one building, and the error against the ground truth.
 MAP=$(ls -dt ~/strataslam_maps/*/ | head -1)   # the most recent map (the path save_map printed)
 strataslam export $MAP      # -> $MAP/export/global_cloud.pcd (the building as saved), floor_000.pcd, floor_001.pcd
+strataslam export $MAP --format grid   # -> $MAP/export/floor_000.pgm/.yaml, ... (occupancy grids for nav2)
 strataslam fuse $MAP        # -> $MAP/fused/global_cloud.pcd, floor_transforms.yaml, fusion_report.yaml
 strataslam eval $MAP --gt ~/strataslam_demo   # ATE against trajectory.tum
 ```
@@ -100,7 +101,8 @@ If you must play the bag (to watch it in another tool), `ros2 bag play -r 0.5` h
 time for every scan; the node logs how many scans it received when it saves the map.
 Offline there is no loss, and the result is identical run after run whatever `runtime.threads` is: the LiDAR
 registration groups its sums the same way with one thread or twenty (ADR-0048), so the map does not depend on the
-machine's number of cores either. It supports LiDAR, camera, IMU, barometer and external odometry. Each colour image (or feature frame
+machine's number of cores either. It supports LiDAR (3D point clouds, or the sweeps of a 2D scanner with
+`lidar.type: 2d`), camera, IMU, barometer and external odometry. Each colour image (or feature frame
 with `features_topic:=`) is paired with the depth image of the closest stamp within 25 ms and with the latest
 `camera_info`. Use the colour camera's `camera_info`: some drivers publish the depth one without K, and the node then
 warns and drops the frames. The log ends with the number of messages, LiDAR scans and camera frames processed.
@@ -120,7 +122,9 @@ ros2 launch strataslam_ros strataslam.launch.py profile:=profile.yaml viewer:=tr
   not move the framing, under `sensor` in the entity tree. Two tabs show it: **3D: floors**, each floor in its
   colour, and **3D: height**, the same cloud coloured by height from blue (lowest point mapped so far) to red
   (highest), as RViz's axis colour does; the colours are spread again over the whole map when it grows by more
-  than half a metre. Each tab keeps its own camera.
+  than half a metre. With `fusion.colorize_cloud` and a camera, a third tab, **3D: colour**, shows the map with the
+  camera's colours (grey where no image saw it), as `/strataslam/floor_cloud` carries them (an `rgb` field, as RViz
+  and PCL read). Each tab keeps its own camera.
 - **Top view**: the map from above, each floor in its colour.
 - **Level line**: the height of the robot over time, coloured by floor (grey while in a transition or lost). With a
   barometer, its filtered height is a magenta line, aligned with the robot's height at its first reading: in each

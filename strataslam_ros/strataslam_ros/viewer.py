@@ -237,9 +237,18 @@ class Viewer(Node):
             self.pending_clouds[floor] = m
             return
         p = point_cloud2.read_points_numpy(m, field_names=("x", "y", "z"), skip_nans=True).astype(np.float64)
+        colours = None
+        if any(f.name == "rgb" for f in m.fields):  # the camera's colours (colorize_cloud, ADR-0069)
+            colours = rgb_of(point_cloud2.read_points_numpy(m, field_names=("rgb",), skip_nans=True))
         odom_from_floor = np.linalg.inv(self.floor_from_odom[floor])
         p = p @ odom_from_floor[:3, :3].T + odom_from_floor[:3, 3]
-        self.view.floor_cloud(self.t or 0.0, floor, p)
+        self.view.floor_cloud(self.t or 0.0, floor, p, colours)
+
+
+def rgb_of(packed: np.ndarray) -> np.ndarray:
+    """N x 3 uint8 from PCL's packed `rgb` (a FLOAT32 field holding 0x00RRGGBB)."""
+    u = np.ascontiguousarray(packed, dtype=np.float32).reshape(-1).view(np.uint32)
+    return np.stack([(u >> 16) & 0xFF, (u >> 8) & 0xFF, u & 0xFF], axis=1).astype(np.uint8)
 
 
 PATH_GAP_S = 5.0  # keyframes further apart in time are drawn as separate pieces of a floor's path

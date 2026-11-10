@@ -1032,3 +1032,128 @@ means, and mapping without a window is launching without `viewer:=true`.
   the node's new `~/discard_map`, after which the node does not save when it stops (live or at the end of a bag) and
   logs it. An explicit `~/save_map` still saves. If the node does not answer, stopping saves, which loses nothing.
   Ctrl+C keeps saving.
+
+## ADR-0066 · A planar laser scanner (`lidar.type: 2d`)
+
+Many ground robots carry a planar laser scanner and no 3D LiDAR (a Tiago's base laser, a Kobuki's RPLidar), and
+v1 refused `type: 2d`: such a robot was mapped by its camera alone. On the Tiago's `slam_test` (137 s, 30 m around a
+room with tables, 5.4 turns, `/scan` 190 deg at 10 Hz) the camera's map is worse than the odometry it is given
+(PAL's own laser odometry in `odom -> base_footprint`): its walls come out doubled, 0.3 deg of noise per keyframe.
+
+- **Decision.** `lidar.type: 2d` reads sensor_msgs/LaserScan (each ray a point in the scanner's plane, its time from
+  the driver's `time_increment` for the deskew) and goes through the LiDAR frontend, with its keyframes, local map,
+  loop verification and graph. Ground robots only: a sweep measures the motion in its plane.
+- **Registered in its plane.** GICP solves the sensor's x, y and heading; height, roll and pitch are held at the
+  prediction (small_gicp's `RestrictDoFFactor`), so nothing a sweep cannot see is estimated from noise. A sweep is one
+  line of points, whose covariances cannot tell a wall's normal from the vertical: for the registration only, it is
+  stacked in three copies 10 cm apart along the sensor's z, every wall a vertical strip. The kept clouds are the
+  sweep itself. The degeneracy test looks at x and y only (z is the restraint's, not a measurement).
+- **Sampling of an indoor map.** Voxels of 5 cm (the scanner's own spacing at a few metres; 0.4 m for a 3D LiDAR),
+  correspondences within 0.5 m, a local map within twice the range. A sweep facing an obstacle at arm's length keeps
+  some 60 cells: the minimum to track is 30 (100 for a 3D LiDAR). With 100, `slam_test` lost 13 sweeps at 77 s while
+  the robot turned 16 deg, and the registration that followed converged 12 deg wrong.
+- **Loop closures.** A camera's candidates are verified and refined by the scans (`auto`), their guess put in the
+  scan's plane first: the camera's estimate has centimetres and tenths of a degree out of it, which the registration
+  would hold and the graph's consistency check refused (the right loop of `slam_test`, fitness 0.99, was refused
+  until then). Without a camera, Scan Context on the sweeps (`lidar`).
+- **Result** (`slam_test`, one thread; no ground truth: the consistency of the walls, cells of 5 cm the sweeps
+  occupy placed by each trajectory, fewer is sharper): camera only 15137, PAL's laser odometry 9133, scan and camera
+  8623 (1 loop), scan alone 8659 (19 loops). The camera-only and 3D LiDAR runs are unchanged to the bit
+  (`tiago_camera_only` on `slam_test`, `tiago_lidar_camera` on `pasillo_Tiago`).
+- **Not done.** The wheel odometry is not the scan's prediction (constant velocity, as for a 3D LiDAR): in a long
+  corridor a sweep is degenerate along it, and only the bound on the acceleration keeps the registration there.
+
+## ADR-0067 · An occupancy grid per floor for navigation (`strataslam export --format grid`)
+
+A map gave point clouds only, and a ground robot that navigates with nav2 needs an occupancy grid: with a planar
+scanner (ADR-0066) the cloud is a thin slice that a planner cannot use as it is, and a 3D cloud has the floor and the
+ceiling in it.
+
+- **Decision.** `strataslam export --format grid` writes one grid per floor, `export/floor_<k>.pgm` and `.yaml` in
+  nav2 map_server's trinary format, in the frame of that floor's cloud. Offline, from what the map keeps: the
+  keyframes' poses and their clouds (in the base frame, ADR-0062). Nothing changes in the node or the map format.
+- **Obstacles: a band of heights above the base.** A point is an obstacle when it lies between `--min-height` and
+  `--max-height` above the base of the keyframe that saw it (0.05-2.0 m by default: above the floor, below a lamp),
+  measured from that keyframe so that a floor whose height drifted keeps its obstacles. A planar scanner's sweep is
+  inside the band (0.09 m on the Tiago); a 3D LiDAR's or a camera's cloud is cut to it.
+- **Free space: the rays from the sensor, in layers.** A ray goes from the sensor (its position in the base frame is
+  in the floor's metadata, ADR-0068) to its point, and clears at each step the layer of 0.1 m it is at: the scan
+  passing under a table at 0.3 m and the camera's rays passing over it to the wall do not clear the table top the
+  camera saw (with one layer for the whole band, `slam_test`'s tables came out free). Rays to points outside the band
+  clear the layers they cross. A cell counts once per keyframe; one that a keyframe saw as an obstacle is not also
+  free for it (rays grazing a wall cross its other cells). In each layer a cell is as dark as the fraction of its
+  observations that hit it (a person who walked by leaves it free); the cell is the darkest of its layers, unknown
+  where none was observed. A map written before the sensors' positions has its rays start at the base, horizontal at
+  each point's height: right for a planar scanner, an approximation for a 3D sensor.
+- **Refused:** a map written before `cloud_frame`, whose clouds are in a sensor frame it does not place.
+- **Result.** `slam_test` with the scanner alone: 383 x 340 cells of 5 cm in 0.5 s, the walls and the legs of the
+  tables; with the camera's depth (ADR-0068) the table tops too, in 4.7 s; `pasillo_Tiago` (3D LiDAR and camera):
+  corridors and doorways. Not loaded in nav2 in these tests.
+
+## ADR-0068 · A planar scanner with a camera maps in 3D; a camera's map has its colours
+
+With a planar scanner (ADR-0066) the scan tracks and the camera only proposed loop closures: the map was the scan's
+slice at 9 cm, the camera's depth was thrown away, and `colorize_cloud` coloured the few slice points the camera saw.
+With camera odometry `colorize_cloud` did nothing at all: the map had no colour. On `slam_test` the camera's depth
+placed by the scan's poses is the room in 3D with straight walls, where the camera's own poses fan them out (an
+offline composition first, to check that it was worth it).
+
+- **Decision: a second cloud per keyframe.** With a planar scanner and a camera, each keyframe keeps, beside its
+  scan, the camera's depth (every 8th pixel, as a camera keyframe's cloud) in its base frame and with its pixels'
+  colours: `depth_clouds/<id>.pcd`, an optional folder of the map. The scan stays the keyframe's cloud for the loop
+  verification and Scan Context; the floor and global clouds, the live view and the grid take both. Nothing in the
+  tracking or the graph changes: the keyframes and edges of `slam_test` are the same to the bit with it.
+- **The image nearest in time, moved to it.** The camera's stamps can run ahead of the scanner's (100 ms on the
+  TIAGo): the newest image was within 60 ms of a sweep for 8 % of the keyframes. The frames of the last half second
+  are kept and the nearest one within 150 ms is taken (175 of 196 keyframes); the keyframe's base is moved to its
+  time along the motion of the last scan interval (at 0.5 rad/s, 50 ms is 1.4 deg, 12 cm on a wall 5 m away). The
+  loop candidates keep their pairing (the newest image within 60 ms), so that the 3D LiDAR mode does not change.
+  Composed offline, the walls are sharpest with the camera's stamps 50 ms earlier, 3 % fewer cells than without:
+  a profile option for a camera-to-scanner time offset was left for a case that needs it.
+- **Colours from the pixels.** With camera odometry, every point of a keyframe's depth cloud takes the colour of the
+  pixel it came from; a LiDAR's points keep theirs from the image taken with the scan. The per-keyframe clouds are
+  saved with their colours too. Points no image saw stay grey.
+- **Where the sensors sit.** The floor metadata records `cloud_origin` and `depth_origin`, the sensors' positions in
+  the base frame, so that the grid casts its rays from them (ADR-0067). Optional: maps written before read without.
+- **Not done.** A 3D LiDAR with a camera keeps its own cloud only (it is 3D already).
+
+## ADR-0069 · The camera's colours: from the images around, and in the live view
+
+With a 3D LiDAR and a camera the saved map was coloured, but only the points inside the camera's field of view at
+each keyframe's own instant (31 % of `pasillo_Tiago`'s cloud), and the live view never showed colours: the node
+published the floor cloud as x y z, and the viewer coloured it by floor or by height. It read as `colorize_cloud`
+doing nothing.
+
+- **Decision: more views at save time.** Each keyframe's colours from its own image are kept as it is inserted (also
+  for the live view). When the map is saved, the points they left grey are coloured from the images of up to 8 other
+  keyframes of the floor within 6 m, nearest first, with the final poses. A view colours a point only where it lies
+  on the surface that view measured: a valid depth at its pixel within 0.3 m of the point's, and within the camera's
+  `depth_max`, so that a view never colours what was hidden from it or where it saw past the point. The own image
+  keeps its looser rule (an occlusion test where the depth is valid), as before.
+- **Live.** With `colorize_cloud`, `/strataslam/floor_cloud` carries an `rgb` field (PCL's packing, as RViz reads)
+  with the own-image colours; the viewer adds a tab **3D: colour** with the first coloured cloud. Without colours
+  the message and the viewer are as before.
+- **Result.** The keyframes and edges of `slam_test` (camera only, scanner and camera) and `pasillo_Tiago` (3D LiDAR
+  and camera) are the same to the bit. `pasillo_Tiago`'s coloured share went from 31.4 % to 33.6 % only: its camera
+  depth has 20 % valid pixels in the corridor, and the LiDAR's points and the camera's depth disagree by 0.6 m
+  (median) even with each keyframe's own image, whatever the time offset, so that the surface test turns most views
+  down. That is the bag's camera-LiDAR alignment (the head camera's extrinsic or its depth registration), which the
+  test is there to catch; a rule without it would have spread wrong colours. On `slam_test` with the scanner 97 % of
+  the cloud is coloured (the camera's depth carries its own colours), and the live view received it.
+- **Its cost, in the profile.** The images of the other keyframes are those already kept for colouring at save time
+  (a whole RGB-D frame per keyframe, about 2 MB at 640x480), and trying them takes time at save. Two options trade
+  colour for resources, never the geometry: `fusion.colorize_views` (8; 0: each keyframe's own image only) and
+  `fusion.colorize_image_scale` (1.0; 0.5, 0.333, 0.25: the kept images decimated, the intrinsics to match; a
+  keyframe's own colours always come from its full image). `pasillo_Tiago`, one thread, the same trajectory in all:
+
+  | Setting | Run (s) | Peak memory | Coloured |
+  | --- | --- | --- | --- |
+  | `colorize_views: 8`, `colorize_image_scale: 1.0` (default) | 131 | 1.18 GB | 33.6 % |
+  | `colorize_views: 8`, `colorize_image_scale: 0.5` | 127 | 0.55 GB | 33.6 % |
+  | `colorize_views: 0` (no images kept) | 108 | 0.34 GB | 31.4 % |
+
+  The defaults keep the colours as they were; at 0.5 this bag loses no colour for half the memory, and a long run
+  is where it matters (the images grow with the keyframes).
+- **Not done.** A doctor check of the LiDAR-depth agreement (the median distance of the LiDAR's points to the depth
+  image), which would have told the misalignment above before mapping.
+

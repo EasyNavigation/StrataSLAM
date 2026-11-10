@@ -101,10 +101,35 @@ std::pair<std::shared_ptr<Cloud>, std::shared_ptr<Tree>> preprocess(const Cloud&
   return {ds, tree};
 }
 
+/// GICP with some degrees of freedom held at the initial guess (masks in small_gicp's order, in the
+/// source's frame: rotation x y z, translation x y z; 1 = solved).
+small_gicp::RegistrationResult align_gicp_masked(const Cloud& target, const Cloud& source,
+                                                 const Tree& target_tree,
+                                                 const Eigen::Isometry3d& init,
+                                                 const Eigen::Array3d& rotation_mask,
+                                                 const Eigen::Array3d& translation_mask,
+                                                 double max_correspondence, int max_iterations,
+                                                 int threads) {
+  small_gicp::Registration<small_gicp::GICPFactor, ChunkedReduction, small_gicp::RestrictDoFFactor>
+      registration;
+  registration.general_factor.set_rotation_mask(rotation_mask);
+  registration.general_factor.set_translation_mask(translation_mask);
+  registration.reduction.num_threads = std::max(1, threads);
+  registration.rejector.max_dist_sq = max_correspondence * max_correspondence;
+  registration.criteria.translation_eps = 1e-4;
+  registration.criteria.rotation_eps = 0.01 * M_PI / 180.0;
+  registration.optimizer.max_iterations = max_iterations;
+  return registration.align(target, source, target_tree, init);
+}
+
 small_gicp::RegistrationResult align_gicp(const Cloud& target, const Cloud& source,
                                           const Tree& target_tree, const Eigen::Isometry3d& init,
                                           double max_correspondence, int max_iterations,
-                                          int threads) {
+                                          int threads, bool planar = false) {
+  // A planar scanner measures its x, y and heading (ADR-0066).
+  if (planar)
+    return align_gicp_masked(target, source, target_tree, init, Eigen::Array3d(0, 0, 1),
+                             Eigen::Array3d(1, 1, 0), max_correspondence, max_iterations, threads);
   small_gicp::Registration<small_gicp::GICPFactor, ChunkedReduction> registration;
   registration.reduction.num_threads = std::max(1, threads);
   registration.rejector.max_dist_sq = max_correspondence * max_correspondence;
@@ -119,16 +144,10 @@ small_gicp::RegistrationResult align_gicp_translation(const Cloud& target, const
                                                       const Tree& target_tree,
                                                       const Eigen::Isometry3d& init,
                                                       double max_correspondence, int max_iterations,
-                                                      int threads) {
-  small_gicp::Registration<small_gicp::GICPFactor, ChunkedReduction, small_gicp::RestrictDoFFactor>
-      registration;
-  registration.general_factor.set_rotation_mask(Eigen::Array3d::Zero());
-  registration.reduction.num_threads = std::max(1, threads);
-  registration.rejector.max_dist_sq = max_correspondence * max_correspondence;
-  registration.criteria.translation_eps = 1e-4;
-  registration.criteria.rotation_eps = 0.01 * M_PI / 180.0;
-  registration.optimizer.max_iterations = max_iterations;
-  return registration.align(target, source, target_tree, init);
+                                                      int threads, bool planar = false) {
+  return align_gicp_masked(target, source, target_tree, init, Eigen::Array3d::Zero(),
+                           planar ? Eigen::Array3d(1, 1, 0) : Eigen::Array3d::Ones(),
+                           max_correspondence, max_iterations, threads);
 }
 
 /// Whether 95 % of the points lie within `range` of the sensor.
@@ -148,6 +167,24 @@ std::vector<Eigen::Vector4d> to_homogeneous(const std::vector<Eigen::Vector3f>& 
   return out;
 }
 
+/// The points to register: as they are, or a planar sweep stacked along the sensor's z (see
+/// `LidarFrontendConfig::planar_scan`). `up` is the sensor's z in the cloud's frame (a map in the
+/// odometry frame has it turned by the sensor's attitude, level for a ground robot).
+std::vector<Eigen::Vector4d> registration_points(
+    const std::vector<Eigen::Vector3f>& pts, const LidarFrontendConfig& cfg,
+    const Eigen::Vector3d& up = Eigen::Vector3d::UnitZ()) {
+  if (!cfg.planar_scan || cfg.planar_layers <= 1) return to_homogeneous(pts);
+  std::vector<Eigen::Vector4d> out;
+  out.reserve(pts.size() * static_cast<size_t>(cfg.planar_layers));
+  const double mid = 0.5 * (cfg.planar_layers - 1);
+  for (int k = 0; k < cfg.planar_layers; ++k) {
+    const Eigen::Vector3d off = (k - mid) * cfg.planar_layer_spacing * up;
+    for (const auto& p : pts)
+      out.emplace_back(p.x() + off.x(), p.y() + off.y(), p.z() + off.z(), 1.0);
+  }
+  return out;
+}
+
 Eigen::Isometry3d to_iso(const gtsam::Pose3& p) {
   Eigen::Isometry3d T = Eigen::Isometry3d::Identity();
   T.linear() = p.rotation().matrix();
@@ -162,10 +199,20 @@ gtsam::Pose3 from_iso(const Eigen::Isometry3d& T) {
 /// Normalized translation-Hessian spectrum: eigenvalues divided by the number of correspondences,
 /// reported as (min eigenvalue / max eigenvalue). A well-constrained room is ~1e-1, a corridor
 /// ~1e-3.
-void spectrum(const Eigen::Matrix<double, 6, 6>& H, double* min_over_max, double* cond) {
-  Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> es(
-      H.block<3, 3>(3, 3));  // small_gicp ordering: [rot, trans]
-  const double lo = std::max(0.0, es.eigenvalues()(0)), hi = std::max(1e-12, es.eigenvalues()(2));
+void spectrum(const Eigen::Matrix<double, 6, 6>& H, double* min_over_max, double* cond,
+              bool planar = false) {
+  // small_gicp ordering: [rot, trans]. A planar registration holds the sensor's z at the guess (its
+  // Hessian there is the restraint's, not a measurement): its spectrum is that of x and y.
+  double lo = 0.0, hi = 1e-12;
+  if (planar) {
+    Eigen::SelfAdjointEigenSolver<Eigen::Matrix2d> es(H.block<2, 2>(3, 3));
+    lo = std::max(0.0, es.eigenvalues()(0));
+    hi = std::max(1e-12, es.eigenvalues()(1));
+  } else {
+    Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> es(H.block<3, 3>(3, 3));
+    lo = std::max(0.0, es.eigenvalues()(0));
+    hi = std::max(1e-12, es.eigenvalues()(2));
+  }
   *min_over_max = lo / hi;
   *cond = lo > 0 ? hi / lo : 1e12;
 }
@@ -205,7 +252,8 @@ struct LidarFrontend::Impl {
       pts.insert(pts.end(), w.begin(), w.end());
     }
     const auto ds = voxel_downsample(pts, cfg.map_voxel);
-    const auto h = to_homogeneous(ds);
+    const auto h = registration_points(
+        ds, cfg, T_odom_lidar_now.rotation().matrix() * Eigen::Vector3d::UnitZ());
     small_gicp::PointCloud raw(h);
     auto res = preprocess(raw, cfg.map_voxel * 0.5, cfg.num_neighbors, cfg.threads);
     map_cloud = res.first;
@@ -251,13 +299,14 @@ LidarFrontend::RegistrationOutput LidarFrontend::register_clouds(
     out.quality.state = TrackingState::Lost;
     return out;
   }
-  const auto t_h = to_homogeneous(voxel_downsample(target, cfg.scan_voxel));
-  const auto s_h = to_homogeneous(voxel_downsample(source, cfg.scan_voxel));
+  // Both clouds are in sensor frames whose z is the sensor's (a planar scanner's plane, level).
+  const auto t_h = registration_points(voxel_downsample(target, cfg.scan_voxel), cfg);
+  const auto s_h = registration_points(voxel_downsample(source, cfg.scan_voxel), cfg);
   small_gicp::PointCloud t_raw(t_h), s_raw(s_h);
   auto tp = preprocess(t_raw, cfg.scan_voxel * 0.5, cfg.num_neighbors, cfg.threads);
   auto sp = preprocess(s_raw, cfg.scan_voxel * 0.5, cfg.num_neighbors, cfg.threads);
   const auto r = align_gicp(*tp.first, *sp.first, *tp.second, to_iso(init), cfg.max_correspondence,
-                            cfg.max_iterations, cfg.threads);
+                            cfg.max_iterations, cfg.threads, cfg.planar_scan);
   out.T_target_source = from_iso(r.T_target_source);
   out.converged = r.converged;
   out.hessian = r.H;
@@ -266,7 +315,7 @@ LidarFrontend::RegistrationOutput LidarFrontend::register_clouds(
   out.quality.fitness = n_src > 0 ? r.num_inliers / n_src : 0.0;
   out.mean_error = r.num_inliers ? r.error / r.num_inliers : 0.0;
   Eigen::Matrix<double, 6, 6> Hn = r.H / std::max<double>(1.0, r.num_inliers);
-  spectrum(Hn, &out.quality.min_eigenvalue, &out.quality.hessian_condition);
+  spectrum(Hn, &out.quality.min_eigenvalue, &out.quality.hessian_condition, cfg.planar_scan);
   out.quality.state = out.quality.fitness < cfg.min_fitness ? TrackingState::Lost
                       : out.quality.min_eigenvalue < cfg.degeneracy_threshold
                           ? TrackingState::Degraded
@@ -332,7 +381,7 @@ FrontendResult LidarFrontend::process(const SensorFrame& frame) {
   s.confined = res.confined;
   const bool gyro_led = res.confined && frame.gyro_delta;
   const auto cloud = voxel_downsample(pts, gyro_led ? 0.5 * s.cfg.scan_voxel : s.cfg.scan_voxel);
-  if (cloud.size() < 100) {
+  if (static_cast<int>(cloud.size()) < s.cfg.min_points) {
     s.last_quality.state = TrackingState::Lost;
     res.quality = s.last_quality;
     return res;
@@ -367,14 +416,16 @@ FrontendResult LidarFrontend::process(const SensorFrame& frame) {
   };
   const gtsam::Pose3 pred_lidar =
       gyro_led ? gyro_pred() : s.T_odom_base * s.velocity * s.T_base_lidar;
-  const auto h = to_homogeneous(cloud);
+  const auto h = registration_points(cloud, s.cfg);
   small_gicp::PointCloud raw(h);
   auto sp = preprocess(raw, s.cfg.scan_voxel * 0.5, s.cfg.num_neighbors, s.cfg.threads);
-  auto r = gyro_led ? align_gicp_translation(*s.map_cloud, *sp.first, *s.map_tree,
-                                             to_iso(pred_lidar), s.cfg.max_correspondence,
-                                             s.cfg.max_iterations, s.cfg.threads)
-                    : align_gicp(*s.map_cloud, *sp.first, *s.map_tree, to_iso(pred_lidar),
-                                 s.cfg.max_correspondence, s.cfg.max_iterations, s.cfg.threads);
+  const bool planar = s.cfg.planar_scan;
+  auto r = gyro_led
+               ? align_gicp_translation(*s.map_cloud, *sp.first, *s.map_tree, to_iso(pred_lidar),
+                                        s.cfg.max_correspondence, s.cfg.max_iterations,
+                                        s.cfg.threads, planar)
+               : align_gicp(*s.map_cloud, *sp.first, *s.map_tree, to_iso(pred_lidar),
+                            s.cfg.max_correspondence, s.cfg.max_iterations, s.cfg.threads, planar);
   // Just out of a confined space the local map is still mostly the cabin, and a registration can
   // turn by tens of degrees in one scan at the door. Turned away from the gyroscope by far more
   // than the registration's noise (10 deg and half the turn), the scan takes the gyroscope's
@@ -388,7 +439,8 @@ FrontendResult LidarFrontend::process(const SensorFrame& frame) {
     const double off = gtsam::Rot3::Logmap(frame.gyro_delta->between(turn)).norm();
     if (off > 10.0 * M_PI / 180.0 + 0.5 * gtsam::Rot3::Logmap(*frame.gyro_delta).norm()) {
       r = align_gicp_translation(*s.map_cloud, *sp.first, *s.map_tree, to_iso(gyro_pred()),
-                                 s.cfg.max_correspondence, s.cfg.max_iterations, s.cfg.threads);
+                                 s.cfg.max_correspondence, s.cfg.max_iterations, s.cfg.threads,
+                                 planar);
       rotation_from_gyro = true;
     }
   }
@@ -398,7 +450,7 @@ FrontendResult LidarFrontend::process(const SensorFrame& frame) {
   q.inliers = static_cast<int>(r.num_inliers);
   q.fitness = n_src > 0 ? r.num_inliers / n_src : 0.0;
   Eigen::Matrix<double, 6, 6> Hn = r.H / std::max<double>(1.0, r.num_inliers);
-  spectrum(Hn, &q.min_eigenvalue, &q.hessian_condition);
+  spectrum(Hn, &q.min_eigenvalue, &q.hessian_condition, planar);
   q.state = q.fitness < s.cfg.min_fitness                   ? TrackingState::Lost
             : q.min_eigenvalue < s.cfg.degeneracy_threshold ? TrackingState::Degraded
                                                             : TrackingState::Good;

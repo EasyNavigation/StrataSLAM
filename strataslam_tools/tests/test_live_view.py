@@ -105,3 +105,19 @@ def test_a_large_floor_is_thinned_for_the_3d_views(tmp_path: Path, monkeypatch) 
     monkeypatch.setattr(view.rr, "Points3D", lambda p, **kw: sizes.append(len(p)) or real(p, **kw))
     view.floor_cloud(1.0, 0, np.random.default_rng(1).random((10_000, 3)))
     assert sizes and max(sizes) <= 1000  # both tabs
+
+
+def test_the_camera_colours_get_their_own_tab_when_a_cloud_has_them(tmp_path: Path) -> None:
+    require_module("rerun", "pip install rerun-sdk, the optional extra `viewer`")
+    view = live_view.LiveView(save=tmp_path / "run.rrd")
+    sent: list[tuple[str, int]] = []
+    view._log_colour_cloud = lambda floor, p, c: sent.append((f"floor_{floor}", len(c)))  # type: ignore[method-assign]
+    rng = np.random.default_rng(1)
+    view.floor_cloud(1.0, 0, rng.random((300, 3)))  # no colours: no tab
+    assert not view._colour and sent == []
+    view.floor_cloud(2.0, 0, rng.random((300, 3)), rng.integers(0, 255, (300, 3), dtype=np.uint8))
+    assert view._colour and sent == [("floor_0", 300)]
+    import rerun.blueprint as rrb
+    assert [v.name for v in view._map_tabs(rrb)] == ["3D: floors", "3D: height", "3D: colour"]
+    view.floor_cloud(3.0, 0, rng.random((300, 3)), rng.integers(0, 255, (299, 3), dtype=np.uint8))  # mismatched
+    assert sent == [("floor_0", 300)]

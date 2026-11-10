@@ -1,5 +1,5 @@
 """Live view of a StrataSLAM run in Rerun: the 3D map with each floor in its colour (or, in its second tab,
-coloured by height), the top view, the
+coloured by height; in a third, with the camera's colours when the map has them), the top view, the
 level line (height of the robot over time, coloured by floor; with a barometer, its height too) and the
 log of the run below them. With a camera, its image with the keypoints and the depth image used appear
 next to the log.
@@ -88,6 +88,8 @@ class LiveView:
             rr.spawn()
         self._camera = False
         self._floor_clouds: dict[int, NDArray[np.float32]] = {}  # latest cloud of each floor (sent again on reopen)
+        self._floor_colours: dict[int, NDArray[np.uint8]] = {}  # the camera's colours of those clouds, when they have
+        self._colour = False  # some cloud came with colours: the tab "3D: colour" is in the layout
         self._send_static()
         self._baro_styled = False
         self._strips: dict[int, list[list[tuple[float, float, float]]]] = {}  # floor -> path pieces
@@ -118,6 +120,8 @@ class LiveView:
         self._baro_styled = False
         for floor, p in self._floor_clouds.items():
             self._log_floor_cloud(floor, p)
+            if floor in self._floor_colours:
+                self._log_colour_cloud(floor, p, self._floor_colours[floor])
         self._dirty = True
         self.flush_paths()
 
@@ -137,14 +141,9 @@ class LiveView:
         self.rr.send_blueprint(rrb.Blueprint(
             rrb.Vertical(
                 rrb.Horizontal(
-                    # The same map in two tabs, a click apart: each floor in its colour, or coloured by height.
-                    rrb.Tabs(
-                        rrb.Spatial3DView(origin="/world", contents=["+ $origin/**", "- /world/height/**"],
-                                          name="3D: floors"),
-                        rrb.Spatial3DView(origin="/world", contents=["+ $origin/**", "- /world/floors/**"],
-                                          name="3D: height"),
-                        active_tab=0,
-                    ),
+                    # The same map in tabs, a click apart: each floor in its colour, coloured by height, and with
+                    # the camera's colours when the map has them.
+                    rrb.Tabs(*self._map_tabs(rrb), active_tab=0),
                     rrb.Vertical(
                         rrb.Spatial2DView(origin="/topdown", name="Top view"),
                         rrb.TimeSeriesView(origin="/levels", name="Level line (z over time)",
@@ -161,6 +160,13 @@ class LiveView:
             rrb.SelectionPanel(state="collapsed"),
             rrb.TimePanel(state="expanded"),  # the streams show when each floor, transition and log line happened
         ))
+
+    def _map_tabs(self, rrb: Any) -> list[Any]:
+        layers = ["floors", "height"] + (["colour"] if self._colour else [])
+        names = {"floors": "3D: floors", "height": "3D: height", "colour": "3D: colour"}
+        return [rrb.Spatial3DView(origin="/world", name=names[k],
+                                  contents=["+ $origin/**"] + [f"- /world/{o}/**" for o in layers if o != k])
+                for k in layers]
 
     # ---- time and version differences (rerun 0.22 for numpy 1.x, 0.23+ otherwise) ----
 
@@ -252,11 +258,17 @@ class LiveView:
         self._strips[floor] = pieces
         self._dirty = True
 
-    def floor_cloud(self, t: float, floor: int, points: Points) -> None:
-        """The cloud of one floor in the common frame (N x 3); replaces the previous one of that floor (static,
-        latest only: every refresh carries the whole floor)."""
+    def floor_cloud(self, t: float, floor: int, points: Points, colours: NDArray[np.uint8] | None = None) -> None:
+        """The cloud of one floor in the common frame (N x 3), with the camera's colours (N x 3 RGB) when the map has
+        them; replaces the previous one of that floor (static, latest only: every refresh carries the whole floor)."""
         self._time(t)
         p = np.asarray(points, dtype=np.float32).reshape(-1, 3)
+        if colours is not None and len(colours) == len(p):
+            if not self._colour:  # the tab "3D: colour" appears with the first coloured cloud
+                self._colour = True
+                self._send_blueprint(camera=self._camera)
+            self._floor_colours[floor] = np.asarray(colours, dtype=np.uint8).reshape(-1, 3)
+            self._log_colour_cloud(floor, p, self._floor_colours[floor])
         if len(p):
             bottom, top = (float(v) for v in np.percentile(p[:, 2], [1, 99]))  # stray points do not stretch the pole
             self._z_top = top if self._z_top is None else max(self._z_top, top)
@@ -291,6 +303,12 @@ class LiveView:
         q = p[::step, :2] * np.array([1.0, -1.0], dtype=np.float32)
         rr.log(f"topdown/floors/floor_{floor}", rr.Points2D(q, colors=[colour], radii=self._radius(1.0)), static=True)
         self._log_height_cloud(floor, p)
+
+    def _log_colour_cloud(self, floor: int, p: NDArray[np.float32], c: NDArray[np.uint8]) -> None:
+        """The floor's cloud with the camera's colours (grey where no image saw it), for the tab "3D: colour"."""
+        step = max(1, len(p) // WORLD_MAX_POINTS)
+        self.rr.log(f"world/colour/floor_{floor}", self.rr.Points3D(p[::step], colors=c[::step], radii=self._radius(1.0)),
+                    static=True)
 
     def _log_height_cloud(self, floor: int, p: NDArray[np.float32]) -> None:
         """The floor's cloud coloured by height, for the tab "3D: height"."""

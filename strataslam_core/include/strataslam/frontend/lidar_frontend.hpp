@@ -46,6 +46,18 @@ struct LidarFrontendConfig {
   /// rotation is the gyroscope's and the registration solves the translation only. Elsewhere the
   /// gyroscope is not used. Out of it once the scan sees twice as far. 0: never.
   double confined_range = 3.0;
+  /// The scans come from a planar scanner (`lidar.type: 2d`, ADR-0066): the registration solves the
+  /// sensor's x, y and heading only (the motion in its plane), its height, roll and pitch kept at
+  /// the prediction. A sweep is one line of points in that plane, whose covariances cannot tell the
+  /// wall's normal from the vertical: for the registration it is stacked in `planar_layers` copies
+  /// `planar_layer_spacing` apart along the sensor's z, each wall a vertical strip. The clouds kept
+  /// (keyframes, map) stay the sweep itself.
+  bool planar_scan = false;
+  /// Fewer points than this after the downsampling: the scan is not tracked. A 3D LiDAR always has
+  /// hundreds; a planar sweep facing a wall a metre away has some 60 cells of 5 cm.
+  int min_points = 100;
+  int planar_layers = 3;
+  double planar_layer_spacing = 0.1;  ///< m
 };
 
 /// Scan-to-local-map LiDAR odometry with GICP (small_gicp).

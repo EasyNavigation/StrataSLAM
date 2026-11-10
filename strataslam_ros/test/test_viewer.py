@@ -43,7 +43,7 @@ class FakeView:
     def event(self, t, text, level="INFO") -> None:
         self.events.append((text, level))
 
-    def floor_cloud(self, t, floor, points) -> None:
+    def floor_cloud(self, t, floor, points, colours=None) -> None:
         pass
 
     def sensor_cloud(self, t, sensor, points) -> None:

@@ -292,6 +292,15 @@ def test_lidar_camera_offset_at_different_rates_says_what_it_cannot_see() -> Non
     assert "modulo the slower period" in c.detail and "100 ms" in c.detail
 
 
+def test_a_planar_scanner_is_listened_to_as_a_laser_scan(prof) -> None:  # type: ignore[no-untyped-def]
+    # lidar.type: 2d reads sensor_msgs/LaserScan (ADR-0066); 3d, the default, a PointCloud2.
+    prof = dict(prof)
+    prof["sensors"] = dict(prof["sensors"], lidar={"enabled": True, "topic": "/points"})
+    assert doctor.topics_for_profile(prof)["/points"] == "sensor_msgs/msg/PointCloud2"
+    prof["sensors"] = dict(prof["sensors"], lidar={"enabled": True, "topic": "/scan", "type": "2d"})
+    assert doctor.topics_for_profile(prof)["/scan"] == "sensor_msgs/msg/LaserScan"
+
+
 def test_external_odometry_topic_is_listened_to_and_its_tf_frame_checked(prof, tmp_path) -> None:  # type: ignore[no-untyped-def]
     prof = dict(prof)
     prof["sensors"] = dict(prof["sensors"], external_odometry={"topic": "/wheel_odom"})

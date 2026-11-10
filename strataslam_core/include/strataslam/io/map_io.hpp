@@ -58,12 +58,17 @@ struct FloorMetadata {
   /// z m) in the frame of the lowest floor of the map, gravity-aligned. `strataslam fuse` refines
   /// it (fused/floor_transforms.yaml). Absent in maps written before the field (ADR-0064).
   std::optional<Eigen::Vector4d> placement;
+  /// Where the sensor of `clouds/` and that of `depth_clouds/` sit in the base frame (m): the
+  /// origin of their rays, for the free space of an occupancy grid (ADR-0068). Absent in maps
+  /// written before the fields, and `depth_origin` when the floor has no depth clouds.
+  std::optional<Eigen::Vector3d> cloud_origin, depth_origin;
 
   bool operator==(const FloorMetadata& o) const {
     return id == o.id && gravity == o.gravity && ground_normal == o.ground_normal &&
            reference_pressure_pa == o.reference_pressure_pa && sensors == o.sensors &&
            sessions == o.sessions && alignment_residual_rad == o.alignment_residual_rad &&
-           altitude_m == o.altitude_m && cloud_frame == o.cloud_frame && placement == o.placement;
+           altitude_m == o.altitude_m && cloud_frame == o.cloud_frame && placement == o.placement &&
+           cloud_origin == o.cloud_origin && depth_origin == o.depth_origin;
   }
 };
 
@@ -72,14 +77,17 @@ struct FloorData {
   std::vector<KeyframeRecord> keyframes;
   std::vector<EdgeRecord> edges;
   std::map<KeyframeId, PointCloud> clouds;
+  /// A planar scanner's keyframes with a camera: the depth image's cloud in the keyframe's base
+  /// frame, with its colours (ADR-0068). Empty otherwise; written only when present.
+  std::map<KeyframeId, PointCloud> depth_clouds;
   std::map<KeyframeId, VisualPayload> visual;
   std::map<KeyframeId, LidarPayload> lidar;
   std::optional<PointCloud> floor_cloud;
 
   bool operator==(const FloorData& o) const {
     return metadata == o.metadata && keyframes == o.keyframes && edges == o.edges &&
-           clouds == o.clouds && visual == o.visual && lidar == o.lidar &&
-           floor_cloud == o.floor_cloud;
+           clouds == o.clouds && depth_clouds == o.depth_clouds && visual == o.visual &&
+           lidar == o.lidar && floor_cloud == o.floor_cloud;
   }
 };
 

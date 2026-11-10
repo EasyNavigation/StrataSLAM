@@ -10,6 +10,7 @@ frames.
 | `ground_camera.yaml` | ground robot | RGB-D camera (RealSense D435i topics), the wheel odometry as its motion prior (TF `odom -> base_link`); no LiDAR, no IMU |
 | `ground_lidar.yaml` | ground robot | 3D LiDAR only |
 | `ground_lidar_camera_imu.yaml` | ground robot | 3D LiDAR (odometry), RGB-D camera (loop closures, colours), IMU (gravity only); camera and LiDAR loop closures |
+| `ground_scan_camera_imu.yaml` | ground robot | 2D laser scanner (odometry), RGB-D camera (loop closures verified by the scans, colours), IMU (gravity only); one flat map |
 | `handheld_camera_imu.yaml` | hand-held | RealSense D435i (RGB-D camera + its IMU) |
 | `aerial_lidar_camera_imu.yaml` | drone | RealSense D435i (RGB-D camera + its IMU) and a 3D LiDAR |
 
@@ -24,7 +25,7 @@ sensors:
            noise: {accel_noise_density: 2.0e-3, gyro_noise_density: 1.7e-4, accel_random_walk: 3.0e-3, gyro_random_walk: 2.0e-5}}
   barometer: {enabled: false, topic: /pressure, reference_topic: "", temperature_k: 288.15, settle_time_s: 2.0}
   external_odometry: {enabled: false, topic: /odom}   # or frame: odom (TF odom -> base_frame)
-fusion:     {odometry_from: auto, loop_closure_from: auto, colorize_cloud: true, vocabulary: ""}
+fusion:     {odometry_from: auto, loop_closure_from: auto, colorize_cloud: true, colorize_views: 8, colorize_image_scale: 1.0, vocabulary: ""}
 multifloor: {mode: floors, floor_height_prior: 3.0, split_on_tracking_loss: true, tracking_loss_timeout: 2.0, min_vertical_change: 1.5}
 output:     {map_dir: "~/strataslam_maps/{date}_{time}", voxel_size: 0.05, keyframe_translation: 0.25, keyframe_rotation_deg: 10.0, publish_tf: true}
 runtime:    {seed: 42, threads: 0}
@@ -47,6 +48,13 @@ Rules (validated before anything starts, all errors reported at once as `config 
 - At least one of `camera` or `lidar` must be active. A present sensor section is enabled unless it says
   `enabled: false`.
 - A camera needs `rgb_topic`, `depth_topic` and `info_topic`.
+- `lidar.type: 2d` is a planar laser scanner (sensor_msgs/LaserScan), mounted level: its sweeps are registered in
+  their plane, x, y and heading, and the rest of the pose is held (ADR-0066). Ground robots only
+  (`robot.platform: ground`). Alone it maps one slice, at the scanner's height; with a camera, each keyframe also
+  keeps the camera's depth, placed by the scan's pose, and the map is 3D (ADR-0068). It sees one level, so `multifloor.mode: planar` is its natural mode; with `floors`, a
+  floor change can only come from the barometer (an elevator), since the scan never measures a height. Loop
+  closures: with a camera, `auto` lets the camera propose them and the scans verify and refine them; without one,
+  `lidar` finds them from the scans alone (a forward scanner of 190 deg recognises a place seen facing the same way).
 - `external_odometry` needs a `topic` (nav_msgs/Odometry) or a `frame` (the TF `frame -> base_frame`, what the
   wheel odometry of most ROS robots publishes), not both; `odometry_from: camera|lidar` needs that sensor. The TF may
   move a frame above the base (`odom -> base_footprint`, with `base_footprint -> base_link` fixed in the URDF and
@@ -63,6 +71,15 @@ Rules (validated before anything starts, all errors reported at once as `config 
 - The IMU is used however it is mounted: its rotation and sign convention are learned from the motion when the TF or
   the driver are wrong (ADR-0044). It bounds the camera tracking's roll and pitch by gravity. `imu.floor_changes:
   false` keeps it to that (no elevator detection by vertical acceleration), for a ground robot's vibrating base.
+- `fusion.colorize_cloud` gives the map the camera's colours: a LiDAR's points take the colour of the pixel they
+  project to in the image taken with the scan, a camera's depth points the colour of their own pixel (ADR-0068).
+  When the map is saved, a LiDAR's points that image did not see are coloured from the images of the keyframes
+  around (up to 8 within 6 m), where they lie on the surface that image measured (ADR-0069). Points no image saw
+  stay grey: a 360-degree LiDAR sees much more than a camera. The live view shows the colours in its tab
+  **3D: colour**. Two options trade colour for resources, never the map's geometry: `colorize_views` (8; 0 uses each
+  keyframe's own image only) sets how many images are tried at save time, and `colorize_image_scale` (1.0; 0.5,
+  0.333 or 0.25) the scale of the images kept for them. A keyframe keeps its RGB-D image while mapping, about 2 MB
+  at 640x480 (800 MB for 400 keyframes); at 0.5 a quarter of it. Its own colours come from the full image anyway.
 - `platform: aerial` without an IMU is a strong warning.
 - Every sensor section is a map: `imu: true` or `imu: 5` is an error (`expected a map`).
 - `multifloor.mode` says how the levels are mapped:

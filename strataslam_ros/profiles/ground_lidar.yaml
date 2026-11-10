@@ -24,7 +24,7 @@ sensors:
   lidar:
     enabled: true
     topic: /points  # sensor_msgs/PointCloud2
-    type: 3d  # only 3d in this version
+    type: 3d  # 3d | 2d (a planar scanner, sensor_msgs/LaserScan: ground robots)
     min_range: 0.5  # m
     max_range: 50.0  # m
     deskew: auto  # auto | true | false (auto: when the points carry their time)
@@ -53,6 +53,9 @@ fusion:
   # odometry_from: auto  # auto | camera | lidar (auto: the LiDAR if enabled, else the camera)
   # loop_closure_from: auto  # auto | camera | lidar | both
   colorize_cloud: false  # no camera to colour the cloud
+  # colorize_views: 8  # at save, a LiDAR point its keyframe's image missed is coloured from up to this many images
+  #   around (0: its own image only); time at save, never the trajectory
+  # colorize_image_scale: 1.0  # scale of the keyframes' images kept for that: 0.5 takes a quarter of the memory
   # vocabulary: default  # camera loop closures: `default` is the one shipped (TUM RGB-D offices); your own:
   #   `strataslam vocab train`, then its path (relative to this file)
 

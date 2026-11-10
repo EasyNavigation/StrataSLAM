@@ -47,6 +47,7 @@ FloorData make_floor(std::mt19937& rng, FloorId id) {
   f.metadata.sessions = {0, 1};
   f.metadata.alignment_residual_rad = 1.2345678901234567e-4;
   f.metadata.altitude_m = 3.0 * id + 0.0123456789;
+  f.metadata.cloud_origin = Eigen::Vector3d(0.202, -0.0123456789, 0.0945 + id);
   for (KeyframeId k = 0; k < 5; ++k) {
     KeyframeRecord kf;
     kf.id = k + 100 * id;
@@ -407,4 +408,23 @@ TEST(MapIo, HostileManifestsAreRejectedBeforeReadingFloors) {
   r = read_map(dir.str());
   ASSERT_FALSE(r.ok());
   EXPECT_NE(r.error().message.find("negative floor id"), std::string::npos) << r.error().message;
+}
+
+// A planar scanner with a camera keeps each keyframe's depth cloud, coloured, next to its scan
+// (ADR-0068): written to depth_clouds/ and read back; a map without them has no such folder.
+TEST(MapIo, DepthCloudsAreKeptBesideTheKeyframeClouds) {
+  TempDir dir;
+  std::mt19937 rng(11);
+  MapData m = make_map(5);
+  ASSERT_TRUE(write_map(dir.str() + "/without", m).ok());
+  EXPECT_FALSE(fs::exists(dir.path() / "without" / "floor_000" / "depth_clouds"));
+  m.floors[0].depth_clouds[0] = random_cloud(rng, 300, true);
+  m.floors[0].depth_clouds[1] = random_cloud(rng, 200, false);
+  m.floors[0].metadata.depth_origin = Eigen::Vector3d(0.05, 0.0, 1.12345678901);
+  ASSERT_TRUE(write_map(dir.str() + "/with", m).ok());
+  EXPECT_TRUE(fs::exists(dir.path() / "with" / "floor_000" / "depth_clouds" / "0.pcd"));
+  const auto r = read_map(dir.str() + "/with");
+  ASSERT_TRUE(r.ok()) << r.error().message;
+  EXPECT_TRUE(r.value() == m);
+  EXPECT_EQ(r.value().floors[0].depth_clouds.at(0).colors.size(), 300u);
 }

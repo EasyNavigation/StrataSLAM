@@ -10,6 +10,9 @@ namespace strataslam {
 enum class Platform { Handheld, Ground, Aerial };
 enum class FeatureType { Orb, Xfeat };
 enum class DeskewMode { Auto, True, False };
+/// `3d`: a 3D LiDAR's point cloud. `2d`: a planar laser scanner's sweep (sensor_msgs/LaserScan),
+/// registered in its own plane: x, y and heading only (ADR-0066).
+enum class LidarType { ThreeD, Planar };
 enum class OdometryFrom { Auto, Camera, Lidar, External };
 enum class LoopClosureFrom { Auto, Camera, Lidar, Both };
 
@@ -34,6 +37,7 @@ struct CameraConfig {
 struct LidarConfig {
   bool enabled = false;
   std::string topic = "/points";
+  LidarType type = LidarType::ThreeD;
   double min_range = 0.5;   // m
   double max_range = 50.0;  // m
   DeskewMode deskew = DeskewMode::Auto;
@@ -89,6 +93,13 @@ struct FusionConfig {
   bool colorize_cloud = true;
   bool colorize_cloud_explicit =
       false;  ///< the profile set it (the warning without a camera is only for that case)
+  /// Colouring a LiDAR's points when the map is saved: the images of up to this many keyframes
+  /// around are tried for the points a keyframe's own image did not see (0: its own image only).
+  /// Time at save, never the trajectory (ADR-0069).
+  int colorize_views = 8;
+  /// Scale of the keyframes' images kept for that colouring: 1, 1/2 (a quarter of the memory),
+  /// 1/3 or 1/4. A keyframe's own colours always come from its full image (ADR-0069).
+  double colorize_image_scale = 1.0;
   /// Visual vocabulary for camera loop closures (`strataslam vocab train`). Empty: none, and no
   /// visual loop closure. A relative path is relative to the profile's folder when the profile is
   /// read from a file. `default`: the vocabulary shipped with strataslam_ros (trained on TUM RGB-D,

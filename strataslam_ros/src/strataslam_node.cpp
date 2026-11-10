@@ -41,6 +41,7 @@
 #include <sensor_msgs/msg/fluid_pressure.hpp>
 #include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/imu.hpp>
+#include <sensor_msgs/msg/laser_scan.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <set>
 #include <sstream>
@@ -564,7 +565,11 @@ class StrataslamNode : public rclcpp::Node {
                                               std::placeholders::_3));
       }
     }
-    if (s.lidar.enabled)
+    if (s.lidar.enabled && s.lidar.type == strataslam::LidarType::Planar)
+      scan_sub_ = create_subscription<sm::LaserScan>(
+          s.lidar.topic, qos,
+          [this](sm::LaserScan::ConstSharedPtr m) { guard("lidar", [&] { on_laser_scan(*m); }); });
+    else if (s.lidar.enabled)
       lidar_sub_ = create_subscription<sm::PointCloud2>(
           s.lidar.topic, qos,
           [this](sm::PointCloud2::ConstSharedPtr m) { guard("lidar", [&] { on_lidar(*m); }); });
@@ -732,7 +737,10 @@ class StrataslamNode : public rclcpp::Node {
   void warn_missing_topics(const std::vector<rosbag2_storage::TopicMetadata>& topics) {
     const auto& s = cfg_.sensors;
     std::vector<std::pair<std::string, std::string>> wanted;  // topic, message type
-    if (s.lidar.enabled) wanted.push_back({s.lidar.topic, "sensor_msgs/msg/PointCloud2"});
+    if (s.lidar.enabled)
+      wanted.push_back({s.lidar.topic, s.lidar.type == strataslam::LidarType::Planar
+                                           ? "sensor_msgs/msg/LaserScan"
+                                           : "sensor_msgs/msg/PointCloud2"});
     if (s.imu.enabled) wanted.push_back({s.imu.topic, "sensor_msgs/msg/Imu"});
     if (s.barometer.enabled) wanted.push_back({s.barometer.topic, "sensor_msgs/msg/FluidPressure"});
     if (s.external_odometry.enabled && !s.external_odometry.topic.empty())
@@ -779,6 +787,7 @@ class StrataslamNode : public rclcpp::Node {
     const auto& s = cfg_.sensors;
     warn_missing_topics(reader.get_all_topics_and_types());
     rclcpp::Serialization<sm::PointCloud2> ser_cloud;
+    rclcpp::Serialization<sm::LaserScan> ser_scan;
     rclcpp::Serialization<sm::Imu> ser_imu;
     rclcpp::Serialization<sm::FluidPressure> ser_baro;
     rclcpp::Serialization<nav_msgs::msg::Odometry> ser_odom;
@@ -850,6 +859,12 @@ class StrataslamNode : public rclcpp::Node {
           for (const auto& tr : m.transforms)
             tf_buffer_->setTransform(tr, "bag", topic == "/tf_static");
           if (s.external_odometry.enabled && !s.external_odometry.frame.empty()) on_ext_tf(m);
+        } else if (s.lidar.enabled && topic == s.lidar.topic &&
+                   s.lidar.type == strataslam::LidarType::Planar) {
+          sm::LaserScan m;
+          ser_scan.deserialize_message(&raw, &m);
+          ++n_lidar;
+          on_laser_scan(m);
         } else if (s.lidar.enabled && topic == s.lidar.topic) {
           sm::PointCloud2 m;
           ser_cloud.deserialize_message(&raw, &m);
@@ -1225,6 +1240,33 @@ class StrataslamNode : public rclcpp::Node {
     publish_live(*scan_pub_, scan.points, ext_.T_base_lidar, scan.stamp, next_scan_pub_);
   }
 
+  /// A planar scanner's sweep (`lidar.type: 2d`, ADR-0066): its rays as points in its own plane,
+  /// each with its time from the first ray when the driver gives the time between rays.
+  void on_laser_scan(const sm::LaserScan& m) {
+    ++lidar_received_;
+    lidar_frame_pending_ = m.header.frame_id;
+    if (!ensure_system(camera_frame_pending_, m.header.frame_id, imu_frame_pending_)) return;
+    strataslam::LidarScan scan;
+    scan.stamp = stamp_ns(m.header.stamp);
+    scan.points.reserve(m.ranges.size());
+    std::vector<double> times;
+    for (size_t i = 0; i < m.ranges.size(); ++i) {
+      const float r = m.ranges[i];
+      if (!std::isfinite(r) || r < m.range_min || r > m.range_max) continue;
+      const double a = m.angle_min + static_cast<double>(i) * m.angle_increment;
+      scan.points.emplace_back(static_cast<float>(r * std::cos(a)),
+                               static_cast<float>(r * std::sin(a)), 0.0f);
+      if (m.time_increment != 0.0f) times.push_back(static_cast<double>(i) * m.time_increment);
+    }
+    if (!times.empty()) {
+      const double t0 = *std::min_element(times.begin(), times.end());
+      for (double t : times) scan.time_offsets_s.push_back(static_cast<float>(t - t0));
+    }
+    slam_->add_lidar(scan);
+    publish_state(scan.stamp);
+    publish_live(*scan_pub_, scan.points, ext_.T_base_lidar, scan.stamp, next_scan_pub_);
+  }
+
   // ---------------- publishing ----------------
 
   /// Whether the robot itself publishes odom -> base on TF (its wheel odometry). Decided once,
@@ -1431,9 +1473,16 @@ class StrataslamNode : public rclcpp::Node {
     if (!slam_ || slam_->keyframes().empty() || cloud_pub_->get_subscription_count() == 0 ||
         (!force && start < cloud_not_before_))
       return;
-    const auto pts = slam_->floor_cloud(last_floor_, cfg_.output.voxel_size);
-    if (!pts.empty())
-      cloud_pub_->publish(xyz_cloud(pts, "floor_" + std::to_string(last_floor_), now()));
+    // With colorize_cloud, the cloud carries the colours each keyframe's own image gave it (an
+    // `rgb` field, PCL's packing): the viewer's tab "3D: colour" (ADR-0069).
+    const std::string frame = "floor_" + std::to_string(last_floor_);
+    if (cfg_.fusion.colorize_cloud) {
+      const auto pc = slam_->floor_cloud_colored(last_floor_, cfg_.output.voxel_size);
+      if (!pc.points.empty()) cloud_pub_->publish(xyzrgb_cloud(pc, frame, now()));
+    } else {
+      const auto pts = slam_->floor_cloud(last_floor_, cfg_.output.voxel_size);
+      if (!pts.empty()) cloud_pub_->publish(xyz_cloud(pts, frame, now()));
+    }
     const auto spent = std::chrono::steady_clock::now() - start;
     cloud_not_before_ = start + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
                                     spent * (1.0 / kCloudShare));
@@ -1542,6 +1591,39 @@ class StrataslamNode : public rclcpp::Node {
     }
     c.data.resize(static_cast<size_t>(c.row_step));
     for (size_t i = 0; i < pts.size(); ++i) std::memcpy(c.data.data() + 12 * i, pts[i].data(), 12);
+    return c;
+  }
+
+  /// x y z and, when the cloud has colours, `rgb` (FLOAT32 holding 0x00RRGGBB, as PCL and RViz
+  /// read).
+  static sm::PointCloud2 xyzrgb_cloud(const strataslam::PointCloud& pc, const std::string& frame,
+                                      const rclcpp::Time& stamp) {
+    if (pc.colors.size() != pc.points.size()) return xyz_cloud(pc.points, frame, stamp);
+    sm::PointCloud2 c;
+    c.header.stamp = stamp;
+    c.header.frame_id = frame;
+    c.height = 1;
+    c.width = static_cast<uint32_t>(pc.points.size());
+    c.is_bigendian = false;
+    c.is_dense = true;
+    c.point_step = 16;
+    c.row_step = c.point_step * c.width;
+    for (const char* name : {"x", "y", "z", "rgb"}) {
+      sm::PointField f;
+      f.name = name;
+      f.offset = static_cast<uint32_t>(c.fields.size() * 4);
+      f.datatype = sm::PointField::FLOAT32;
+      f.count = 1;
+      c.fields.push_back(f);
+    }
+    c.data.resize(static_cast<size_t>(c.row_step));
+    for (size_t i = 0; i < pc.points.size(); ++i) {
+      uint8_t* p = c.data.data() + 16 * i;
+      std::memcpy(p, pc.points[i].data(), 12);
+      const auto& k = pc.colors[i];
+      const uint32_t rgb = (uint32_t{k[0]} << 16) | (uint32_t{k[1]} << 8) | uint32_t{k[2]};
+      std::memcpy(p + 12, &rgb, 4);
+    }
     return c;
   }
 
@@ -1656,6 +1738,7 @@ class StrataslamNode : public rclcpp::Node {
   std::unique_ptr<message_filters::Synchronizer<FeatPolicy>> feat_sync_;
   std::unique_ptr<message_filters::Synchronizer<RgbPolicy>> rgb_sync_;
   rclcpp::Subscription<sm::PointCloud2>::SharedPtr lidar_sub_;
+  rclcpp::Subscription<sm::LaserScan>::SharedPtr scan_sub_;
   rclcpp::Subscription<sm::Imu>::SharedPtr imu_sub_;
   rclcpp::Subscription<sm::FluidPressure>::SharedPtr baro_sub_;
   rclcpp::Subscription<sm::FluidPressure>::SharedPtr baro_ref_sub_;

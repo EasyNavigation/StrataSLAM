@@ -555,7 +555,8 @@ def topics_for_profile(prof: dict[str, Any]) -> dict[str, str]:
         out[s["camera"]["depth_topic"]] = "sensor_msgs/msg/Image"
         out[s["camera"]["info_topic"]] = "sensor_msgs/msg/CameraInfo"
     if enabled(prof, "lidar"):
-        out[s["lidar"].get("topic", "/points")] = "sensor_msgs/msg/PointCloud2"
+        planar = str(s["lidar"].get("type", "3d")) == "2d"  # a planar scanner (ADR-0066)
+        out[s["lidar"].get("topic", "/points")] = "sensor_msgs/msg/LaserScan" if planar else "sensor_msgs/msg/PointCloud2"
     if enabled(prof, "imu"):
         out[s["imu"].get("topic", "/imu")] = "sensor_msgs/msg/Imu"
     if enabled(prof, "barometer"):

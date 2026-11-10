@@ -18,6 +18,24 @@
   `strataslam doctor --preset-dir` and the node's `preset_dir` parameter are gone.
 
 ### Added
+- More of a LiDAR's map takes the camera's colours: at save time, the points a keyframe's own image did not see are
+  coloured from the images of up to 8 keyframes within 6 m, where the point lies on the surface the image measured.
+  The live view shows the colours in a third tab, **3D: colour**, and `/strataslam/floor_cloud` carries them (`rgb`)
+  with `colorize_cloud`. `fusion.colorize_views` (8; 0: each keyframe's own image only) and
+  `fusion.colorize_image_scale` (1.0; 0.5 keeps the keyframes' images at a quarter of the memory) trade colour for
+  time and memory, never the geometry (ADR-0069).
+- A planar scanner with a camera maps in 3D: each keyframe also keeps the camera's depth nearest in time, placed by
+  the scan's pose (moved to the image's time along the scan's motion), in the map's new optional `depth_clouds/`;
+  the floor and global clouds and the live view hold it. The floor metadata records where the sensors sit
+  (`cloud_origin`, `depth_origin`), and the occupancy grid casts its rays from them in layers of 0.1 m, so a table
+  top the camera saw stays an obstacle (ADR-0068).
+- `strataslam export --format grid`: an occupancy grid per floor (PGM + YAML, nav2's map_server), its obstacles the
+  points between `--min-height` and `--max-height` above the robot's base, its free space the rays from each
+  keyframe's base to them; from any ground robot's map (planar scanner, 3D LiDAR or camera) (ADR-0067).
+- Planar laser scanners: `lidar.type: 2d` reads sensor_msgs/LaserScan and registers each sweep in its plane (x, y,
+  heading), ground robots only; with a camera, its loop closures are verified and refined by the scans. New template
+  `ground_scan_camera_imu.yaml`; `strataslam doctor` expects a LaserScan on that topic. A per-scan trace on
+  `STRATASLAM_DEBUG_TRACK` for the LiDAR, as the camera has (ADR-0066).
 - A saved map holds the whole building as the live view showed it: every floor's `metadata.yaml` records where the
   odometry left it (`placement`) and the map root has `global_cloud.pcd`, the floor clouds placed by it.
   `strataslam export` takes it when the map was not fused. `strataslam fuse` places a floor that no measurement
@@ -128,6 +146,8 @@
 - `docs/user/install.md` rewritten and tested; `docs/data_format.md` documents `fused/`, the optional payload folders and the integrity checks.
 
 ### Fixed
+- `fusion.colorize_cloud` did nothing with camera odometry: a camera's map is now coloured with the pixels of its
+  depth points (ADR-0068). Per-keyframe clouds keep their colours too.
 - The wheel odometry from TF (`external_odometry.frame`) reached the node only as a transform to `robot.base_frame`
   itself: a robot whose odometry moves a frame above it (`odom -> base_footprint`, with `base_footprint -> base_link`
   fixed and `base_frame: base_link`, the Kobuki) mapped without it, silently, and in the simulated Kobuki every

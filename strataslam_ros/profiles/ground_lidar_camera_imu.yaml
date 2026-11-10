@@ -28,7 +28,7 @@ sensors:
   lidar:
     enabled: true
     topic: /points  # sensor_msgs/PointCloud2
-    type: 3d  # only 3d in this version
+    type: 3d  # 3d | 2d (a planar scanner, sensor_msgs/LaserScan: ground robots)
     min_range: 0.5  # m
     max_range: 50.0  # m
     deskew: auto  # auto | true | false (auto: when the points carry their time)
@@ -60,6 +60,10 @@ fusion:
   loop_closure_from: both  # auto | camera | lidar | both. Both: camera loops and LiDAR loops; a robot that comes back
   #   along a corridor facing the other way is recognised by a 360-degree LiDAR, not by a forward camera
   colorize_cloud: true
+  # colorize_views: 8  # at save, a LiDAR point its keyframe's image missed is coloured from up to this many images
+  #   around (0: its own image only, and no image kept); time at save, never the trajectory
+  colorize_image_scale: 0.5  # the keyframes' images kept for that at half size: a quarter of the memory (2 MB a
+  #   keyframe at 640x480 otherwise), the same colours on pasillo_Tiago (1.18 GB -> 0.55 GB, 33.6 % coloured)
   vocabulary: default  # camera loop closures: `default` is the one shipped (TUM RGB-D offices); your own:
   #   `strataslam vocab train`, then its path (relative to this file)
 

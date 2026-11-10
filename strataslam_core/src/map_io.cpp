@@ -215,6 +215,15 @@ std::string metadata_to_yaml(const FloorMetadata& m) {
   } else {
     out << YAML::Null;
   }
+  // Written only when known: a reader of an older map finds neither.
+  if (m.cloud_origin) {
+    out << YAML::Key << "cloud_origin" << YAML::Value;
+    emit_vec3(out, *m.cloud_origin);
+  }
+  if (m.depth_origin) {
+    out << YAML::Key << "depth_origin" << YAML::Value;
+    emit_vec3(out, *m.depth_origin);
+  }
   out << YAML::EndMap;
   return out.c_str();
 }
@@ -246,6 +255,13 @@ FloorMetadata metadata_from_yaml(const std::string& text) {
     v << pl["theta"].as<double>(), read_vec3(pl["t"], "metadata.placement.t");
     if (!v.allFinite()) throw IoError("metadata.placement: not finite");
     m.placement = v;
+  }
+  for (const auto& [key, field] :
+       {std::pair{"cloud_origin", &m.cloud_origin}, std::pair{"depth_origin", &m.depth_origin}}) {
+    if (!n[key].IsDefined() || n[key].IsNull()) continue;
+    const Eigen::Vector3d v = read_vec3(n[key], std::string("metadata.") + key);
+    if (!v.allFinite()) throw IoError(std::string("metadata.") + key + ": not finite");
+    *field = v;
   }
   return m;
 }
@@ -338,6 +354,10 @@ void write_floor(const fs::path& dir, const FloorData& f) {
   for (const auto& [id, cloud] : f.clouds) {
     check(write_pcd((dir / "clouds" / (std::to_string(id) + ".pcd")).string(), cloud));
   }
+  if (!f.depth_clouds.empty()) fs::create_directories(dir / "depth_clouds");
+  for (const auto& [id, cloud] : f.depth_clouds) {
+    check(write_pcd((dir / "depth_clouds" / (std::to_string(id) + ".pcd")).string(), cloud));
+  }
   for (const auto& [id, p] : f.visual) {
     check(write_visual_payload((dir / "visual" / (std::to_string(id) + ".bin")).string(), p));
   }
@@ -359,6 +379,12 @@ FloorData read_floor(const fs::path& dir) {
     for (const auto& e : fs::directory_iterator(dir / "clouds")) {
       if (e.path().extension() == ".pcd")
         f.clouds[id_from_stem(e.path())] = unwrap(read_pcd(e.path().string()));
+    }
+  }
+  if (fs::exists(dir / "depth_clouds")) {
+    for (const auto& e : fs::directory_iterator(dir / "depth_clouds")) {
+      if (e.path().extension() == ".pcd")
+        f.depth_clouds[id_from_stem(e.path())] = unwrap(read_pcd(e.path().string()));
     }
   }
   if (fs::exists(dir / "visual")) {

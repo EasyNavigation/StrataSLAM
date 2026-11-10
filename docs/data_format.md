@@ -11,22 +11,27 @@ marks a complete map. Readers reject any `format_version` other than 1.
 ├── global_cloud.pcd     every floor cloud placed by its `placement`: the building as the live view showed it (ADR-0064)
 ├── floor_000/
 │   ├── metadata.yaml    floor_id, gravity, ground_normal, reference_pressure_pa, sensors,
-│   │                    sessions, alignment_residual_rad, altitude_m, cloud_frame, placement
+│   │                    sessions, alignment_residual_rad, altitude_m, cloud_frame, placement,
+│   │                    cloud_origin, depth_origin (optional: the sensors' positions in the base frame)
 │   ├── keyframes.csv    id,stamp_ns,session,x,y,z,qx,qy,qz,qw   (pose in the floor frame)
 │   ├── edges.csv        type,from,to,measurement,info_dim,information
 │   ├── clouds/<id>.pcd  per-keyframe cloud (binary PCD v0.7: x y z [rgb], float32), in the frame `cloud_frame` names
+│   ├── depth_clouds/<id>.pcd  a planar scanner's keyframe with a camera: the depth image's cloud, x y z [rgb], in
+│   │                    the keyframe's base frame (ADR-0068)
 │   ├── visual/<id>.bin  keypoints + descriptors (only keyframes with a camera observation)
 │   ├── lidar/<id>.bin   Scan Context + metadata (only when loop closure uses the LiDAR)
 │   └── floor_cloud.pcd  voxelized floor cloud (optional)
 ├── floor_001/ ...
+├── export/              written by `strataslam export` (optional): the clouds (PCD or PLY), or with `--format grid`
+│                        an occupancy grid per floor, floor_<k>.pgm + floor_<k>.yaml (nav2 map_server, trinary)
 └── fused/               written by `strataslam fuse` (optional)
     ├── floor_transforms.yaml   T_map_floor of every floor (Pose4: yaw, x, y, z) and its covariance
     ├── fusion_report.yaml      constraints used/rejected, warnings, same-level candidates
     └── global_cloud.pcd        all floor clouds in the map frame (binary PCD; ADR-0039)
 ```
 
-`visual/`, `lidar/`, `clouds/` and `floor_cloud.pcd` are optional: a reader must accept a floor without
-them (a camera + LiDAR map whose loops are closed by the camera has no `lidar/`, a LiDAR-only map no
+`visual/`, `lidar/`, `clouds/`, `depth_clouds/` and `floor_cloud.pcd` are optional: a reader must accept a floor
+without them (a camera + LiDAR map whose loops are closed by the camera has no `lidar/`, a LiDAR-only map no
 `visual/`).
 
 Conventions: SI units, radians, timestamps in integer nanoseconds, quaternions as (x, y, z, w),
@@ -37,6 +42,13 @@ keyframe's base frame, and the keyframe's pose in `keyframes.csv` places it in t
 have no `cloud_frame` field, which reads as `sensor`: their clouds are in the frame of the sensor that took them
 (camera optical frame or LiDAR frame), whose mounting the map does not record. `floor_cloud.pcd` and the fused
 `global_cloud.pcd` are in the floor and map frames in both. ADR-0062.
+
+Depth clouds (ADR-0068): a floor mapped by a planar scanner (`lidar.type: 2d`) with a camera keeps, beside each
+keyframe's scan in `clouds/`, the depth image nearest to it in time as `depth_clouds/<id>.pcd`, in the keyframe's base
+frame and with the colours of its pixels; `floor_cloud.pcd` holds both. `cloud_origin` and `depth_origin` in the
+metadata are where the sensor of each sits in the base frame (the origin of their rays, for an occupancy grid);
+maps written before have neither, and readers must accept a floor without them. Per-keyframe clouds carry `rgb` when
+the map was coloured.
 
 Floor placement: `placement: {theta, t: [x, y, z]}` in `metadata.yaml` is where the odometry left the floor, as
 T_map_floor (Pose4: yaw about gravity and a translation) in the frame of the map's lowest floor (whose placement is

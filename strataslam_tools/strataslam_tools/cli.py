@@ -77,6 +77,8 @@ def cmd_export(args: argparse.Namespace) -> int:
     root = Path(args.map_dir)
     out = root / "export"
     out.mkdir(exist_ok=True)
+    if args.format == "grid":
+        return export_grids(args, root, out)
     reader = {".pcd": mapio.read_pcd, ".ply": mapio.read_ply}
     writer = mapio.write_ply if args.format == "ply" else mapio.write_pcd
     count = 0
@@ -93,6 +95,27 @@ def cmd_export(args: argparse.Namespace) -> int:
         writer(out / f"{name}.{args.format}", pts, colors)
         count += 1
     print(f"exported {count} cloud(s) to {out}")
+    return 0 if count else 1
+
+
+def export_grids(args: argparse.Namespace, root: Path, out: Path) -> int:
+    """One occupancy grid per floor, in that floor's frame (that of its floor_cloud.pcd)."""
+    from . import grid  # noqa: PLC0415
+
+    count = 0
+    for f in mapio.read_manifest(root)["floors"]:
+        rays = grid.floor_rays(root / f["dir"])
+        try:
+            g = grid.build_grid(rays, args.min_height, args.max_height, args.resolution)
+        except ValueError:
+            print(f"{f['dir']}: no points between {args.min_height} and {args.max_height} m above the base",
+                  file=sys.stderr)
+            continue
+        y = grid.write_grid(g, out / f"{Path(f['dir']).name}.pgm")
+        occ = g.occupancy()
+        print(f"{y}: {g.shape[1]} x {g.shape[0]} cells of {args.resolution} m, "
+              f"{int(np.sum(occ >= grid.OCCUPIED_THRESH))} occupied, {int(np.sum(occ <= grid.FREE_THRESH))} free")
+        count += 1
     return 0 if count else 1
 
 
@@ -195,7 +218,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     e = sub.add_parser("export", help="export the clouds of a map")
     e.add_argument("map_dir")
-    e.add_argument("--format", choices=["pcd", "ply"], default="pcd", help="point cloud format (default: pcd, the one PCL and the ROS tools read)")
+    e.add_argument("--format", choices=["pcd", "ply", "grid"], default="pcd",
+                   help="pcd or ply: the clouds (default pcd, the one PCL and the ROS tools read); grid: an occupancy "
+                        "grid per floor, PGM + YAML for nav2's map_server")
+    e.add_argument("--resolution", type=float, default=0.05, help="grid: cell size in m (default 0.05)")
+    e.add_argument("--min-height", type=float, default=0.05,
+                   help="grid: obstacles from this height above the robot's base, m (default 0.05: above the floor)")
+    e.add_argument("--max-height", type=float, default=2.0,
+                   help="grid: obstacles up to this height above the robot's base, m (default 2.0)")
     e.set_defaults(func=cmd_export)
 
     v = sub.add_parser("eval", help="evaluate a map against ground truth")

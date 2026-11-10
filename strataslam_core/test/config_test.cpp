@@ -38,8 +38,9 @@ bool has_error(const ConfigResult& r, const std::string& text) {
 }  // namespace
 
 TEST(Profiles, EveryShippedProfileValidates) {
-  for (const char* name : {"ground_camera", "ground_lidar", "ground_lidar_camera_imu",
-                           "handheld_camera_imu", "aerial_lidar_camera_imu"}) {
+  for (const char* name :
+       {"ground_camera", "ground_lidar", "ground_lidar_camera_imu", "ground_scan_camera_imu",
+        "handheld_camera_imu", "aerial_lidar_camera_imu"}) {
     const auto r = load_profile_file(std::string(STRATASLAM_PROFILE_DIR) + "/" + name + ".yaml");
     EXPECT_TRUE(r.ok()) << name << ": " << (r.errors.empty() ? "" : r.errors[0].format());
   }
@@ -67,8 +68,9 @@ namespace {
 
 // The shipped profiles are templates: every option of a profile, active when the example uses it,
 // commented (`# key: value`) with its default otherwise.
-const char* kTemplates[] = {"ground_camera", "ground_lidar", "ground_lidar_camera_imu",
-                            "handheld_camera_imu", "aerial_lidar_camera_imu"};
+const char* kTemplates[] = {"ground_camera",           "ground_lidar",
+                            "ground_lidar_camera_imu", "ground_scan_camera_imu",
+                            "handheld_camera_imu",     "aerial_lidar_camera_imu"};
 
 struct OptionLine {
   size_t index;  ///< line number in the file
@@ -346,8 +348,24 @@ TEST(Rules, InvalidEnumAndLidar2d) {
   EXPECT_TRUE(has_error(r,
                         "config error: robot.platform: invalid value: \"submarine\" (allowed: "
                         "handheld, ground, aerial)"));
-  r = load_profile_string("strataslam: {version: 1}\nsensors:\n  lidar: {type: 2d}\n");
-  EXPECT_TRUE(has_error(r, "config error: sensors.lidar.type: only \"3d\" is supported in v1"));
+  r = load_profile_string("strataslam: {version: 1}\nsensors:\n  lidar: {type: 4d}\n");
+  EXPECT_TRUE(
+      has_error(r, "config error: sensors.lidar.type: invalid value: \"4d\" (allowed: 3d, 2d)"));
+}
+
+// A planar scanner (ADR-0066): read as such, and only on a robot that moves in its plane.
+TEST(Rules, Lidar2dNeedsAGroundRobot) {
+  auto r = load_profile_string(
+      "strataslam: {version: 1}\nsensors:\n  lidar: {enabled: true, topic: /scan, type: 2d}\n");
+  EXPECT_TRUE(has_error(r,
+                        "config error: sensors.lidar.type: \"2d\" requires robot.platform: ground "
+                        "(a planar scan measures x, y and heading only)"));
+  r = load_profile_string(
+      "strataslam: {version: 1}\nrobot: {platform: ground}\nsensors:\n  lidar: {enabled: true, "
+      "topic: /scan, type: 2d}\n");
+  ASSERT_TRUE(r.ok()) << errors_of(r).front();
+  EXPECT_EQ(r.config->sensors.lidar.type, LidarType::Planar);
+  EXPECT_EQ(load_profile_string(kBase).config->sensors.lidar.type, LidarType::ThreeD);
 }
 
 TEST(Rules, BadYamlAndMissingHeader) {
@@ -623,4 +641,19 @@ TEST(Rules, ColourWarningOnlyWhenAskedFor) {
   };
   EXPECT_FALSE(has_warning(load_profile_string(kBase)));
   EXPECT_TRUE(has_warning(load_profile_string(with("fusion: {colorize_cloud: true}\n"))));
+}
+
+// The colouring's resources (ADR-0069): 0-32 views, the images at 1/1 to 1/4.
+TEST(Rules, ColourViewsAndImageScale) {
+  auto r = load_profile_string(with("fusion: {colorize_views: 0, colorize_image_scale: 0.5}\n"));
+  ASSERT_TRUE(r.ok()) << errors_of(r).front();
+  EXPECT_EQ(r.config->fusion.colorize_views, 0);
+  EXPECT_DOUBLE_EQ(r.config->fusion.colorize_image_scale, 0.5);
+  EXPECT_EQ(load_profile_string(kBase).config->fusion.colorize_views, 8);
+  r = load_profile_string(with("fusion: {colorize_views: -1, colorize_image_scale: 0.4}\n"));
+  EXPECT_TRUE(has_error(r,
+                        "config error: fusion.colorize_views: must be in [0, 32] (0: each "
+                        "keyframe's own image only)"));
+  EXPECT_TRUE(
+      has_error(r, "config error: fusion.colorize_image_scale: must be 1, 0.5, 0.333 or 0.25"));
 }

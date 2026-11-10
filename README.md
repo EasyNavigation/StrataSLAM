@@ -14,8 +14,8 @@
 # StrataSLAM
 
 Open multi-floor 3D SLAM for ROS 2: **one point cloud per floor and a global one, without the floors
-collapsing into each other.** RGB-D camera, 3D LiDAR or both; IMU, barometer and external odometry are
-optional; everything is configured with one YAML profile. `strataslam doctor` checks your setup before you
+collapsing into each other.** RGB-D camera, 3D LiDAR or both, or a 2D laser scanner on a ground robot; IMU,
+barometer and external odometry are optional; everything is configured with one YAML profile. `strataslam doctor` checks your setup before you
 map, and an offline tool fuses the floors, even without any visual overlap, in a gravity-aligned
 4-degree-of-freedom group (SE(2)×ℝ).
 
@@ -86,6 +86,7 @@ transitions) and `/strataslam/floor_cloud` (the current floor's cloud, for RViz)
 ```bash
 strataslam fuse   ~/strataslam_maps/<run>        # the floors into one building (--anchors anchors.yaml if needed)
 strataslam export ~/strataslam_maps/<run>        # one PCD per floor; --format ply for PLY
+strataslam export ~/strataslam_maps/<run> --format grid   # an occupancy grid per floor for nav2 (PGM + YAML)
 ```
 
 The user guide is in [docs/user/](docs/user/README.md); the on-disk map format in

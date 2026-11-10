@@ -345,3 +345,150 @@ TEST(LidarFrontend, ADegenerateRegistrationMovesNoFurtherThanAPhysicalAccelerati
   const Vector3d step = after_a_jump(0.1, 30.0, &state);
   EXPECT_NEAR(step.x(), 0.1, 0.03);
 }
+
+// ---------------- A planar scanner (lidar.type: 2d, ADR-0066) ----------------
+
+namespace {
+
+/// The walls of a room of 8 x 6 m with three boxes (tables, a cupboard), as 2D segments.
+std::vector<std::pair<Eigen::Vector2d, Eigen::Vector2d>> floor_plan() {
+  std::vector<std::pair<Eigen::Vector2d, Eigen::Vector2d>> s;
+  const auto box = [&](double x0, double y0, double x1, double y1) {
+    s.push_back({{x0, y0}, {x1, y0}});
+    s.push_back({{x1, y0}, {x1, y1}});
+    s.push_back({{x1, y1}, {x0, y1}});
+    s.push_back({{x0, y1}, {x0, y0}});
+  };
+  box(-4, -3, 4, 3);
+  box(1.0, 0.5, 2.0, 1.5);
+  box(-3.0, -2.0, -2.2, -1.2);
+  box(-1.0, 1.8, 0.2, 2.6);
+  return s;
+}
+
+/// A sweep of 190 deg in 0.33 deg steps (a Tiago's base laser) from (x, y, heading) in the plan:
+/// the nearest wall along each ray, in the scanner's frame (z = 0), up to 10 m.
+std::vector<Vector3f> sweep(double x, double y, double heading) {
+  std::vector<Vector3f> pts;
+  const auto plan = floor_plan();
+  for (double a = -95.0; a <= 95.0; a += 0.333) {
+    const double th = heading + a * M_PI / 180.0;
+    const Eigen::Vector2d o(x, y), d(std::cos(th), std::sin(th));
+    double best = 10.0;
+    for (const auto& [p, q] : plan) {
+      const Eigen::Vector2d e = q - p;
+      const double den = d.x() * e.y() - d.y() * e.x();
+      if (std::abs(den) < 1e-12) continue;
+      const Eigen::Vector2d w = p - o;
+      const double t = (w.x() * e.y() - w.y() * e.x()) / den;
+      const double u = (w.x() * d.y() - w.y() * d.x()) / den;
+      if (t > 0.05 && u >= 0.0 && u <= 1.0) best = std::min(best, t);
+    }
+    if (best < 10.0) {
+      const double r = best, b = a * M_PI / 180.0;
+      pts.emplace_back(static_cast<float>(r * std::cos(b)), static_cast<float>(r * std::sin(b)),
+                       0.f);
+    }
+  }
+  return pts;
+}
+
+LidarFrontendConfig planar_config() {
+  LidarFrontendConfig c;
+  c.planar_scan = true;
+  c.scan_voxel = c.map_voxel = c.keyframe_cloud_voxel = 0.05;
+  c.max_correspondence = 0.5;
+  c.min_points = 30;
+  c.min_range = 0.1;
+  c.max_range = 10.0;
+  return c;
+}
+
+}  // namespace
+
+TEST(PlanarScan, TheRegistrationRecoversTheMotionInThePlaneAndHoldsTheRest) {
+  // Two sweeps 0.3 m, -0.2 m and 8 deg apart; the guess 0.1 m and 3 deg off in the plane, and with
+  // a height, roll and pitch (the prediction's) that nothing in the sweeps measures.
+  const auto target = sweep(0.0, 0.0, 0.0);
+  const auto source = sweep(0.30, -0.20, 8.0 * M_PI / 180.0);
+  const double roll = 0.5 * M_PI / 180.0, pitch = -0.3 * M_PI / 180.0;
+  const gtsam::Pose3 init(gtsam::Rot3::Ypr(5.0 * M_PI / 180.0, pitch, roll),
+                          Vector3d(0.22, -0.14, 0.02));
+  const auto out = LidarFrontend::register_clouds(target, source, init, planar_config());
+  ASSERT_TRUE(out.converged);
+  EXPECT_EQ(out.quality.state, TrackingState::Good);
+  const gtsam::Pose3& T = out.T_target_source;
+  EXPECT_NEAR(T.x(), 0.30, 0.01);
+  EXPECT_NEAR(T.y(), -0.20, 0.01);
+  EXPECT_NEAR(T.rotation().yaw() * 180.0 / M_PI, 8.0, 0.2);
+  // They stay at the guess (the copies stacked for the registration would otherwise "measure" a
+  // roll and pitch of walls they only assume vertical), up to the coupling of turning about the
+  // sensor's own z, tilted by the guess: 0.2 mm and 0.03 deg here; freed, they would go to 0.
+  EXPECT_NEAR(T.z(), 0.02, 1e-3);
+  EXPECT_NEAR(T.rotation().roll(), roll, 0.05 * M_PI / 180.0);
+  EXPECT_NEAR(T.rotation().pitch(), pitch, 0.05 * M_PI / 180.0);
+}
+
+TEST(PlanarScan, ASweepAlongOneWallIsDegradedNotGood) {
+  // Facing a long wall at 1 m with nothing else in reach: the motion along it is unobserved.
+  std::vector<Vector3f> wall;
+  for (double y = -3.0; y <= 3.0; y += 0.02) wall.emplace_back(1.0f, static_cast<float>(y), 0.f);
+  const auto out = LidarFrontend::register_clouds(wall, wall, gtsam::Pose3(), planar_config());
+  EXPECT_EQ(out.quality.state, TrackingState::Degraded);
+}
+
+TEST(PlanarScan, TheFrontendTracksAPathThroughTheRoom) {
+  // 4 s at 10 Hz: forward along x, then turning at 0.6 rad/s.
+  LidarFrontend fe{planar_config()};
+  double x = -1.5, y = 0.0, th = 0.0;
+  FrontendResult r;
+  for (int k = 0; k <= 40; ++k) {
+    if (k > 0) {
+      if (k <= 20) {
+        x += 0.05;
+      } else {
+        th += 0.06;
+        x += 0.04 * std::cos(th);
+        y += 0.04 * std::sin(th);
+      }
+    }
+    LidarScan scan;
+    scan.points = sweep(x, y, th);
+    scan.stamp = 1'000'000'000LL + k * 100'000'000LL;
+    SensorFrame f;
+    f.lidar = &scan;
+    f.stamp = scan.stamp;
+    r = fe.process(f);
+    ASSERT_TRUE(r.valid) << "sweep " << k;
+  }
+  // The frontend's frame is the first sweep's: the truth relative to it.
+  const gtsam::Pose3 start(gtsam::Rot3(), Vector3d(-1.5, 0.0, 0.0));
+  const gtsam::Pose3 truth = start.between(gtsam::Pose3(gtsam::Rot3::Yaw(th), Vector3d(x, y, 0)));
+  const gtsam::Pose3 err = r.T_odom_base.between(truth);
+  EXPECT_LT(err.translation().norm(), 0.03);
+  EXPECT_LT(std::abs(err.rotation().yaw()) * 180.0 / M_PI, 0.5);
+  EXPECT_NEAR(r.T_odom_base.z(), 0.0, 1e-3);
+}
+
+TEST(PlanarScan, ASweepOfAFewCellsIsTrackedNotDropped) {
+  // In a corner, a metre from both walls: some 50 cells of 5 cm, which a 3D LiDAR's scan never is
+  // (below its 100 the scan is not tracked; on slam_test the Tiago turned 16 deg unmeasured there).
+  std::vector<Vector3f> corner;
+  for (double y = -0.5; y <= 1.0; y += 0.02) corner.emplace_back(1.0f, static_cast<float>(y), 0.f);
+  for (double x = 0.0; x < 1.0; x += 0.02) corner.emplace_back(static_cast<float>(x), 1.0f, 0.f);
+  const auto second_valid = [&](const LidarFrontendConfig& cfg) {
+    LidarFrontend fe{cfg};
+    LidarScan scan;
+    scan.points = corner;
+    SensorFrame f;
+    f.lidar = &scan;
+    scan.stamp = f.stamp = 1'000'000'000LL;
+    fe.process(f);
+    scan.stamp = f.stamp = 1'100'000'000LL;
+    return fe.process(f).valid;
+  };
+  EXPECT_TRUE(second_valid(planar_config()));
+  LidarFrontendConfig as_3d = planar_config();
+  as_3d.min_points = 100;
+  EXPECT_FALSE(second_valid(as_3d));
+}

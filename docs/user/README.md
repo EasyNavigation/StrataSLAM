@@ -1,8 +1,10 @@
 # StrataSLAM user guide
 
 StrataSLAM builds 3D maps of multi-floor buildings: one point cloud per floor and a global one, without
-the floors collapsing into each other. It works with an RGB-D camera, a 3D LiDAR or both, with an IMU,
-a barometer and external odometry as options, and is configured with a single YAML profile.
+the floors collapsing into each other. It works with an RGB-D camera, a 3D LiDAR or both, or a 2D laser scanner
+on a ground robot (one level at a time, with or without a camera), with an IMU, a barometer and external odometry as
+options, and is configured with a single YAML profile. Besides the clouds, a map exports an occupancy grid per floor
+for navigation (nav2).
 
 1. [Install and build](install.md)
 2. [Write a profile](profiles.md)

@@ -114,6 +114,9 @@ class SlamSystem {
   std::vector<std::pair<Timestamp, gtsam::Pose3>> floor_path(FloorId floor) const;
   /// Voxelized cloud of a floor in its own frame, rebuilt from the optimized keyframe poses.
   std::vector<Eigen::Vector3f> floor_cloud(FloorId floor, double voxel) const;
+  /// The same with the colours each keyframe's own image gave it (no colours without any), for the
+  /// live view; the saved map also colours points from the images around (ADR-0069).
+  PointCloud floor_cloud_colored(FloorId floor, double voxel) const;
   /// Operator request: close the current session and start a new one on the same floor.
   void new_session();
   /// Operator request: the robot is now on the next floor (`~/mark_floor_change`).

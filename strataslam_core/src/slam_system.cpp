@@ -53,7 +53,23 @@ struct SlamSystem::Impl {
   std::vector<ImuSample> imu_since_update;
   std::optional<RgbdFrame>
       last_cam;  // newest camera frame (when the odometry comes from the LiDAR)
+  // A planar scanner with a camera: the frames of the last half second, for the depth of each
+  // keyframe from the image nearest to it in time (ADR-0068). The newest frame is not it: a
+  // camera's stamps may run ahead of the scanner's (100 ms on the Tiago), and frames come every
+  // 30-70 ms.
+  std::deque<std::shared_ptr<const RgbdFrame>> recent_cams;
   std::map<KeyframeId, std::shared_ptr<const RgbdFrame>> keyframe_images;  // only when colorizing
+  // The colours of each keyframe's cloud from its own image, and which points it saw (only when
+  // colorizing): a camera's from the pixels its points came from (ADR-0068), a LiDAR's from the
+  // image taken with the scan. The map's colours start from these (ADR-0069).
+  struct KfColors {
+    std::vector<std::array<uint8_t, 3>> rgb;
+    std::vector<bool> seen;
+  };
+  std::map<KeyframeId, KfColors> keyframe_colors;
+  // A planar scanner with a camera: each keyframe's depth cloud in its base frame, the 3D of the
+  // map that the scan cannot see (ADR-0068). The scan stays the keyframe's cloud (loops, grid).
+  std::map<KeyframeId, PointCloud> depth_clouds;
   bool gravity_done = false;
   Timestamp first_frame = 0;  // of the odometry's sensor, while waiting to level the start
   // The frame being processed, so that a frontend restart can re-level on it.
@@ -156,6 +172,19 @@ struct SlamSystem::Impl {
     lc.keyframe_rotation_deg = cfg.output.keyframe_rotation_deg;
     lc.threads = threads;
     lc.deskew = cfg.sensors.lidar.deskew != DeskewMode::False;
+    if (cfg.sensors.lidar.type == LidarType::Planar) {
+      // A planar scanner (ADR-0066): a few hundred points a sweep, a few metres to the walls, all
+      // of them in one plane. Its sampling is that of an indoor map (5 cm, the scanner's own
+      // spacing at a few metres) and its local map the reach of its range; the plane is registered
+      // alone.
+      lc.planar_scan = true;
+      lc.scan_voxel = 0.05;
+      lc.map_voxel = 0.05;
+      lc.keyframe_cloud_voxel = 0.05;
+      lc.max_correspondence = 0.5;
+      lc.min_points = 30;  // 1.5 m of wall: what a sweep keeps at arm's length of an obstacle
+      lc.map_radius = std::min(lc.map_radius, 2.0 * cfg.sensors.lidar.max_range);
+    }
     tuning.lidar = lc;
     if (cfg.sensors.lidar.enabled) lidar_fe = std::make_unique<LidarFrontend>(lc, ext.T_base_lidar);
 
@@ -789,6 +818,45 @@ struct SlamSystem::Impl {
     }
   }
 
+  /// The colours of keyframe `id`'s cloud in the saved map: its own image's, and for the points it
+  /// did not see, the images of up to 8 other keyframes of its floor within 6 m, nearest first,
+  /// where the point lies on the surface the image measured (ADR-0069). Empty without any.
+  std::vector<std::array<uint8_t, 3>> map_colors(const FloorGraph& g, KeyframeId id,
+                                                 const std::vector<Eigen::Vector3f>& cloud) const {
+    const size_t kViews = static_cast<size_t>(std::max(0, cfg.fusion.colorize_views));
+    constexpr double kRadius = 6.0;  // m
+    KfColors k;
+    const auto own = keyframe_colors.find(id);
+    if (own != keyframe_colors.end() && own->second.rgb.size() == cloud.size() &&
+        own->second.seen.size() == cloud.size()) {
+      k = own->second;
+    } else if (keyframe_images.empty()) {
+      return {};
+    } else {
+      k.rgb.assign(cloud.size(), {128, 128, 128});
+      k.seen.assign(cloud.size(), false);
+    }
+    if (!keyframe_images.empty() &&
+        std::find(k.seen.begin(), k.seen.end(), false) != k.seen.end()) {
+      const gtsam::Pose3 Xi = g.pose(id) * backend.keyframe(id).T_base_sensor;
+      std::vector<std::pair<double, KeyframeId>> near;
+      for (KeyframeId j : g.keyframe_ids()) {
+        if (j == id || !keyframe_images.count(j)) continue;
+        const double d = (g.pose(j).translation() - g.pose(id).translation()).norm();
+        if (d <= kRadius) near.push_back({d, j});
+      }
+      std::sort(near.begin(), near.end());
+      if (near.size() > kViews) near.resize(kViews);
+      std::vector<ColorView> views;
+      for (const auto& [d, j] : near)
+        views.push_back(
+            {(g.pose(j) * ext.T_base_camera).inverse() * Xi, keyframe_images.at(j).get()});
+      colorize_from_views(cloud, views, cfg.sensors.camera.depth_max, 0.3, &k.rgb, &k.seen);
+    }
+    if (std::find(k.seen.begin(), k.seen.end(), true) == k.seen.end()) return {};
+    return std::move(k.rgb);
+  }
+
   // ---------------- place recognition ----------------
 
   /// PnP verification of a visual candidate: relative base pose T_cand_cur, or nullopt.
@@ -910,6 +978,14 @@ struct SlamSystem::Impl {
     if (have_graph_init) inits.insert(inits.begin(), init_graph);
     if (init_rel_base)
       inits = {T_lc.inverse() * (*init_rel_base) * T_lc};  // the visual estimate as the only guess
+    // A planar scanner registers x, y and heading and holds the rest at the guess: two sweeps of
+    // one level are in one plane, so the guess is put in it (a camera's estimate has a few
+    // centimetres and tenths of a degree out of it, which the registration would keep and the graph
+    // refuse).
+    if (tuning.lidar.planar_scan)
+      for (gtsam::Pose3& init : inits)
+        init = gtsam::Pose3(gtsam::Rot3::Yaw(init.rotation().yaw()),
+                            gtsam::Point3(init.x(), init.y(), 0.0));
     for (const gtsam::Pose3& init : inits) {
       auto out = LidarFrontend::register_clouds(submap, cur.cloud, init, tuning.lidar);
       if (!have || out.quality.fitness > best.quality.fitness) {
@@ -1460,6 +1536,11 @@ void SlamSystem::add_rgbd(const RgbdFrame& f) {
   auto& s = *impl_;
   if (s.visual_fe && s.modes.odometry != OdometrySource::Camera) {
     s.last_cam = f;  // keypoints for the next LiDAR keyframe (loop closure candidates, colors)
+    if (s.tuning.lidar.planar_scan) {
+      constexpr Timestamp kKeepCams = 500'000'000;  // ns
+      s.recent_cams.push_back(std::make_shared<const RgbdFrame>(f));
+      while (s.recent_cams.front()->stamp < f.stamp - kKeepCams) s.recent_cams.pop_front();
+    }
     return;
   }
   if (!s.visual_fe || s.modes.odometry != OdometrySource::Camera) return;
@@ -1503,6 +1584,13 @@ void SlamSystem::add_rgbd(const RgbdFrame& f) {
   s.feed_manager(r, f.stamp);
   if (r.is_keyframe) {
     const VisualKeyframeData& kd = s.visual_fe->last_keyframe();
+    // Each point of the keyframe's cloud takes the colour of the pixel it came from (ADR-0068:
+    // before, `colorize_cloud` coloured LiDAR points only, and a camera's map had no colour).
+    if (s.cfg.fusion.colorize_cloud && !f.rgb.empty()) {
+      Impl::KfColors& kc = s.keyframe_colors[s.next_kf];
+      kc.rgb = colorize_points(kd.cloud, gtsam::Pose3(), f.K, f.rgb, nullptr, 0.3, 20.0,
+                               {128, 128, 128}, &kc.seen);
+    }
     s.insert_keyframe(r, kd.cloud, s.ext.T_base_camera, f.stamp,
                       Impl::VisualKf{kd.keypoints, kd.p_cam, kd.K});
   }
@@ -1557,6 +1645,13 @@ void SlamSystem::add_lidar(const LidarScan& scan) {
                                  .norm() *
                              180.0 / M_PI));
   s.to_plane(r);
+  if (debug_channel("TRACK"))
+    s.log->log(LogLevel::Debug,
+               strprintf("scan t=%.2f pts=%zu valid=%d inl=%d fit=%.3f eig=%.4f state=%d "
+                         "yaw=%.2f",
+                         scan.stamp * 1e-9, scan.points.size(), r.valid, r.quality.inliers,
+                         r.quality.fitness, r.quality.min_eigenvalue, int(r.quality.state),
+                         r.valid ? r.T_odom_base.rotation().yaw() * 180.0 / M_PI : 0.0));
   if (!r.valid) {
     s.handle_lost(scan.stamp);
     s.feed_manager(r, scan.stamp);
@@ -1564,6 +1659,7 @@ void SlamSystem::add_lidar(const LidarScan& scan) {
   }
   s.lost_since = 0;
   s.last_pose = r.T_odom_base;
+  const Timestamp prev_pose_stamp = s.last_pose_stamp;
   s.last_pose_stamp = scan.stamp;
   if (r.quality.state == TrackingState::Good) s.last_good = {scan.stamp, r.T_odom_base};
   s.learn_imu_mounting(r, scan.stamp);
@@ -1576,8 +1672,40 @@ void SlamSystem::add_lidar(const LidarScan& scan) {
     }
     const KeyframeId id = s.next_kf;
     s.insert_keyframe(r, s.lidar_fe->last_keyframe_cloud(), s.ext.T_base_lidar, scan.stamp, vis);
-    if (vis && s.cfg.fusion.colorize_cloud && s.last_cam && !s.last_cam->rgb.empty())
-      s.keyframe_images[id] = std::make_shared<RgbdFrame>(*s.last_cam);
+    if (vis && s.cfg.fusion.colorize_cloud && s.last_cam && !s.last_cam->rgb.empty()) {
+      const RgbdFrame& img = *s.last_cam;
+      // The scan's colours from this image, as the map had them at save time (now also live).
+      if (const auto* cloud = s.backend.cloud(id)) {
+        Impl::KfColors& kc = s.keyframe_colors[id];
+        kc.rgb = colorize_points(*cloud, s.ext.T_base_camera.inverse() * s.ext.T_base_lidar, img.K,
+                                 img.rgb, &img.depth, 0.3, 20.0, {128, 128, 128}, &kc.seen);
+      }
+      // Kept for the other keyframes' points at save time, at the profile's scale (ADR-0069).
+      if (s.cfg.fusion.colorize_views > 0)
+        s.keyframe_images[id] = std::make_shared<RgbdFrame>(decimate_frame(
+            img, static_cast<int>(std::lround(1.0 / s.cfg.fusion.colorize_image_scale))));
+    }
+    // A planar scanner sees one line of the room: the 3D of the map is the camera's depth, placed
+    // by the scan's pose (ADR-0068), from the image nearest to the sweep in time (within 150 ms).
+    // The base is moved to the image's time along the motion of the last scan interval: at
+    // 0.5 rad/s, 50 ms is 1.4 deg, 12 cm on a wall 5 m away.
+    std::shared_ptr<const RgbdFrame> near;
+    for (const auto& c : s.recent_cams)
+      if (!near || std::llabs(c->stamp - scan.stamp) < std::llabs(near->stamp - scan.stamp))
+        near = c;
+    constexpr Timestamp kDepthWindow = 150'000'000;  // ns
+    if (near && std::llabs(near->stamp - scan.stamp) <= kDepthWindow &&
+        !near->depth.meters.empty()) {
+      gtsam::Pose3 T_kf_cam_base;
+      if (prev_pose_stamp > 0 && scan.stamp > prev_pose_stamp) {
+        const double frac = static_cast<double>(near->stamp - scan.stamp) /
+                            static_cast<double>(scan.stamp - prev_pose_stamp);
+        T_kf_cam_base = gtsam::Pose3::Expmap(gtsam::Pose3::Logmap(r.delta) * frac);
+      }
+      s.depth_clouds[id] =
+          depth_map_cloud(*near, s.tuning.visual.cloud_stride, s.tuning.visual.tracker.depth,
+                          T_kf_cam_base * s.ext.T_base_camera);
+    }
   }
 }
 
@@ -1624,8 +1752,56 @@ std::vector<Eigen::Vector3f> SlamSystem::floor_cloud(FloorId floor, double voxel
     const auto w =
         transform_points(*cloud, (g.pose(id) * s.backend.keyframe(id).T_base_sensor).matrix());
     merged.insert(merged.end(), w.begin(), w.end());
+    const auto d = s.depth_clouds.find(id);
+    if (d != s.depth_clouds.end()) {
+      const auto wd = transform_points(d->second.points, g.pose(id).matrix());
+      merged.insert(merged.end(), wd.begin(), wd.end());
+    }
   }
   return voxel_downsample(merged, voxel);
+}
+
+PointCloud SlamSystem::floor_cloud_colored(FloorId floor, double voxel) const {
+  const auto& s = *impl_;
+  PointCloud out;
+  const auto fl = s.backend.floors();
+  if (std::find(fl.begin(), fl.end(), s.key_floor(floor)) == fl.end()) return out;
+  const FloorGraph& g = s.backend.floor(floor);
+  std::vector<Eigen::Vector3f> merged;
+  std::vector<std::array<uint8_t, 3>> colors;
+  bool any = false;
+  const std::array<uint8_t, 3> grey{128, 128, 128};
+  for (KeyframeId id : g.keyframe_ids()) {
+    const auto* cloud = s.backend.cloud(id);
+    if (cloud && !cloud->empty()) {
+      const auto w =
+          transform_points(*cloud, (g.pose(id) * s.backend.keyframe(id).T_base_sensor).matrix());
+      merged.insert(merged.end(), w.begin(), w.end());
+      const auto kc = s.keyframe_colors.find(id);
+      if (kc != s.keyframe_colors.end() && kc->second.rgb.size() == cloud->size()) {
+        any = true;
+        colors.insert(colors.end(), kc->second.rgb.begin(), kc->second.rgb.end());
+      } else {
+        colors.insert(colors.end(), cloud->size(), grey);
+      }
+    }
+    const auto d = s.depth_clouds.find(id);
+    if (d != s.depth_clouds.end() && !d->second.points.empty()) {
+      const auto wd = transform_points(d->second.points, g.pose(id).matrix());
+      merged.insert(merged.end(), wd.begin(), wd.end());
+      if (d->second.colors.size() == d->second.points.size()) {
+        any = true;
+        colors.insert(colors.end(), d->second.colors.begin(), d->second.colors.end());
+      } else {
+        colors.insert(colors.end(), d->second.points.size(), grey);
+      }
+    }
+  }
+  if (!any) {
+    out.points = voxel_downsample(merged, voxel);
+    return out;
+  }
+  return voxel_downsample_colored(merged, colors, voxel);
 }
 
 void SlamSystem::new_session() {
@@ -1705,8 +1881,14 @@ MapData SlamSystem::finalize(const std::string& profile_yaml) {
     if (sc.imu.enabled) fd.metadata.sensors.push_back("imu");
     if (sc.barometer.enabled) fd.metadata.sensors.push_back("barometer");
     if (sc.external_odometry.enabled) fd.metadata.sensors.push_back("external_odometry");
+    // The origins of the clouds' rays in the base frame, for the free space of a grid (ADR-0068).
+    fd.metadata.cloud_origin =
+        (s.modes.odometry == OdometrySource::Lidar ? s.ext.T_base_lidar : s.ext.T_base_camera)
+            .translation();
     std::vector<Eigen::Vector3f> merged;
     std::vector<std::array<uint8_t, 3>> merged_colors;
+    bool colored = false;  // some keyframe has colours: the floor cloud is coloured, grey elsewhere
+    const std::array<uint8_t, 3> grey{128, 128, 128};
     for (KeyframeId id : g.keyframe_ids()) {
       const FloorGraph::Node& node = g.node(id);
       const gtsam::Pose3 X = g.pose(id);
@@ -1726,21 +1908,21 @@ MapData SlamSystem::finalize(const std::string& profile_yaml) {
         // Saved in the keyframe's base frame (`cloud_frame: base`): placed by its pose alone.
         PointCloud pc;
         pc.points = transform_points(*cloud, s.backend.keyframe(id).T_base_sensor.matrix());
-        fd.clouds[id] = std::move(pc);
         const auto w =
             transform_points(*cloud, (X * s.backend.keyframe(id).T_base_sensor).matrix());
         merged.insert(merged.end(), w.begin(), w.end());
-        // Color the keyframe's LiDAR points with the camera image taken at the same time (if any).
-        const auto img = s.keyframe_images.find(id);
-        if (img != s.keyframe_images.end()) {
-          const gtsam::Pose3 T_cam_lidar = s.ext.T_base_camera.inverse() * s.ext.T_base_lidar;
-          const auto c = colorize_points(*cloud, T_cam_lidar, img->second->K, img->second->rgb,
-                                         &img->second->depth);
-          merged_colors.insert(merged_colors.end(), c.begin(), c.end());
+        // Its colours: a LiDAR's points from the camera image taken at the same time and from
+        // the images around it, a camera's from their own pixels (ADR-0068, ADR-0069); kept with
+        // the keyframe's cloud as well.
+        std::vector<std::array<uint8_t, 3>> c = s.map_colors(g, id, *cloud);
+        if (c.empty()) {
+          merged_colors.insert(merged_colors.end(), cloud->size(), grey);
         } else {
-          merged_colors.insert(merged_colors.end(), cloud->size(),
-                               std::array<uint8_t, 3>{128, 128, 128});
+          colored = true;
+          merged_colors.insert(merged_colors.end(), c.begin(), c.end());
+          pc.colors = std::move(c);
         }
+        fd.clouds[id] = std::move(pc);
         const auto vk = s.visual_kf.find(id);
         if (vk != s.visual_kf.end()) {
           VisualPayload vp;
@@ -1761,10 +1943,25 @@ MapData SlamSystem::finalize(const std::string& profile_yaml) {
                                               static_cast<float>(s.tuning.scan_context.max_range));
         }
       }
+      // A planar scanner's keyframe: the camera's depth, the 3D of the floor cloud (ADR-0068).
+      const auto dc = s.depth_clouds.find(id);
+      if (dc != s.depth_clouds.end() && !dc->second.points.empty()) {
+        const auto w = transform_points(dc->second.points, X.matrix());
+        merged.insert(merged.end(), w.begin(), w.end());
+        if (dc->second.colors.size() == dc->second.points.size()) {
+          colored = true;
+          merged_colors.insert(merged_colors.end(), dc->second.colors.begin(),
+                               dc->second.colors.end());
+        } else {
+          merged_colors.insert(merged_colors.end(), dc->second.points.size(), grey);
+        }
+        fd.depth_clouds[id] = dc->second;
+        fd.metadata.depth_origin = s.ext.T_base_camera.translation();
+      }
     }
     fd.edges = g.edge_records();
     if (!merged.empty()) {
-      if (!s.keyframe_images.empty() && merged_colors.size() == merged.size()) {
+      if (colored && merged_colors.size() == merged.size()) {
         fd.floor_cloud = voxel_downsample_colored(merged, merged_colors, s.cfg.output.voxel_size);
       } else {
         PointCloud fc;

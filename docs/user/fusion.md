@@ -3,8 +3,21 @@
 ```bash
 strataslam fuse <map_dir> [--formulation lie4|se3soft|euler] [--anchors anchors.yaml] [--floor-height-prior 3.0]
 strataslam export <map_dir> [--format pcd|ply]       # default: pcd
+strataslam export <map_dir> --format grid [--resolution 0.05] [--min-height 0.05] [--max-height 2.0]
 strataslam eval <map_dir> --gt <ground_truth_dir> [--json]
 ```
+
+`export --format grid` writes an occupancy grid per floor, `export/floor_<k>.pgm` and `.yaml` as nav2's map_server
+loads them (trinary), in the frame of that floor's cloud. A cell is occupied where the keyframes' points (and, with a
+planar scanner and a camera, their depth clouds) lie between `--min-height` and `--max-height` above the robot's base
+(the obstacles a ground robot meets: the floor and a ceiling lamp are not), free where the rays from the sensor to
+the points cross it, and unknown where nothing was seen. The band is counted in layers of 0.1 m and a ray clears, at
+each step, the layer it is at: the scan passing under a table and the camera's rays passing over it to the wall do
+not erase the table top the camera saw. In each layer a cell is as dark as the fraction of its observations that hit
+it (a person who walked by leaves it free), and the cell is the darkest of its layers. The sensors' positions come
+from the map (`cloud_origin`, `depth_origin`); a map written before them has its rays start at the base, horizontal. Any map of a ground robot gives one: a planar scanner's (its sweep
+is the band), a 3D LiDAR's or a camera's. A map written
+before `cloud_frame` (ADR-0062) keeps its clouds in a sensor frame whose pose it does not know, and is refused (ADR-0067).
 
 `fuse` puts every floor in the frame of the lowest floor, optimizing one `Pose4 = SE(2)×R` per floor (yaw
 about gravity + 3D translation). Constraints, most to least reliable: transitions with continuous tracking,

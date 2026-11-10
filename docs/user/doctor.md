@@ -15,7 +15,7 @@ Every check prints ✔ (correct), ⚠ (warning) or ✘ (error) and, when not cor
 | profile | valid (the core's own validator, as the launch) | a validation warning (e.g. aerial without IMU), or not validated because `strataslam_ros` is not installed | invalid |
 | topics | all publish (with `external_odometry.frame`, the TF odom -> base exists) | | one missing |
 | camera rate | >= 15 Hz | 5-15 | < 5 |
-| LiDAR rate | >= 5 Hz | 2-5 | < 2 |
+| LiDAR rate (PointCloud2, or LaserScan with `lidar.type: 2d`) | >= 5 Hz | 2-5 | < 2 |
 | IMU rate | >= 100 Hz | 50-100 | < 50 |
 | barometer rate | >= 5 Hz | 1-5 | < 1 |
 | camera_info | valid K, size matches | non-standard distortion | missing, null or NaN K |

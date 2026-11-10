@@ -220,9 +220,7 @@ void parse_lidar(Section s, LidarConfig& l, Diagnostics* d) {
   l.enabled = true;
   s.get("enabled", l.enabled);
   s.get("topic", l.topic);
-  std::string type = "3d";
-  s.get("type", type);
-  if (type != "3d") d->error(s.child_path("type"), "only \"3d\" is supported in v1");
+  s.get_enum("type", l.type, {{"3d", LidarType::ThreeD}, {"2d", LidarType::Planar}});
   s.get("min_range", l.min_range);
   s.get("max_range", l.max_range);
   s.get_enum(
@@ -316,6 +314,8 @@ void parse_fusion(Section s, FusionConfig& f) {
               {"both", LoopClosureFrom::Both}});
   f.colorize_cloud_explicit = s.present("colorize_cloud");
   s.get("colorize_cloud", f.colorize_cloud);
+  s.get("colorize_views", f.colorize_views);
+  s.get("colorize_image_scale", f.colorize_image_scale);
   s.get("vocabulary", f.vocabulary);
   s.finish();
 }
@@ -393,6 +393,13 @@ void cross_validate(const Config& c, Diagnostics* d) {
     case OdometryFrom::Auto:
       break;
   }
+  // A planar scanner measures the motion in its plane only: the robot must move in it (ADR-0066).
+  if (s.lidar.enabled && s.lidar.type == LidarType::Planar &&
+      c.robot.platform != Platform::Ground) {
+    d->error(
+        "sensors.lidar.type",
+        "\"2d\" requires robot.platform: ground (a planar scan measures x, y and heading only)");
+  }
   if (s.external_odometry.enabled && resolve_modes(c).odometry != OdometrySource::Camera) {
     d->warn("sensors.external_odometry",
             "only the camera tracking uses it: with LiDAR odometry it is ignored");
@@ -413,6 +420,14 @@ void cross_validate(const Config& c, Diagnostics* d) {
   }
   // Only when asked for: it is on by default, and a LiDAR-only profile need not say no (audit
   // A7-06).
+  if (c.fusion.colorize_views < 0 || c.fusion.colorize_views > 32)
+    d->error("fusion.colorize_views", "must be in [0, 32] (0: each keyframe's own image only)");
+  {
+    // 1/n of the image in each direction: every n-th pixel (n = 1..4).
+    const double sc = c.fusion.colorize_image_scale, n = sc > 0 ? 1.0 / sc : 0.0;
+    if (!(n >= 1.0 && n <= 4.0 && std::abs(n - std::round(n)) < 1e-6))
+      d->error("fusion.colorize_image_scale", "must be 1, 0.5, 0.333 or 0.25");
+  }
   if (c.fusion.colorize_cloud && c.fusion.colorize_cloud_explicit && !s.camera.enabled) {
     d->warn("fusion.colorize_cloud", "without an enabled camera the cloud is not colourized");
   }
