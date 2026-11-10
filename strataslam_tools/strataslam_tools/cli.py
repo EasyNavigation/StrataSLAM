@@ -100,7 +100,7 @@ def cmd_export(args: argparse.Namespace) -> int:
 
 def export_grids(args: argparse.Namespace, root: Path, out: Path) -> int:
     """One occupancy grid per floor, in that floor's frame (that of its floor_cloud.pcd)."""
-    from . import grid  # noqa: PLC0415
+    from . import grid
 
     count = 0
     for f in mapio.read_manifest(root)["floors"]:

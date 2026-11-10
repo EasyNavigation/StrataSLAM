@@ -18,6 +18,8 @@
   `strataslam doctor --preset-dir` and the node's `preset_dir` parameter are gone.
 
 ### Added
+- `scripts/check_before_push.sh`: the CI's quick checks before a push (clang-format, clang-tidy on the changed
+  sources of the core, ruff, mypy, links, licences), also as a git `pre-push` hook (`--install-hook`).
 - More of a LiDAR's map takes the camera's colours: at save time, the points a keyframe's own image did not see are
   coloured from the images of up to 8 keyframes within 6 m, where the point lies on the surface the image measured.
   The live view shows the colours in a third tab, **3D: colour**, and `/strataslam/floor_cloud` carries them (`rgb`)

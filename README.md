@@ -120,6 +120,9 @@ python3 scripts/license_audit.py --ldd build/strataslam_core/libstrataslam_core.
 colcon build && colcon test
 # The install guide itself, in clean Docker containers:
 scripts/check_install.sh core && scripts/check_install.sh ros
+# Before pushing: the CI's quick checks (clang-format, clang-tidy on the changed sources, ruff, mypy, links, licences);
+# --install-hook runs them before every git push
+scripts/check_before_push.sh --install-hook
 ```
 
 Sanitizers: `-DSTRATASLAM_ENABLE_SANITIZERS=ON`. Coverage: `-DSTRATASLAM_ENABLE_COVERAGE=ON` then

@@ -848,6 +848,7 @@ struct SlamSystem::Impl {
       std::sort(near.begin(), near.end());
       if (near.size() > kViews) near.resize(kViews);
       std::vector<ColorView> views;
+      views.reserve(near.size());
       for (const auto& [d, j] : near)
         views.push_back(
             {(g.pose(j) * ext.T_base_camera).inverse() * Xi, keyframe_images.at(j).get()});

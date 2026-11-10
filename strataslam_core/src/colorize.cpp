@@ -76,11 +76,12 @@ RgbdFrame decimate_frame(const RgbdFrame& f, int n) {
     out.rgb.width = out.K.width;
     out.rgb.height = out.K.height;
     out.rgb.data.resize(static_cast<size_t>(out.rgb.width) * out.rgb.height * 3);
-    for (int v = 0; v < out.rgb.height; ++v)
-      for (int u = 0; u < out.rgb.width; ++u)
-        for (int c = 0; c < 3; ++c)
-          out.rgb.data[(static_cast<size_t>(v) * out.rgb.width + u) * 3 + c] =
-              f.rgb.data[(static_cast<size_t>(v * n) * f.rgb.width + u * n) * 3 + c];
+    const auto w = static_cast<size_t>(f.rgb.width), step = static_cast<size_t>(n);
+    for (size_t v = 0; v < static_cast<size_t>(out.rgb.height); ++v)
+      for (size_t u = 0; u < static_cast<size_t>(out.rgb.width); ++u)
+        for (size_t c = 0; c < 3; ++c)
+          out.rgb.data[(v * out.rgb.width + u) * 3 + c] =
+              f.rgb.data[(v * step * w + u * step) * 3 + c];
   }
   if (f.depth.width == f.K.width && f.depth.height == f.K.height && !f.depth.meters.empty()) {
     out.depth.width = out.K.width;

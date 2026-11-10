@@ -79,5 +79,9 @@ and `imu-noise` (with a CSV) do not.
   `clang-tidy` and `libomp-dev` for the C++ lint, Python 3.12 with `pip install -e "strataslam_tools[dev]"` for
   ruff, mypy and pytest. `ctest` takes about 20 minutes in series (the scenarios); `-j` with as many jobs as cores
   shortens it. `colcon test` does not fail the shell on test failures: `colcon test-result --verbose` does.
+- `scripts/check_before_push.sh` runs the CI's quick checks locally: clang-format, clang-tidy on the core's sources
+  the unpushed commits change (all of them when a header changed, or with `--all`), ruff, mypy, the documentation's
+  links and the licence audit. `--install-hook` makes it a git `pre-push` hook (`git push --no-verify` skips it).
+  It needs `clang-format-18`, `clang-tidy`, ruff 0.17.3 and mypy 1.9.0, and says which is missing.
 
 Next: [write a profile](profiles.md).
