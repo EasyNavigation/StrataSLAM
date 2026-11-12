@@ -127,6 +127,7 @@ struct Walk {
   std::mt19937 rng{11};
   double t = 0;
   double x = -0.5, yaw = M_PI;  // in room A, facing its back wall
+  double carry = 1.2;           ///< m, the sensor above the walking surface
 
   /// `same_room`: room B is room A turned round (the place of floor 0), or another room.
   explicit Walk(bool same_room = true) : world(building(same_room)) {
@@ -140,7 +141,7 @@ struct Walk {
   }
   /// A scan (5 Hz) of the world within 12 m, the sensor 1.2 m above the walking surface.
   void scan() {
-    const gtsam::Pose3 T(gtsam::Rot3::Yaw(yaw), gtsam::Point3(x, 0, surface(x) + 1.2));
+    const gtsam::Pose3 T(gtsam::Rot3::Yaw(yaw), gtsam::Point3(x, 0, surface(x) + carry));
     LidarScan s;
     s.stamp = 1'000'000'000LL + static_cast<Timestamp>(std::llround(t * 1e9));
     std::normal_distribution<double> n(0.0, 1.0);
@@ -152,6 +153,13 @@ struct Walk {
       }
     slam->add_lidar(s);
     t += 0.2;
+  }
+  /// The sensor picked up or put down to `to` m above the floor at 1.5 m/s, straight up.
+  void lift_to(double to) {
+    while (std::abs(to - carry) > 1e-9) {
+      carry = std::abs(to - carry) < 0.3 ? to : carry + (to > carry ? 0.3 : -0.3);
+      scan();
+    }
   }
   void stand(double seconds) {
     for (double e = 0; e < seconds; e += 0.2) scan();
@@ -199,6 +207,7 @@ TEST(FloorRevisit, AFloorReachedAgainByLongerStairsIsPutBackOnItByThePlace) {
   EXPECT_NEAR(*w.slam->transitions()[1].delta_z, -3.0 - kDrop, 0.3)
       << "the stairs measured as they are";
   EXPECT_TRUE(w.messages->said("floor 0 reached again"));
+  EXPECT_FALSE(w.messages->said("over the same floor")) << "the ramps are no device picked up";
   EXPECT_EQ(w.slam->transitions()[1].to, 0) << "back on floor 0, not on a level below it";
   EXPECT_EQ(w.slam->current_floor(), 0);
   EXPECT_EQ(w.slam->floor_status().num_floors, 2u);
@@ -240,7 +249,9 @@ TEST(FloorRevisit, ANewLevelNearAFloorStaysWhenItsPlaceIsAnother) {
 // on its latest optimized keyframe. The floor's anchor (the odometry when the floor was opened)
 // leaves it off by the drift the loop closures corrected; with a 3 cm range noise the scans drift,
 // and walking up and down room A closes loops. The Summit's elevator bag was 4.5 m off with the
-// anchor, in the live view as in RViz.
+// anchor, in the live view as in RViz. The correction is level: the keyframe's own roll and pitch
+// (a robot on a ramp) would tilt the whole odometry frame about it, metres of height tens of metres
+// away (the Summit's prueba_03).
 TEST(FloorRevisit, TheFloorToOdometryTransformCarriesTheCorrectionOfTheGraph) {
   Walk w;
   w.noise = 0.03;
@@ -267,4 +278,56 @@ TEST(FloorRevisit, TheFloorToOdometryTransformCarriesTheCorrectionOfTheGraph) {
   // The loops moved the latest keyframe (1.7 mm here): the anchor misses it, the TF does not.
   EXPECT_GT((anchored.translation() - path.back().second.translation()).norm(), 5e-4);
   EXPECT_LT((drawn.translation() - path.back().second.translation()).norm(), 1e-6);
+  // Heading and position only: the keyframe's roll and pitch would tilt the whole odometry frame.
+  EXPECT_LT(
+      (corrected->rotation().matrix() * Eigen::Vector3d::UnitZ() - Eigen::Vector3d::UnitZ()).norm(),
+      1e-9);
+}
+
+// A hand-held sensor picked up from the floor (0.3 m to 1.3 m above it in 0.7 s) opens a
+// transition by its height; the LiDAR sees the same floor under it before and after, so it is
+// told for what it is and the transition ends on floor 0 at once, not when the walk calms down
+// (a carried IMU never does: the portable rig spent 120 s of its floor 0 in a transition).
+TEST(FloorRevisit, ASensorPickedUpFromTheFloorIsNoFloorChange) {
+  Walk w;
+  w.carry = 0.3;
+  w.stand(3);
+  w.lift_to(1.3);
+  w.stand(1.0);
+  EXPECT_TRUE(w.messages->said("the sensor was picked up"));
+  EXPECT_EQ(w.slam->floor_status().state, FloorState::OnFloor);
+  EXPECT_EQ(w.slam->current_floor(), 0);
+  w.walk_to(-7);
+  w.stand(2);
+  w.lift_to(0.3);  // put down again
+  w.stand(1.0);
+  EXPECT_TRUE(w.messages->said("the sensor was put down"));
+  EXPECT_EQ(w.slam->floor_status().state, FloorState::OnFloor);
+  EXPECT_TRUE(w.slam->transitions().empty());
+  EXPECT_EQ(w.slam->floor_status().num_floors, 1u);
+}
+
+// A live view's floor cloud may be built from part of each keyframe's points (`max_points`): fewer
+// points, the same floor (its extent), and the saved map's cloud keeps them all.
+TEST(FloorRevisit, AViewsFloorCloudIsBuiltFromFewerPointsAndCoversTheSameFloor) {
+  Walk w;
+  w.stand(2);
+  w.walk_to(-7);
+  const auto full = w.slam->floor_cloud(0, 0.1);
+  const auto view = w.slam->floor_cloud(0, 0.1, 2000);
+  ASSERT_GT(full.size(), 2000u);
+  EXPECT_LT(view.size(), full.size());
+  EXPECT_GT(view.size(), 500u);
+  auto extent = [](const std::vector<Eigen::Vector3f>& c) {
+    Eigen::Vector3f lo = c.front(), hi = c.front();
+    for (const auto& p : c) {
+      lo = lo.cwiseMin(p);
+      hi = hi.cwiseMax(p);
+    }
+    return std::make_pair(lo, hi);
+  };
+  const auto [lo_f, hi_f] = extent(full);
+  const auto [lo_v, hi_v] = extent(view);
+  EXPECT_LT((lo_f - lo_v).norm(), 1.0f);
+  EXPECT_LT((hi_f - hi_v).norm(), 1.0f);
 }

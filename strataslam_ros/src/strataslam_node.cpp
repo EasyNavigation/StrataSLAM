@@ -1363,11 +1363,10 @@ class StrataslamNode : public rclcpp::Node {
       odom_pub_->publish(o);
     }
     if (const auto fo = slam_->floor_from_odom()) {
-      const std::string floor_frame =
-          "floor_" +
-          std::to_string(std::max<int>(
-              0, static_cast<int>(slam_->floor_status().floor < 0 ? last_floor_
-                                                                  : slam_->floor_status().floor)));
+      const int cur = std::max<int>(
+          0, static_cast<int>(slam_->floor_status().floor < 0 ? last_floor_
+                                                              : slam_->floor_status().floor));
+      const std::string floor_frame = "floor_" + std::to_string(cur);
       std::vector<geometry_msgs::msg::TransformStamped> out;
       geometry_msgs::msg::TransformStamped ts;
       ts.header.stamp = stamp;
@@ -1375,23 +1374,30 @@ class StrataslamNode : public rclcpp::Node {
       ts.child_frame_id = slam_odom_frame;
       ts.transform = to_transform(*fo);
       out.push_back(ts);
+      // map -> floor_<k>: map is the first floor; every other floor is placed once, when it
+      // appears, where the floor the robot came from puts the robot on its optimized map then (that
+      // floor's correction at the departure, and the odometry across the transition): the path goes
+      // on without a jump (ADR-0075). The floors' anchors would carry the odometry's drift since
+      // the start (1.4 m of height on the Summit's prueba_03). `strataslam fuse` refines it
+      // offline.
+      if (map_from_floor_.empty()) {
+        map_from_floor_[cur] = gtsam::Pose3();
+      } else if (!map_from_floor_.count(cur) && map_from_floor_.count(placed_floor_) &&
+                 corrected_floor_odom_.count(placed_floor_)) {
+        if (const auto anchor = slam_->floor_anchor_from_odom())
+          map_from_floor_[cur] = map_from_floor_.at(placed_floor_) *
+                                 corrected_floor_odom_.at(placed_floor_) * anchor->inverse();
+      }
+      if (map_from_floor_.count(cur)) placed_floor_ = cur;
+      corrected_floor_odom_[cur] = *fo;
       if (tf_tree) {
-        // map -> floor_<k> for every floor seen: map is the first floor, and each other floor sits
-        // where the odometry entered it (its height included). `strataslam fuse` refines this
-        // offline.
-        auto floors = floor_from_odom_;
-        if (st.floor >= 0)
-          if (const auto anchor = slam_->floor_anchor_from_odom()) floors[st.floor] = *anchor;
-        if (!root_floor_ && !floors.empty()) root_floor_ = floors.begin()->first;
-        if (root_floor_ && floors.count(*root_floor_)) {
-          for (const auto& [k, T_floor_odom] : floors) {
-            geometry_msgs::msg::TransformStamped tm;
-            tm.header.stamp = stamp;
-            tm.header.frame_id = cfg_.robot.map_frame;
-            tm.child_frame_id = "floor_" + std::to_string(k);
-            tm.transform = to_transform(floors.at(*root_floor_) * T_floor_odom.inverse());
-            out.push_back(tm);
-          }
+        for (const auto& [k, T_map_floor] : map_from_floor_) {
+          geometry_msgs::msg::TransformStamped tm;
+          tm.header.stamp = stamp;
+          tm.header.frame_id = cfg_.robot.map_frame;
+          tm.child_frame_id = "floor_" + std::to_string(k);
+          tm.transform = to_transform(T_map_floor);
+          out.push_back(tm);
         }
       }
       if (!tf_tree) {
@@ -1497,13 +1503,26 @@ class StrataslamNode : public rclcpp::Node {
     // With colorize_cloud, the cloud carries the colours each keyframe's own image gave it (an
     // `rgb` field, PCL's packing): the viewer's tab "3D: colour" (ADR-0069).
     const std::string frame = "floor_" + std::to_string(last_floor_);
+    // A view's cloud, not the map's: no more points than a viewer draws of a floor (the live
+    // view keeps 1.5 million), built from no more than it needs. Every point of a 1 km drive (KITTI
+    // 06: 9 million at the map's 0.1 m, 2.3 s to build) refreshed the cloud every 25 s under the
+    // budget above, so a loop closure showed in the path long before in the cloud. The voxel
+    // grows with the floor; the saved map keeps the profile's.
+    constexpr size_t kViewPoints = 1'500'000, kViewInput = 3'000'000;
+    double& voxel = view_voxel_[last_floor_];
+    voxel = std::max(voxel, cfg_.output.voxel_size);
+    size_t n = 0;
     if (cfg_.fusion.colorize_cloud) {
-      const auto pc = slam_->floor_cloud_colored(last_floor_, cfg_.output.voxel_size);
-      if (!pc.points.empty()) cloud_pub_->publish(xyzrgb_cloud(pc, frame, now()));
+      const auto pc = slam_->floor_cloud_colored(last_floor_, voxel, kViewInput);
+      n = pc.points.size();
+      if (n) cloud_pub_->publish(xyzrgb_cloud(pc, frame, now()));
     } else {
-      const auto pts = slam_->floor_cloud(last_floor_, cfg_.output.voxel_size);
-      if (!pts.empty()) cloud_pub_->publish(xyz_cloud(pts, frame, now()));
+      const auto pts = slam_->floor_cloud(last_floor_, voxel, kViewInput);
+      n = pts.size();
+      if (n) cloud_pub_->publish(xyz_cloud(pts, frame, now()));
     }
+    // A surface's points go with the square of the voxel: the next cloud within the bound.
+    if (n > kViewPoints) voxel *= 1.05 * std::sqrt(static_cast<double>(n) / kViewPoints);
     const auto spent = std::chrono::steady_clock::now() - start;
     cloud_not_before_ = start + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
                                     spent * (1.0 / kCloudShare));
@@ -1714,7 +1733,10 @@ class StrataslamNode : public rclcpp::Node {
   rclcpp::Subscription<strataslam_msgs::msg::Instance>::SharedPtr instance_sub_;
   bool refused_ = false;
   std::optional<bool> robot_odom_tf_;
-  std::optional<int> root_floor_;  ///< the floor that is map (the first one)
+  std::map<int, gtsam::Pose3>
+      map_from_floor_;  ///< T_map_floor of every floor, fixed when it appears
+  std::map<int, gtsam::Pose3> corrected_floor_odom_;  ///< latest T_floor_odom (with the correction)
+  int placed_floor_ = 0;  ///< the latest floor with a placement: where a new floor is placed from
   bool tf_mode_logged_ = false, odom_conflict_warned_ = false;
   size_t keyframes_at_last_save_ =
       0;  ///< keyframes of the pipeline when the map was last saved  ///< the robot publishes odom
@@ -1723,6 +1745,7 @@ class StrataslamNode : public rclcpp::Node {
   std::string profile_path_, vocabulary_path_, features_topic_, profile_text_;
   bool visual_loops_off_ = false;  ///< loops would come from the camera, but there is no vocabulary
   double cloud_period_s_ = 5.0;
+  std::map<int, double> view_voxel_;  ///< voxel of each floor's published cloud (see publish_cloud)
   std::chrono::steady_clock::time_point cloud_not_before_{};  ///< see publish_cloud
   double wait_for_viewer_s_ = 0.0;
   strataslam::Extrinsics ext_;

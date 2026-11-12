@@ -36,6 +36,8 @@ class FakeView:
         self.poses: list[tuple[float, tuple[float, float, float], int]] = []
         self.baros: list[tuple[float, float]] = []
         self.frames: list[tuple] = []
+        self.clouds: dict[int, np.ndarray] = {}
+        self.transitions: list[tuple] = []
 
     def pose(self, t, xyz, floor) -> None:
         self.poses.append((t, xyz, floor))
@@ -44,13 +46,16 @@ class FakeView:
         self.events.append((text, level))
 
     def floor_cloud(self, t, floor, points, colours=None) -> None:
-        pass
+        self.clouds[floor] = np.asarray(points)
 
     def sensor_cloud(self, t, sensor, points) -> None:
         pass
 
     def flush_paths(self) -> None:
         pass
+
+    def transition(self, t, kind, from_floor, to_floor, dz) -> None:
+        self.transitions.append((kind, from_floor, to_floor, dz))
 
     def camera(self, t, image, depth, uv, use) -> None:
         self.frames.append((t, image, depth, uv, use))
@@ -91,6 +96,89 @@ def test_frames_and_transforms() -> None:
     np.testing.assert_allclose(m @ [1.0, 0.0, 0.0, 1.0], [1.0, 1.0, 2.0, 1.0], atol=1e-12)
 
 
+def tf(parent: str, child: str, yaw: float, xyz: tuple[float, float, float]):
+    from geometry_msgs.msg import TransformStamped
+    from tf2_msgs.msg import TFMessage
+
+    ts = TransformStamped()
+    ts.header.frame_id, ts.child_frame_id = parent, child
+    ts.transform.translation.x, ts.transform.translation.y, ts.transform.translation.z = xyz
+    ts.transform.rotation.z, ts.transform.rotation.w = math.sin(yaw / 2), math.cos(yaw / 2)
+    return TFMessage(transforms=[ts])
+
+
+def cloud(frame: str, points: list[tuple[float, float, float]]):
+    from sensor_msgs_py import point_cloud2
+    from std_msgs.msg import Header
+
+    return point_cloud2.create_cloud_xyz32(Header(frame_id=frame), points)
+
+
+def test_the_floors_keep_their_anchors_and_the_robot_takes_the_correction(viewer) -> None:
+    # The Summit's elevator bag (ADR-0075): back on floor 0 the loop closures corrected the odometry by 11 deg and
+    # 4.6 m. Floor 1 must stay where it was against floor 0, and the robot must stand on floor 0's optimized map.
+    v = viewer
+    v.on_floor_state(state(0))
+    v.on_tf(tf("floor_0", "odom", 0.0, (0.0, 0.0, 0.0)))  # floor 0's anchor: odom is floor 0 at the start
+    v.on_tf(tf("floor_1", "odom", math.pi, (-22.0, -6.0, -3.0)))  # floor 1 opened after the ride up
+    v.on_cloud(cloud("floor_1", [(0.0, 0.0, 0.0)]))
+    floor1_before = v.view.clouds[1].copy()
+    v.on_floor_state(state(0))
+    yaw = math.radians(11.0)
+    v.on_tf(tf("floor_0", "odom", yaw, (-1.9, 4.2, 0.0)))  # the correction after the ride down
+    v.on_cloud(cloud("floor_1", [(0.0, 0.0, 0.0)]))
+    np.testing.assert_allclose(v.view.clouds[1], floor1_before, atol=1e-6)  # floor 1 has not turned with it
+    v.on_cloud(cloud("floor_0", [(5.0, 0.0, 0.0)]))
+    np.testing.assert_allclose(v.view.clouds[0], [[5.0, 0.0, 0.0]], atol=1e-6)  # nor floor 0: map is its anchor
+    # The robot at odometry (5, 0, 0): through the correction it is at its optimized place on floor 0.
+    m = Odometry()
+    m.header.stamp.sec = 10
+    m.pose.pose.position.x = 5.0
+    v.on_odometry(m)
+    expected = (5.0 * math.cos(yaw) - 1.9, 5.0 * math.sin(yaw) + 4.2, 0.0)
+    np.testing.assert_allclose(v.view.poses[-1][1], expected, atol=1e-6)
+
+
+def test_without_map_the_first_transform_of_each_floor_is_its_anchor(viewer) -> None:
+    # output.publish_tf: false publishes no map: the viewer places floor 1 against floor 0 by their first transforms.
+    v = viewer
+    v.on_floor_state(state(1))
+    v.on_tf(tf("floor_0", "strataslam_odom", 0.0, (0.0, 0.0, 0.0)))
+    v.on_tf(tf("floor_1", "strataslam_odom", 0.0, (0.0, 0.0, -3.0)))
+    v.on_tf(tf("floor_1", "strataslam_odom", 0.3, (1.0, 0.0, -3.0)))  # a correction on floor 1
+    v.on_cloud(cloud("floor_1", [(0.0, 0.0, 0.0)]))
+    np.testing.assert_allclose(v.view.clouds[1], [[0.0, 0.0, 3.0]], atol=1e-6)
+
+
+def test_a_new_floor_continues_the_robot_where_the_floor_it_left_had_it(viewer) -> None:
+    # The Summit's prueba_03: floor 0's loop closures had lifted the robot 1.4 m above its odometry when it took the
+    # ramp down; the floor it reached is placed by that correction (as the node places map -> floor_<k>), so the robot
+    # drawn through the new floor stands where it was drawn through the old one: no jump.
+    v = viewer
+    v.on_floor_state(state(0))
+    v.on_tf(tf("floor_0", "strataslam_odom", 0.0, (0.0, 0.0, 0.0)))
+    v.on_tf(tf("floor_0", "strataslam_odom", 0.0, (0.0, 0.0, 1.4)))  # the correction on floor 0
+    m = Odometry()
+    m.header.stamp.sec = 10
+    m.pose.pose.position.x, m.pose.pose.position.z = 20.0, -1.3
+    v.on_odometry(m)
+    before = v.view.poses[-1][1]
+    v.on_floor_state(state(1))  # the floor state comes before the new floor's transform
+    v.on_tf(tf("floor_1", "strataslam_odom", 0.3, (-5.0, 2.0, 1.3)))  # floor 1's anchor
+    v.on_odometry(m)
+    np.testing.assert_allclose(v.view.poses[-1][1], before, atol=1e-9)
+    np.testing.assert_allclose(before, (20.0, 0.0, 0.1), atol=1e-9)
+
+
+def test_the_published_map_places_the_floors(viewer) -> None:
+    v = viewer
+    v.on_floor_state(state(1))
+    v.on_tf(tf("floor_1", "odom", 0.0, (0.0, 0.0, -3.0)))
+    v.on_tf(tf("map", "floor_1", 0.2, (1.0, 2.0, 3.0)))
+    v.on_cloud(cloud("floor_1", [(0.0, 0.0, 0.0)]))
+    np.testing.assert_allclose(v.view.clouds[1], [[1.0, 2.0, 3.0]], atol=1e-6)
+
+
 def test_direction_new_floor_and_known_floor_are_reported(viewer) -> None:
     v = viewer
     v.on_odometry(odometry(1, 0.0))  # before any floor state: not drawn
@@ -109,6 +197,21 @@ def test_direction_new_floor_and_known_floor_are_reported(viewer) -> None:
                      "on floor 0 again: recognised as an already mapped floor (same level)"]
 
 
+def test_lost_tracking_is_told_apart_from_a_transition(viewer) -> None:
+    from strataslam_tools.live_view import LOST
+
+    v = viewer
+    v.on_floor_state(state(0))
+    v.on_odometry(odometry(1, 0.0))
+    v.on_floor_state(state(-1, "lost"))
+    v.on_odometry(odometry(2, 0.0))
+    v.on_floor_state(state(-1, "pending"))
+    v.on_odometry(odometry(3, 0.0))
+    v.on_floor_state(state(-1, "in_transition"))
+    v.on_odometry(odometry(4, 0.0))
+    assert [p[2] for p in v.view.poses] == [0, LOST, LOST, -1]
+
+
 def test_the_node_log_is_shown_with_its_level(viewer) -> None:
     v = viewer
     warn = Log(name="strataslam_node", msg="tracking lost: new session (floor pending)", level=30)
@@ -119,6 +222,17 @@ def test_the_node_log_is_shown_with_its_level(viewer) -> None:
     v.on_odometry(odometry(1, 0.0))
     assert ("tracking lost: new session (floor pending)", "WARN") in v.view.events
     assert all(text != "not ours" for text, _ in v.view.events)
+
+
+def test_the_transitions_the_node_closes_are_passed_to_the_view(viewer) -> None:
+    v = viewer
+    v.on_floor_state(state(0))
+    v.on_odometry(odometry(1, 0.0))
+    for text in ("floor transition ended: elevator 0->1 dz=14.770732",
+                 "floor transition ended: unknown 0->0 dz=0.000000",
+                 "floor transition ended: stairs 1->0 dz=-15.663437", "loop closure accepted"):
+        v.on_log(Log(name="strataslam_node", msg=text, level=Log.INFO))
+    assert v.view.transitions == [("elevator", 0, 1, 14.770732), ("unknown", 0, 0, 0.0), ("stairs", 1, 0, -15.663437)]
 
 
 def test_images_are_read_with_their_row_padding() -> None:

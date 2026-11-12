@@ -19,6 +19,14 @@
 
 ### Added
 
+- A hand-held rig picked up or put down (from a table, the floor) is told from a floor change by the floor the LiDAR
+  sees under it staying, and opens no transition: the portable rig's walk on floor 0 was 120 s in a transition, and
+  Elevator-VIGS rigs are put down at every control point. A carried rig's stairs end when its bearer walks on, and a ride
+  the IMU detects must brake as it pushed. Elevator-VIGS: the 16 real errors sum to 13.3 m instead of 17.5 m, no false
+  level, simulated sequences and Table I unchanged (ADR-0076).
+- The live view marks where each transition joins two floors: a cyan marker where it left (the foot of an elevator
+  ride, the top or foot of stairs and ramps) and a larger one where it arrived, labelled with the type and height the
+  node measured (`elevator 0→1 +14.77 m`), in the 3D and the top view (`transitions` in the panel).
 - `imu.accel_bias: auto | false | [x, y, z]` (ADR-0072, ADR-0074): the accelerometer's offset in its own frame,
   subtracted from every sample. With a LiDAR the node compares the IMU's gravity with the floors it sees at all
   headings: an uncalibrated accelerometer tilts the map and every metre walked climbs (the portable rig's OAK-D Lite:
@@ -159,8 +167,37 @@
 - `THIRD_PARTY.md` registers the transitive libraries; `planned` rows removed; matplotlib is the optional extra `plot` (ADR-0036).
 - `docs/user/install.md` rewritten and tested; `docs/data_format.md` documents `fused/`, the optional payload folders and the integrity checks.
 
+### Changed
+
+- The live view's 3D map is one view instead of three tabs: switching between the floors in their colour, the
+  height colours and the camera's colours keeps the camera, since each tab had a camera of its own (Rerun 0.22 cannot
+  share one). The three are layers (`floors`, `height`, `colour`) that the eye in the panel shows or hides; `height` and
+  `colour` start hidden.
 ### Fixed
 
+- The live view's floor cloud lagged a loop closure by up to 20 s on a long drive (KITTI 06): the node built it from
+  every keyframe point at the map's voxel (9 million points, 2.3 s), and its 10 % budget spaced the refreshes 25 s
+  apart. The published floor cloud is now a view's: built from at most 3 million keyframe points, its voxel grown to
+  keep it under the 1.5 million a viewer draws; refreshed every 3-5 s on KITTI 06, the saved map unchanged.
+- The robot's height jumped where it reached a new floor (1.44 m and 0.66 m on the Summit's prueba_03, in the live view
+  as in RViz): the correction in `floor_<k> -> odom` carried the latest keyframe's roll and pitch (3.5 deg on a ramp),
+  which tilted the whole odometry frame, and each new floor was placed in `map` by its anchor, with the odometry's
+  drift since the start. The correction is level now (heading and position), and a new floor is placed where the floor
+  the robot came from had it on its corrected map (ADR-0075). The saved maps do not change.
+- The live view's path broke at an elevator: in the cabin the odometry stays at the floor it left and the ride's height
+  comes at once with the next floor, which started a new piece of path. The pieces are joined where the floor changed,
+  to the floors' optimized paths and the transitions' trail as drawn, nearest in time (the floor state and the
+  odometry's jump do not arrive together: on the Summit the first pose on the new floor was still at the old height,
+  on Elevator-VIGS Office4 the ride's 14.7 m came while the transition was open). Where a floor's path took over part
+  of a transition's trail (stairs whose lower half joined the floor reached), the trail is joined to it at the cut:
+  the step there is what that floor's loop closures corrected (Office4's stairs down, 2.1 m; prueba_03 at 211 s, 3.1 m,
+  where floor 2's map came out tilted). Transitions are drawn in cyan and lost
+  tracking in grey, each with its own name in the level line (they were white like the rest on the path, and both
+  "transition / lost" in grey in the level line).
+- The live view drew the floors in the odometry frame, each with its `floor_<k> -> odom`: since that TF carries the
+  correction (ADR-0075), each floor sat where the odometry was on its last visit, and on the Summit's elevator bag
+  floor 0 turned 11 deg against floor 1. It draws in `map` now: the floors with `map -> floor_<k>` (their anchors),
+  the robot and the sensors through `map -> floor_<k> -> odom` (on the optimized map).
 - The TF `floor_<k> -> odom` was the floor's fixed anchor: the loop closures corrected the map but never the TF, so the
   live view, RViz and a navigation stack showed the robot off the optimized map by the drift corrected so far (4.5 m
   after the ride on the Summit's elevator bag). It now carries the graph's correction at the floor's latest keyframe;

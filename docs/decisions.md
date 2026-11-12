@@ -1284,8 +1284,8 @@ the table) came out as three floors: the start on the table, a floor 1 4.9 m up 
   calibrated it says 0.3 deg): floor 0 walked level (0.49-0.69 m), stairs +3.51 m (with the 0.5 m lift), stairs down
   -3.66 m back to floor 0: two floors. The Summit XL's bags and Elevator-VIGS (no `accel_bias` in their profiles)
   are unchanged. Core 248 tests, simulator 50, node 51.
-- **Limits.** The offset is said, not applied. A hand-held sensor's transition closes only once the IMU calms (the
-  person stands) or after `max_transition_s`: the portable rig's walks are in the map, but out of its loop closures,
+- **Limits.** The offset is said, not applied (ADR-0074 applies it). A hand-held sensor's transition closes only once the IMU calms (the
+  person stands) or after `max_transition_s` (ADR-0076 tells a lift from a floor change): the portable rig's walks are in the map, but out of its loop closures,
   until then (no loop closure on its return to floor 0), and in the live view they are a transition's (Elevator-VIGS
   Office4: lifted 1.2 m off the ground, put down at the control point and lifted again, 50 s before the ride).
   Closing it when the sensor rests (5 s calm, odometry and IMU, under 0.5 m travelled, under 1 m from where it
@@ -1398,13 +1398,88 @@ the Summit's elevator bag the robot stood 0.5 m off on floor 0 before the ride a
 closures had put the keyframes right; in the live view it looked as if the robot did not move with the loops.
 
 **Decision.** As `map -> odom` in slam_toolbox, Cartographer or RTAB-Map (REP-105), `floor_<k> -> odom` is the graph's
-correction of the odometry: the optimized pose of the floor's latest keyframe times the inverse of its odometry pose
-(`SlamSystem::floor_from_odom()`). It changes with every loop closure. The anchor (`floor_anchor_from_odom()`) stays for
-what must not move with the corrections: `map -> floor_<k>` (each floor where the odometry entered it) and the relative
-placement of two floors in the node's same-level check. The map itself does not change: the TF is only published.
+correction of the odometry: the heading and position that take the odometry's pose of the floor's latest keyframe to
+its optimized pose (`SlamSystem::floor_from_odom()`). It changes with every loop closure. Level: the keyframes' own roll
+and pitch differ between the two (a robot on a ramp), and in the correction they tilted the whole odometry frame about
+the keyframe (3.5 deg on the Summit's prueba_03, metres of height for a robot 40 m from the odometry's origin). The
+anchor (`floor_anchor_from_odom()`) stays for the relative placement of two floors in the node's same-level check.
+The map itself does not change: the TF is only published.
+
+`map -> floor_<k>` places each floor once, when it appears: the first floor is `map`, and any other goes where the floor
+the robot came from has the robot then, through that floor's correction at the departure and the odometry across the
+transition (`map -> floor_from -> odom` of that moment times the new floor's anchor). Placed by the anchors, the floors
+carried the odometry's drift since the start against the corrected map, and the robot's height jumped by it where the
+floor changed: on prueba_03 1.44 m and 0.66 m with the tilt, 0.35 m and 0.65 m without it, none with this placement
+(the floors at -1.00 m and -4.24 m, the floor manager's levels -1.21 m and -4.05 m). A floor reached again keeps its
+placement: the jump there is the drift the floor's loop closures correct (Elevator-VIGS Office4: 2.1 m on the stairs
+back to floor 0, whose lower half joined floor 0 and was corrected, the upper half drawn as the odometry left it).
+
+The live view drew everything in the odometry frame, each floor moved with its `floor_<k> -> odom`: with the
+correction in it, each floor would sit where the odometry was on its last visit, and the odometry's drift between
+visits came between the floors (on the Summit's bag 11 deg and 4.6 m, gathered over the two rides, turned floor 0
+against floor 1). It draws in `map` instead, as the TF tree has it: each floor with `map -> floor_<k>` (the anchors:
+the floors keep their placement against each other) and the robot and the sensors through `map -> floor_<k> -> odom`
+(the correction: the robot on the optimized map). Without `map` (`output.publish_tf: false`) it places each floor as
+the node does, from the floor the robot came from and the new floor's first `floor_<k> -> odom` (its anchor).
 
 **Result.** The Summit's elevator bag: the robot within 0.01 m of its latest optimized keyframe all along (4.56 m at
-most before), the same map (346 keyframes, 24 loop closures).
+most before), the same map (346 keyframes, 24 loop closures), the floors as before in the live view. The saved maps of
+the three bags (prueba_03, the elevator, Office4) are byte for byte the same.
 
 **Tests.** `strataslam_core/test/floor_revisit_test.cpp`: on a walk whose loops move the latest keyframe, the TF puts
-the odometry's pose on it (within 1e-6 m) where the anchor misses it.
+the odometry's pose on it (within 1e-6 m) where the anchor misses it, and is level. `strataslam_ros/test/test_viewer.py`:
+the floors keep their placement while the robot takes the correction; a new floor continues the robot where the floor it
+left had it.
+
+## ADR-0076 · A hand-held rig picked up or put down is no floor change
+
+A hand-held rig is picked up from a table or the floor and put down again: the portable rig at its start (0.5 m off a
+table), the Elevator-VIGS rigs at each control point (1.1-1.25 m off the floor). The odometry measures the height and
+the floor manager opened a transition on it, which a carried IMU, jolted by the steps, never let calm down: the
+portable rig's walk on floor 0 stayed 120 s in a transition (out of the map's loop closures, and in the live view), and
+an Elevator-VIGS rig's elevator ride was measured inside it. ADR-0072 tried closing such transitions by their plateau
+and by rest and reverted both.
+
+**The signal.** The LiDAR sees the floor under the rig. Picked up or put down, the sensor's height changes and the
+floor's does not; on stairs or a ramp the floor goes with the sensor (or, in a stairwell, jumps to another flight); in
+a cabin the odometry sees no vertical motion at all. Office4 off-line: picked up 0.94 m in 0.6 s, the floor under it
+0.07 m apart; six lifts of 1.11-1.23 m, none on its 15 m of stairs.
+
+**Decision.**
+- *Detection* (`SlamSystem::detect_lift`, hand-held platforms with a LiDAR). The floor under the LiDAR: the lowest dense
+  horizontal layer of returns within 2.5 m around and at least 0.2 m below it, past `min_range`. Triggered strictly:
+  within 0.8 s the sensor moved 0.3 m or more up or down, at least twice as much as across, the floor within 0.10 m
+  (stairs go at 0.2-0.3 m/s and mostly across; a lift at 1-1.5 m/s). Then measured whole, from the rest before it
+  (lowest or highest height in the 2 s before) to where the sensor settles (0.4 s within 6 cm), less what the floor
+  under it moved, up to 0.4 m (a sensor put on the floor sees it at a grazing angle). Also in confined scans: a sensor
+  on the floor sees only what is near (Residential3).
+- *Effect* (`FloorManager::device_lifted`). The altitude is held (as for a rebased odometry); a transition the lift
+  opened (since 3 s before its start: the IMU's window opens on its push) ends on its floor; in one open before it,
+  the lift is taken out of its height. The IMU opens no ride for 2 s: a rig picked up in a cabin made its brake a 9 m
+  ride (Residential1).
+- *A carried rig's stairs end when its bearer walks on.* The transition's calm no longer waits for the IMU's when its
+  1 s spread is the steps' (`kCabinSpread`), no ride's push begun and the odometry level: the portable rig's climb up
+  and the one down had made one transition, floor 1 lost, once its start no longer kept a transition open.
+- *A ride brakes as it pushed.* Braked now also means no more than 1/0.6 of the push: a cabin loses the speed it
+  gained. Residential1, a rig handled in a standing cabin: 0.66 m/s pushed, 1.36 braked, a 2.1 m ride and a level;
+  the rides measured 0.9-1.3.
+
+**Result** (offline, one thread). Elevator-VIGS: the 16 real errors sum to 13.3 m instead of 17.5 m, no false level
+(eleven better: Residential1 1.54 to 0.29 m, Campus4 1.60 to 0.53, Campus6 3.64 to 2.51, Station3 1.66 to 1.11); the 16
+simulated ATEs are unchanged (6.54 m), Table I is identical. Five lose 0.05-0.52 m: Station1 0.41 to 0.93 (its last
+floor misses a loop closure, 223-244, that left 0.55 m of drift), Station2 0.72 to 1.00, Residential2 0.95 to 1.20,
+Office1 0.42 to 0.51, Office4 0.07 to 0.12: the floors open at other times, and with them the anchors and the loop
+closures. The portable rig: the lift detected (0.45 m), the stairs 0->1 +3.00 m (+3.51 with the table's half metre),
+floor 0 reached again by its place, two floors, five loop closures instead of four. The Summit XL's bags (a ground
+robot) are unchanged.
+
+Tried on the way: no lift taken out of a transition open before it (Residential3's false level went, Campus6, Station3
+and Office3 lost what they had gained: 18.4 m in all), and the lift detection without confined scans (Residential3's
+put-down unseen: a ramp and a level).
+
+**Limits.** A rig whose floor is not visible (a camera alone, a LiDAR looking up) is not covered. The per-sequence
+results move with the times the floors open; Table II changes (`paper/README.md`).
+
+**Tests.** `floor_revisit_test.cpp`: a sensor picked up from the floor and put down again opens no transition; the
+ramps of the other tests are no lift. `floor_manager_test.cpp`: a carried rig's stairs end while its bearer walks on.
+

@@ -52,8 +52,9 @@ and nothing starts.
   type), `/strataslam/floor_cloud` (current floor).
 - **TF.** The node owns the frames above the robot's odometry, as a SLAM does in REP-105:
   `map -> floor_<k> -> odom -> base_frame`. `map` (`robot.map_frame`) is the first floor; every other floor hangs from
-  it where the odometry entered it, its height included (`strataslam fuse` refines that offline). `floor_<k> -> odom` carries the
-  loop closures' correction of the odometry, so it changes with each (ADR-0075). If nothing else
+  it where the robot entered it, as the floor it came from had it on its corrected map, its height included
+  (`strataslam fuse` refines that offline). `floor_<k> -> odom` carries the loop closures' correction of the odometry
+  (heading and position), so it changes with each (ADR-0075). If nothing else
   publishes `odom -> base_frame`, the node does, from its odometry; if the robot does (wheel odometry, as the Summit and
   the Tiago), the node publishes `floor_<k> -> odom` as the correction on top of it, and its own odometry
   (`/strataslam/odometry`) is in a sibling frame `strataslam_odom`. The start-up log says which.
@@ -117,17 +118,24 @@ ros2 launch strataslam_ros strataslam.launch.py profile:=profile.yaml viewer:=tr
 
 `viewer:=true` opens a [Rerun](https://rerun.io) window, live or offline, with:
 
-- **3D**: the cloud of each floor in its own colour, the path travelled in white and the robot in yellow, with a
+- **3D**: the cloud of each floor in its own colour, the path travelled in white on the floors, in cyan across
+  transitions (stairs, ramps, an elevator ride from the floor it left to the one it reached) and in grey while the
+  tracking is lost (a step in the path, joined in cyan, is where a floor's loop closures corrected part of a climb
+  that the rest of the transition, in no floor's map, keeps as the odometry left it); where each transition joins two floors, a cyan marker where it left and a larger one, labelled
+  with its type and height (`elevator 0→1 +3.67 m`), where it arrived (`transitions` in the panel, also in the top
+  view), and
+  the robot in yellow, with a
   vertical pole through every level mapped so far that shows where it is from any angle; in magenta, what the
   sensors see right now (the LiDAR scan, the camera's depth) within the extent of the map, so that far returns do
-  not move the framing, under `sensor` in the entity tree. Two tabs show it: **3D: floors**, each floor in its
-  colour, and **3D: height**, the same cloud coloured by height from blue (lowest point mapped so far) to red
-  (highest), as RViz's axis colour does; the colours are spread again over the whole map when it grows by more
-  than half a metre. With `fusion.colorize_cloud` and a camera, a third tab, **3D: colour**, shows the map with the
-  camera's colours (grey where no image saw it), as `/strataslam/floor_cloud` carries them (an `rgb` field, as RViz
-  and PCL read). Each tab keeps its own camera.
+  not move the framing, under `sensor` in the entity tree. One 3D view, so that switching what it shows keeps the camera, with
+  the map in layers that the eye of each in the panel shows or hides: `floors`, each floor in its colour (shown; one
+  floor at a time under it), `height`, the same cloud coloured by height from blue (lowest point mapped so far) to
+  red (highest), as RViz's axis colour does (the colours are spread again over the whole map when it grows by more
+  than half a metre), and, with `fusion.colorize_cloud` and a camera, `colour`, the map with the camera's colours
+  (grey where no image saw it), as `/strataslam/floor_cloud` carries them (an `rgb` field, as RViz and PCL read).
+  `height` and `colour` start hidden: show one and hide `floors` to see it alone.
 - **Top view**: the map from above, each floor in its colour.
-- **Level line**: the height of the robot over time, coloured by floor (grey while in a transition or lost). With a
+- **Level line**: the height of the robot over time, coloured by floor (cyan while in a transition, grey while the tracking is lost). With a
   barometer, its filtered height is a magenta line, aligned with the robot's height at its first reading: in each
   transition it shows whether the barometer agrees with the odometry, and how much it drifts on a floor.
 - **Log**: the node's log (transitions with their type and height change, loop closures, relocalizations, losses),
@@ -144,12 +152,14 @@ ros2 launch strataslam_ros strataslam.launch.py profile:=profile.yaml viewer:=tr
   among many reds is what precedes a tracking loss: a corridor without texture, reflections, walls out of range.
   With feature-frame input (`features_topic:=`) there is no image, only the keypoints and the depth.
 
-Everything is drawn in the odometry frame, the only one continuous across floors, so the floors sit where the
-odometry left them (with its height drift); the building as fused is the output of `strataslam fuse`. The panel on
+Everything is drawn in the map frame of the node's TF: each floor where the odometry entered it (with its height
+drift), the robot on the optimized map through the loop closures' correction (ADR-0075); the building as fused is
+the output of `strataslam fuse`. The panel on
 the left lists what is drawn, with an eye to show or hide each item: every floor cloud at once (`floors`), one
 floor, the path or the robot. The timeline at the bottom rewinds the robot, the level line and the log; the clouds,
 the path and the camera images show their latest state (keeping every refresh of them would take gigabytes on a long run). With a bag, processing waits for the window (up to 30 s) so it sees every pose, and
-the floor cloud is refreshed every second; the map is the same as without the viewer.
+the floor cloud is refreshed every second at most (it is a view's cloud: up to 1.5 million points, the voxel
+growing with the floor, while the saved map keeps the profile's `voxel_size`); the map is the same as without the viewer.
 
 The window lives with the launch. **Ctrl+C** closes it along with everything else (the SLAM saves its map). **Closing
 the window while the SLAM runs** asks what to do: reopen the viewer (also when the question itself is closed; the

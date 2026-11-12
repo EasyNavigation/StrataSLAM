@@ -208,6 +208,21 @@ void FloorManager::odometry_rebased(double dz) {
   have_last_pos_ = false;
 }
 
+FloorEvent FloorManager::device_lifted(double dz, Timestamp since) {
+  // In a transition open before the lift (stairs, a ride on the way), the lift is taken out of its
+  // height too: the device's height is not the floor's.
+  const bool opened_by_lift = state_ == FloorState::InTransition && started_ && acc_.t0 >= since;
+  odometry_rebased(dz);
+  // Its push and brake are the device's, no cabin's: the IMU opens no ride on them, nor on what of
+  // them stays in its 1 s means (Elevator-VIGS Residential1: the brake of a rig picked up in a
+  // cabin opened a ride, 17 s integrated to -9.2 m and a level).
+  az_over_since_ = 0;
+  lift_quiet_until_ = last_sample_.stamp + 2'000'000'000;
+  altitude_ -= dz;  // now, not at the next sample: the reference is taken from it below
+  if (opened_by_lift) return end_on_floor(last_sample_, 0.0);
+  return {};
+}
+
 double FloorManager::climb_rate() const {
   if (state_ != FloorState::InTransition || acc_.unobserved) return 0.0;
   return rate(alt_hist_);  // last second of tracked altitude
@@ -462,7 +477,7 @@ FloorEvent FloorManager::update_on_floor(const FloorSample& s, const Motion& m) 
   // under depart_dz, kept the IMU from opening the 3.3 m ride that followed).
   bool imu_departure = false;
   Timestamp imu_onset = 0;
-  if (s.imu_vertical_accel && (!s.tracking_ok || base_still(s)) &&
+  if (s.imu_vertical_accel && s.stamp >= lift_quiet_until_ && (!s.tracking_ok || base_still(s)) &&
       (!s.tracking_ok ||
        (std::abs(m.vz) < 0.1 && std::abs(altitude_ - ref_alt_) < 0.5 * cfg_.depart_dz))) {
     if (std::abs(az_mean(s.stamp, 1.0)) > cfg_.imu_depart_accel) {
@@ -535,8 +550,16 @@ FloorEvent FloorManager::update_in_transition(const FloorSample& s, const Motion
   // ramps of prueba_00 read as one of 5.1 m). Only a ride the IMU measures waits for it.
   const bool imu_calm_counts =
       s.imu_vertical_accel.has_value() && (!cfg_.ground_platform || acc_.unobserved);
-  bool calm = std::abs(m.vz) < cfg_.calm_vz && std::abs(vb) < 0.1 &&
-              (!imu_calm_counts || std::abs(az_mean(s.stamp, 1.0)) < cfg_.imu_calm_accel);
+  // A hand-held IMU never calms while its bearer walks: the steps jolt it (kCabinSpread over 1 s),
+  // which a cabin's smooth push does not, and a person stands in a cabin. Walking on with no climb,
+  // no ride's push begun, the odometry's calm is the transition's end: a carried rig otherwise kept
+  // its stairs open until max_transition_s, and the climb up and the one down of the portable rig
+  // made one transition, floor 1 lost.
+  const bool walking = imu_calm_counts && !acc_.unobserved && acc_.ride_push < 0.3 &&
+                       az_spread(s.stamp - 1'000'000'000, s.stamp) >= kCabinSpread;
+  bool calm =
+      std::abs(m.vz) < cfg_.calm_vz && std::abs(vb) < 0.1 &&
+      (!imu_calm_counts || walking || std::abs(az_mean(s.stamp, 1.0)) < cfg_.imu_calm_accel);
   if (climbing_ || climbing_long_) calm = false;
   // Opened by the odometry, but the IMU accelerates vertically as it does to open a ride while the
   // odometry does not follow: an elevator whose closing doors made the odometry jump before it was
@@ -658,7 +681,12 @@ FloorEvent FloorManager::update_in_transition(const FloorSample& s, const Motion
     }
     const double a1 = az_mean(s.stamp, 1.0) - acc_.ride_ref;
     pulse(s.stamp, a1);
-    braked = acc_.ride_push >= kRideMinSpeed && acc_.ride_brake >= kBrakeShare * acc_.ride_push;
+    // Braked: the cabin lost the speed it gained, no less and no more. A brake far stronger than
+    // the push is no cabin stopping (Elevator-VIGS Residential1: 0.66 m/s pushed, 1.36 braked, the
+    // rig handled in a cabin standing: a 2.1 m ride and a level; the rides measured brake within
+    // 0.9-1.3 times their push).
+    braked = acc_.ride_push >= kRideMinSpeed && acc_.ride_brake >= kBrakeShare * acc_.ride_push &&
+             acc_.ride_brake <= acc_.ride_push / kBrakeShare;
     if (debug_channel("FLOORS") && s.stamp - last_ride_dbg_ >= 1'000'000'000) {
       last_ride_dbg_ = s.stamp;
       log_->log(LogLevel::Debug,

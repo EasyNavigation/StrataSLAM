@@ -267,6 +267,30 @@ TEST(FloorManager, ASlowSustainedClimbIsNotFollowedByTheFloorReference) {
   EXPECT_EQ(r.mgr.floor(), 2);
 }
 
+// A hand-held rig carried up the stairs: the IMU jolts with every step (+-1 m/s^2 at 2 Hz) and
+// never calms while its bearer walks on. Walking on the level reached, with no climb and no cabin's
+// push, the odometry's calm ends the transition there, not max_transition_s later (the portable
+// rig: its climb up and the one down made one transition, floor 1 lost).
+TEST(FloorManager, ACarriedRigsStairsEndWhileItsBearerWalksOn) {
+  FloorManagerConfig c;
+  c.floor_height_prior.reset();
+  Rig r(c);
+  auto gait = [&](const Vector3d& to, double seconds) {
+    const Vector3d from = r.pos;
+    const int n = static_cast<int>(seconds / kDt);
+    for (int i = 1; i <= n; ++i)
+      r.step(from + (to - from) * (static_cast<double>(i) / n), std::nullopt,
+             std::sin(2.0 * M_PI * 2.0 * i * kDt));
+  };
+  gait(r.pos + Vector3d(10, 0, 0), 10);
+  gait(r.pos + Vector3d(9, 0, 3.0), 15);  // the stairs, 0.2 m/s up
+  ASSERT_EQ(r.count(FloorEvent::Kind::TransitionStarted), 1);
+  gait(r.pos + Vector3d(15, 0, 0), 15);  // on along floor 1
+  ASSERT_EQ(r.count(FloorEvent::Kind::TransitionEnded), 1);
+  EXPECT_EQ(r.mgr.floor(), 1);
+  EXPECT_NEAR(r.ended()->delta_z, 3.0, 0.2);
+}
+
 TEST(FloorManager, ALongPlateauAfterAClimbThatIsNotAWholeFloorIsALevel) {
   // 1.5 m up a ramp, then 60 m on a level: a mezzanine, not a multiple of the 3 m prior.
   Rig r;

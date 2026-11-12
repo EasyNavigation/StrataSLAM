@@ -96,8 +96,8 @@ Rules (validated before anything starts, all errors reported at once as `config 
   project to in the image taken with the scan, a camera's depth points the colour of their own pixel (ADR-0068).
   When the map is saved, a LiDAR's points that image did not see are coloured from the images of the keyframes
   around (up to 8 within 6 m), where they lie on the surface that image measured (ADR-0069). Points no image saw
-  stay grey: a 360-degree LiDAR sees much more than a camera. The live view shows the colours in its tab
-  **3D: colour**. Two options trade colour for resources, never the map's geometry: `colorize_views` (8; 0 uses each
+  stay grey: a 360-degree LiDAR sees much more than a camera. The live view shows the colours in its layer
+  `colour` (its eye in the panel). Two options trade colour for resources, never the map's geometry: `colorize_views` (8; 0 uses each
   keyframe's own image only) sets how many images are tried at save time, and `colorize_image_scale` (1.0; 0.5,
   0.333 or 0.25) the scale of the images kept for them. A keyframe keeps its RGB-D image while mapping, about 2 MB
   at 640x480 (800 MB for 400 keyframes); at 0.5 a quarter of it. Its own colours come from the full image anyway.

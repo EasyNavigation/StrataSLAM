@@ -143,6 +143,12 @@ class FloorManager {
   /// The odometry was restarted with its height shifted by `dz` (a correction, not motion): keeps
   /// the altitude unchanged and forgets the vertical-speed history.
   void odometry_rebased(double dz);
+  /// A hand-held sensor picked up or put down (from a table, the floor): its height changed by `dz`
+  /// over the same floor, which the LiDAR saw under it before and after. Not motion between
+  /// floors: the altitude is held where it was (as for a rebased odometry), and a transition the
+  /// lift itself opened (since `since`) ends on its floor; in one open before, the lift is taken
+  /// out of its height. Returns that ending (from == to), if any.
+  FloorEvent device_lifted(double dz, Timestamp since);
   /// Creates a new level at the current altitude (used after an unobservable change).
   FloorId open_new_floor();
   /// The level the last transition reached was its `near_level` after all (ADR-0073): the new level
@@ -250,6 +256,8 @@ class FloorManager {
       az_hist_;  ///< recent vertical accelerations (bias removed)
   double az_bias_ = 0;
   Timestamp az_over_since_ = 0;
+  /// A device picked up or put down: its push and brake are no cabin's, until then (2 s after it).
+  Timestamp lift_quiet_until_ = 0;
   std::vector<std::pair<double, double>> filtered_az(Timestamp onset, Timestamp end) const;
   double imu_speed_gain(Timestamp onset, Timestamp end) const;
   std::optional<double> odom_max_vz_since(Timestamp t) const;

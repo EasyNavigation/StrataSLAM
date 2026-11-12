@@ -1,9 +1,14 @@
 """ROS 2 node behind `viewer:=true`: draws a StrataSLAM run live in Rerun (strataslam_tools.live_view).
 
-Everything is drawn in the odometry frame, the one frame that is continuous across floors: the robot
-from /strataslam/odometry, each floor's cloud (/strataslam/floor_cloud, in `floor_<k>`) moved with the
-latest TF floor_<k> -> odom, and the floor of every pose from /strataslam/floor_state. The placement
-of the floors is the live estimate; the fused building comes from `strataslam fuse`.
+Everything is drawn in the map frame, as the node's TF tree has it (ADR-0075): each floor's cloud and
+path (/strataslam/floor_cloud and /strataslam/path, in `floor_<k>`) placed with map -> floor_<k>, the
+floor's fixed anchor, so that the floors keep their placement against each other; the robot (from
+/strataslam/odometry) and what the sensors see through map -> floor_<k> -> odom, whose last link carries
+the loop closures' correction, so that the robot stands on the optimized map. Without `map` (profile
+`output.publish_tf: false`) each floor is placed as the node places it: when it appears, through the
+floor the robot came from and that floor's correction then (with the new floor's first floor_<k> ->
+odom, its anchor). The placement of the floors is the live estimate; the fused building comes from
+`strataslam fuse`.
 
 What the sensors see right now (/strataslam/scan, /strataslam/depth_cloud) is drawn in magenta under
 `sensor`, with an eye in the entity tree to show or hide it. With a camera, /strataslam/camera_view adds
@@ -19,6 +24,7 @@ and whether the floor it ends on is new or one already mapped (recognised as the
 from __future__ import annotations
 
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -36,7 +42,7 @@ from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profi
 from sensor_msgs.msg import PointCloud2
 from sensor_msgs_py import point_cloud2
 from std_srvs.srv import Trigger
-from strataslam_tools.live_view import LiveView
+from strataslam_tools.live_view import LOST, LiveView
 from tf2_msgs.msg import TFMessage
 
 from strataslam_msgs.msg import CameraView, FloorState
@@ -80,6 +86,9 @@ def depth_array(img) -> np.ndarray | None:
     return rows[:, :img.width * 4].copy().view(np.float32)
 
 
+TRANSITION_ENDED = re.compile(r"floor transition ended: (\S+) (\d+)->(\d+) dz=(-?[0-9.]+)")
+
+
 def floor_of_frame(frame: str) -> int | None:
     if frame.startswith("floor_") and frame[6:].isdigit():
         return int(frame[6:])
@@ -93,7 +102,12 @@ class Viewer(Node):
         self.floor: int | None = None  # unknown until the first /strataslam/floor_state
         self.state = ""
         self.t: float | None = None  # stamp of the latest pose or camera frame (clouds carry the wall clock)
-        self.floor_from_odom: dict[int, np.ndarray] = {}  # T_floor_odom, latest per floor
+        self.floor_from_odom: dict[int, np.ndarray] = {}  # T_floor_odom, latest per floor (with the correction)
+        self.map_from_floor_tf: dict[int, np.ndarray] = {}  # T_map_floor from the TF map -> floor_<k>, when published
+        self.placed: dict[int, np.ndarray] = {}  # T_map_floor as the node places it, for a run without map
+        self.last_floor: int | None = None  # the floor the robot is on, or was on before the transition
+        self.prev_floor: int | None = None  # the floor before last_floor: where a new floor is placed from
+        self.root_anchor = np.eye(4)  # the first floor's first floor_<k> -> odom
         self.pending_clouds: dict[int, PointCloud2] = {}  # clouds that arrived before their floor's TF
         self.pending_paths: dict[int, PathMsg] = {}  # the same for the optimized paths
         self.z: float | None = None
@@ -110,7 +124,7 @@ class Viewer(Node):
         self.create_subscription(FloorState, "strataslam/floor_state", self.on_floor_state, reliable)
         self.create_subscription(PointCloud2, "strataslam/floor_cloud", self.on_cloud, latched)
         self.create_subscription(PathMsg, "strataslam/path", self.on_path, reliable)
-        # What the sensors see right now, already in the odometry frame.
+        # What the sensors see right now, in the odometry frame (drawn through map -> odom).
         self.create_subscription(PointCloud2, "strataslam/scan", lambda m: self.on_sensor("lidar", m), qos_profile_sensor_data)
         self.create_subscription(PointCloud2, "strataslam/depth_cloud", lambda m: self.on_sensor("camera", m),
                                  qos_profile_sensor_data)
@@ -150,16 +164,47 @@ class Viewer(Node):
             self.view.event(t, text, level)
         self.early_events.clear()
 
+    def map_from_floor(self, floor: int) -> np.ndarray | None:
+        """T_map_floor: the node's TF map -> floor_<k> or, without it, the same placement made here."""
+        if floor in self.map_from_floor_tf:
+            return self.map_from_floor_tf[floor]
+        return self.placed.get(floor)
+
+    def place(self, floor: int, anchor: np.ndarray) -> None:
+        """A floor seen for the first time, without map: placed as the node places it (the first floor is map; any
+        other through the floor the robot came from and that floor's correction now)."""
+        if not self.placed:
+            self.placed[floor] = np.eye(4)
+            self.root_anchor = anchor
+            return
+        src = self.prev_floor if self.last_floor == floor else self.last_floor  # the floor state may come first
+        if src is not None and src in self.placed and src in self.floor_from_odom:
+            self.placed[floor] = self.placed[src] @ self.floor_from_odom[src] @ np.linalg.inv(anchor)
+        else:  # the floor it came from is not known (a viewer started late): the anchors
+            self.placed[floor] = self.root_anchor @ np.linalg.inv(anchor)
+
+    def map_from_odom(self) -> np.ndarray:
+        """T_map_odom through the robot's floor: its anchor and the graph's correction (identity before any TF)."""
+        floor = self.last_floor
+        if floor is None or floor not in self.floor_from_odom:
+            return np.eye(4)
+        m = self.map_from_floor(floor)
+        return np.eye(4) if m is None else m @ self.floor_from_odom[floor]
+
     def on_odometry(self, m: Odometry) -> None:
         t = stamp_s(m.header.stamp)
         self.at(t)
         if self.floor is None:
             return
-        p = m.pose.pose.position
-        self.view.pose(t, (p.x, p.y, p.z), self.floor)
-        self.z = p.z
-        if self.transit_z0 is not None and not self.direction_told and abs(p.z - self.transit_z0) >= DIRECTION_M:
-            dz = p.z - self.transit_z0
+        q = m.pose.pose.position
+        T = self.map_from_odom()
+        x, y, z = (T[:3, :3] @ np.array([q.x, q.y, q.z]) + T[:3, 3]).tolist()
+        # -1: a transition; LOST: lost tracking or a session whose floor is not known yet (pending).
+        floor = self.floor if self.floor >= 0 else (LOST if self.state in ("lost", "pending") else -1)
+        self.view.pose(t, (x, y, z), floor)
+        self.z = z
+        if self.transit_z0 is not None and not self.direction_told and abs(z - self.transit_z0) >= DIRECTION_M:
+            dz = z - self.transit_z0
             self.event(f"going {'up' if dz > 0 else 'down'} ({dz:+.1f} m so far)")
             self.direction_told = True
 
@@ -180,17 +225,32 @@ class Viewer(Node):
             self.floors_seen.add(m.floor)
             self.transit_z0 = None
         self.floor, self.state = m.floor, m.state
+        if m.floor >= 0 and m.floor != self.last_floor:
+            self.prev_floor, self.last_floor = self.last_floor, m.floor
 
     def on_log(self, m: Log) -> None:
         if m.name == NODE_NAME:
             self.event(m.msg, LEVELS.get(m.level, "INFO"))
+            # "floor transition ended: stairs 1->0 dz=-3.660844": where the floors join is marked and labelled.
+            ended = TRANSITION_ENDED.match(m.msg)
+            if ended and self.t is not None:
+                kind, a, b, dz = ended.groups()
+                self.view.transition(self.t, kind, int(a), int(b), float(dz))
 
     def on_tf(self, m: TFMessage) -> None:
         for tr in m.transforms:
             floor = floor_of_frame(tr.header.frame_id)
-            if floor is None:
+            child = floor_of_frame(tr.child_frame_id)
+            if floor is None and child is not None:  # map -> floor_<k>
+                floor = child
+                self.map_from_floor_tf[floor] = matrix(tr.transform)
+            elif floor is not None and child is None:  # floor_<k> -> odom
+                t_floor_odom = matrix(tr.transform)
+                if floor not in self.placed:
+                    self.place(floor, t_floor_odom)  # before this floor's own correction replaces its anchor
+                self.floor_from_odom[floor] = t_floor_odom
+            else:
                 continue
-            self.floor_from_odom[floor] = matrix(tr.transform)
             if floor in self.pending_clouds:
                 self.on_cloud(self.pending_clouds.pop(floor))
             if floor in self.pending_paths:
@@ -199,8 +259,9 @@ class Viewer(Node):
     def on_sensor(self, sensor: str, m: PointCloud2) -> None:
         if self.floor is None:
             return
-        p = point_cloud2.read_points_numpy(m, field_names=("x", "y", "z"), skip_nans=True)
-        self.view.sensor_cloud(stamp_s(m.header.stamp), sensor, p)
+        p = point_cloud2.read_points_numpy(m, field_names=("x", "y", "z"), skip_nans=True).astype(np.float64)
+        T = self.map_from_odom()
+        self.view.sensor_cloud(stamp_s(m.header.stamp), sensor, p @ T[:3, :3].T + T[:3, 3])
 
     def on_camera(self, m: CameraView) -> None:
         # Drawn from the first frame, floor or not: a camera that never starts tracking is what it shows best.
@@ -211,38 +272,38 @@ class Viewer(Node):
         self.view.camera(t, image_array(m.image), depth_array(m.depth), uv, use)
 
     def on_path(self, m: PathMsg) -> None:
-        """The floor's optimized keyframes (in `floor_<k>`), moved to the odometry frame as its cloud is: the path
-        drawn from the poses keeps the drift a loop closure corrected, this one does not. A gap of more than
+        """The floor's optimized keyframes (in `floor_<k>`), placed in map as its cloud is. A gap of more than
         PATH_GAP_S between keyframes (another visit of the floor) starts a new piece."""
         floor = floor_of_frame(m.header.frame_id)
         if floor is None or not m.poses:
             return
         self.keyframes[floor] = len(m.poses)
-        if floor not in self.floor_from_odom:
+        map_from_floor = self.map_from_floor(floor)
+        if map_from_floor is None:
             self.pending_paths[floor] = m
             return
-        odom_from_floor = np.linalg.inv(self.floor_from_odom[floor])
         xyz = np.array([[q.pose.position.x, q.pose.position.y, q.pose.position.z] for q in m.poses])
-        xyz = xyz @ odom_from_floor[:3, :3].T + odom_from_floor[:3, 3]
+        xyz = xyz @ map_from_floor[:3, :3].T + map_from_floor[:3, 3]
         stamps = np.array([stamp_s(q.header.stamp) for q in m.poses])
         cuts = np.flatnonzero(np.diff(stamps) > PATH_GAP_S) + 1
         pieces = [[tuple(float(v) for v in row) for row in part] for part in np.split(xyz, cuts)]
-        spans = [(float(part[0]), float(part[-1])) for part in np.split(stamps, cuts)]
-        self.view.floor_path(floor, pieces, spans)
+        parts = np.split(stamps, cuts)
+        spans = [(float(part[0]), float(part[-1])) for part in parts]
+        self.view.floor_path(floor, pieces, spans, [[float(v) for v in part] for part in parts])
 
     def on_cloud(self, m: PointCloud2) -> None:
         floor = floor_of_frame(m.header.frame_id)
         if floor is None:
             return
-        if floor not in self.floor_from_odom:
+        map_from_floor = self.map_from_floor(floor)
+        if map_from_floor is None:
             self.pending_clouds[floor] = m
             return
         p = point_cloud2.read_points_numpy(m, field_names=("x", "y", "z"), skip_nans=True).astype(np.float64)
         colours = None
         if any(f.name == "rgb" for f in m.fields):  # the camera's colours (colorize_cloud, ADR-0069)
             colours = rgb_of(point_cloud2.read_points_numpy(m, field_names=("rgb",), skip_nans=True))
-        odom_from_floor = np.linalg.inv(self.floor_from_odom[floor])
-        p = p @ odom_from_floor[:3, :3].T + odom_from_floor[:3, 3]
+        p = p @ map_from_floor[:3, :3].T + map_from_floor[:3, 3]
         self.view.floor_cloud(self.t or 0.0, floor, p, colours)
 
 

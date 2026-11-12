@@ -132,6 +132,16 @@ struct SlamSystem::Impl {
   // m/s^2, IMU frame: subtracted from every accelerometer sample. The profile's calibration, or
   // the offset measured against the floors with `accel_bias: auto` (ADR-0072, ADR-0074).
   std::optional<Eigen::Vector3d> accel_bias;
+  /// A hand-held sensor's recent heights and the floor the LiDAR saw under it: picking it up or
+  /// putting it down (a table, the floor) is told from a floor change by the floor staying.
+  struct LiftSample {
+    Timestamp stamp = 0;
+    Eigen::Vector3d sensor = Eigen::Vector3d::Zero();  ///< the LiDAR's position (odometry frame)
+    std::optional<double> ground;                      ///< height of the floor under it
+  };
+  std::deque<LiftSample> lift_hist;
+  std::optional<Timestamp> lift_trigger;  ///< a lift seen starting, until it settles
+  int lift_sign = 0;                      ///< +1 picked up, -1 put down
 
   // A floor change in progress whose record is completed by the first keyframe on the new floor.
   struct OpenTransition {
@@ -1673,6 +1683,117 @@ struct SlamSystem::Impl {
     return ev;
   }
 
+  /// Height of the floor under the LiDAR (odometry frame): the lowest dense horizontal layer of the
+  /// returns within 2.5 m around it and at least 0.2 m below it, past the profile's min_range (the
+  /// person and the rig). A table top or a step is higher than the floor; a layer of a few points
+  /// is not a floor.
+  /// k of the every-k-th thinning that keeps a floor's keyframe points within `max_points`.
+  size_t thinning(const FloorGraph& g, size_t max_points) const;
+
+  std::optional<double> ground_under(const LidarScan& scan,
+                                     const gtsam::Pose3& T_odom_lidar) const {
+    constexpr double kRadius = 2.5, kBelow = 0.2, kBin = 0.05;
+    const Eigen::Matrix3d R = T_odom_lidar.rotation().matrix();
+    const Eigen::Vector3d& t = T_odom_lidar.translation();
+    const double min_range = cfg.sensors.lidar.min_range;
+    std::vector<double> z;
+    for (size_t i = 0; i < scan.points.size(); i += 2) {
+      const Eigen::Vector3d p = scan.points[i].cast<double>();
+      if (p.norm() < min_range) continue;
+      const Eigen::Vector3d w = R * p + t;
+      if (w.z() < t.z() - kBelow && std::hypot(w.x() - t.x(), w.y() - t.y()) < kRadius)
+        z.push_back(w.z());
+    }
+    if (z.size() < 30) return std::nullopt;
+    const double lo = *std::min_element(z.begin(), z.end());
+    const auto n = static_cast<size_t>((t.z() - kBelow - lo) / kBin) + 1;
+    std::vector<int> hist(n, 0);
+    for (double v : z) ++hist[std::min(n - 1, static_cast<size_t>((v - lo) / kBin))];
+    const int peak = *std::max_element(hist.begin(), hist.end());
+    if (peak < 20) return std::nullopt;
+    for (size_t k = 0; k < n; ++k)
+      if (hist[k] >= std::max(20, peak / 5)) return lo + (static_cast<double>(k) + 0.5) * kBin;
+    return std::nullopt;
+  }
+
+  /// A hand-held sensor picked up or put down (a table, the floor), told from a floor change by the
+  /// floor the LiDAR sees under it staying. Triggered strictly: within 0.8 s the sensor moved 0.3 m
+  /// or more up or down, at least twice as much as across, the floor under it within 0.10 m. A lift
+  /// goes at 1-1.5 m/s straight up (Elevator-VIGS Office4: 0.94 m in 0.6 s off the ground); stairs
+  /// and ramps take the floor with the sensor, go at 0.2-0.3 m/s and mostly across, and an elevator
+  /// takes its cabin. Then the whole lift is measured, from the rest before it (the lowest or
+  /// highest height in the 2 s before the trigger) to where the sensor settles (0.4 s within 6 cm),
+  /// less what the floor under it moved between the two (up to 0.4 m: a sensor put on the floor
+  /// sees it at a grazing angle, and the floor around may slope; Elevator-VIGS Residential3, 0.34
+  /// m, which left a pick-up without its put-down and a false level): the floor manager holds its
+  /// altitude by that, and a transition the lift opened ends on its floor. A hand-held rig's walk
+  /// is then on its floor, in the map and its loop closures, instead of in a transition that only
+  /// the next stairs close (the portable rig, 120 s; Office4, picked up and put down six times).
+  void detect_lift(const LidarScan& scan, const FrontendResult& r) {
+    if (cfg.robot.platform != Platform::Handheld || !cfg.multifloor.enabled) return;
+    constexpr Timestamp kKeep = 4'000'000'000, kTrigger = 800'000'000, kBefore = 2'000'000'000,
+                        kSettle = 400'000'000, kGiveUp = 5'000'000'000;
+    constexpr double kMinLift = 0.3, kTriggerFloor = 0.10, kFloorKept = 0.4, kStill = 0.06;
+    const gtsam::Pose3 T = r.T_odom_base * ext.T_base_lidar;
+    lift_hist.push_back({scan.stamp, T.translation(), ground_under(scan, T)});
+    while (lift_hist.front().stamp < scan.stamp - kKeep) lift_hist.pop_front();
+    const LiftSample& now = lift_hist.back();
+    if (!lift_trigger) {
+      if (!now.ground) return;
+      const double g_now = now.ground.value_or(0.0);
+      for (const LiftSample& then : lift_hist) {
+        if (then.stamp < now.stamp - kTrigger || !then.ground || &then == &now) continue;
+        const Eigen::Vector3d d = now.sensor - then.sensor;
+        if (std::abs(d.z()) >= kMinLift &&
+            std::abs(g_now - then.ground.value_or(0.0)) <= kTriggerFloor &&
+            std::abs(d.z()) >= 2.0 * d.head<2>().norm()) {
+          lift_trigger = now.stamp;
+          lift_sign = d.z() > 0 ? 1 : -1;
+          break;
+        }
+      }
+      return;
+    }
+    if (now.stamp - *lift_trigger > kGiveUp) {  // it never settled: not a lift
+      lift_trigger.reset();
+      return;
+    }
+    // Settled: the last 0.4 s within 6 cm; the lift ends at their first sample.
+    if (now.stamp - lift_hist.front().stamp < kSettle) return;
+    double lo = now.sensor.z(), hi = lo;
+    size_t end = lift_hist.size() - 1;
+    for (size_t k = lift_hist.size(); k > 0; --k) {
+      const LiftSample& h = lift_hist[k - 1];
+      if (h.stamp < now.stamp - kSettle) break;
+      lo = std::min(lo, h.sensor.z());
+      hi = std::max(hi, h.sensor.z());
+      end = k - 1;
+    }
+    if (hi - lo > kStill) return;
+    size_t start = end;
+    for (size_t k = 0; k < lift_hist.size(); ++k)
+      if (lift_hist[k].stamp >= *lift_trigger - kBefore && lift_hist[k].stamp <= *lift_trigger &&
+          lift_sign * lift_hist[k].sensor.z() < lift_sign * lift_hist[start].sensor.z())
+        start = k;
+    std::optional<double> g0, g1;  // the floor seen nearest the start (back) and the end (on)
+    for (size_t k = start + 1; k > 0 && !g0; --k) g0 = lift_hist[k - 1].ground;
+    for (size_t k = end; k < lift_hist.size() && !g1; ++k) g1 = lift_hist[k].ground;
+    lift_trigger.reset();
+    if (!g0 || !g1) return;
+    const double floor_moved = g1.value_or(0.0) - g0.value_or(0.0);
+    const double dz = lift_hist[end].sensor.z() - lift_hist[start].sensor.z();
+    if (std::abs(floor_moved) > kFloorKept || lift_sign * dz < kMinLift) return;
+    const double lift = dz - floor_moved;
+    // A transition the lift opened began after its start, or up to 3 s before by the IMU: its
+    // vertical-acceleration window opens on the lift's push (Elevator-VIGS Residential3).
+    const FloorEvent ev = mgr.device_lifted(lift, lift_hist[start].stamp - 3'000'000'000);
+    lift_hist.clear();
+    log->log(LogLevel::Info, strprintf("the sensor was %s %.2f m over the same floor: not a floor "
+                                       "change",
+                                       lift > 0 ? "picked up" : "put down", std::abs(lift)));
+    if (ev.kind != FloorEvent::Kind::None) on_floor_event(ev);
+  }
+
   void feed_manager(const FrontendResult& r, Timestamp stamp) {
     // `multifloor.enabled: false`: one level, the floor manager never leaves floor 0 (an outdoor
     // drive has slopes, not floors). A tracking loss still splits sessions (handle_lost).
@@ -1872,6 +1993,10 @@ void SlamSystem::add_lidar(const LidarScan& scan) {
   if (r.quality.state == TrackingState::Good) s.last_good = {scan.stamp, r.T_odom_base};
   s.learn_imu_mounting(r, scan.stamp);
   s.feed_manager(r, scan.stamp);
+  // Also in a confined scan: a sensor put on the floor sees only what is near (Elevator-VIGS
+  // Residential3: 17 s unseen, the put-down closed as a ramp and a level). In a cabin the odometry
+  // sees no vertical motion, so it cannot look like a lift.
+  s.detect_lift(scan, r);
   if (r.is_keyframe) {
     std::optional<Impl::VisualKf> vis;
     if (s.visual_fe && s.last_cam && std::llabs(s.last_cam->stamp - scan.stamp) < 60'000'000LL) {
@@ -1947,8 +2072,18 @@ std::optional<gtsam::Pose3> SlamSystem::floor_from_odom() const {
   const auto ids = g.keyframe_ids();
   if (ids.empty()) return g.T_odom_floor().inverse();
   // The optimized pose of the latest keyframe against the odometry's when it was taken: the
-  // drift the graph has corrected so far (zero until a loop closes).
-  return g.pose(ids.back()) * s.backend.keyframe(ids.back()).T_odom_base.inverse();
+  // drift the graph has corrected so far (zero until a loop closes). Heading and position only:
+  // both frames are levelled by gravity, and the keyframe's own roll and pitch (a robot on a
+  // ramp, 3.5 deg on the Summit's prueba_03) would tilt the whole odometry frame about the
+  // keyframe and lift points tens of metres away by metres.
+  const gtsam::Pose3 X = g.pose(ids.back());
+  const gtsam::Pose3& O = s.backend.keyframe(ids.back()).T_odom_base;
+  const auto yaw = [](const gtsam::Rot3& R) {
+    const Eigen::Matrix3d m = R.matrix();
+    return std::atan2(m(1, 0), m(0, 0));
+  };
+  const gtsam::Rot3 Rz = gtsam::Rot3::Yaw(yaw(X.rotation()) - yaw(O.rotation()));
+  return gtsam::Pose3(Rz, X.translation() - Rz.rotate(O.translation()));
 }
 
 std::vector<std::pair<Timestamp, gtsam::Pose3>> SlamSystem::floor_path(FloorId floor) const {
@@ -1961,33 +2096,60 @@ std::vector<std::pair<Timestamp, gtsam::Pose3>> SlamSystem::floor_path(FloorId f
   return out;
 }
 
-std::vector<Eigen::Vector3f> SlamSystem::floor_cloud(FloorId floor, double voxel) const {
+namespace {
+/// Every k-th element of `v` (k > 1; callers keep `v` itself for k <= 1, without a copy).
+template <class T>
+std::vector<T> every_kth(const std::vector<T>& v, size_t k) {
+  std::vector<T> out;
+  out.reserve(v.size() / k + 1);
+  for (size_t i = 0; i < v.size(); i += k) out.push_back(v[i]);
+  return out;
+}
+}  // namespace
+
+size_t SlamSystem::Impl::thinning(const FloorGraph& g, size_t max_points) const {
+  if (max_points == 0) return 1;
+  size_t total = 0;
+  for (KeyframeId id : g.keyframe_ids()) {
+    if (const auto* cloud = backend.cloud(id)) total += cloud->size();
+    const auto d = depth_clouds.find(id);
+    if (d != depth_clouds.end()) total += d->second.points.size();
+  }
+  return std::max<size_t>(1, (total + max_points - 1) / max_points);
+}
+
+std::vector<Eigen::Vector3f> SlamSystem::floor_cloud(FloorId floor, double voxel,
+                                                     size_t max_points) const {
   const auto& s = *impl_;
   std::vector<Eigen::Vector3f> merged;
   const auto fl = s.backend.floors();
   if (std::find(fl.begin(), fl.end(), s.key_floor(floor)) == fl.end()) return merged;
   const FloorGraph& g = s.backend.floor(floor);
+  const size_t k = s.thinning(g, max_points);
   for (KeyframeId id : g.keyframe_ids()) {
     const auto* cloud = s.backend.cloud(id);
     if (!cloud || cloud->empty()) continue;
-    const auto w =
-        transform_points(*cloud, (g.pose(id) * s.backend.keyframe(id).T_base_sensor).matrix());
+    const Eigen::Matrix4d T = (g.pose(id) * s.backend.keyframe(id).T_base_sensor).matrix();
+    const auto w = k > 1 ? transform_points(every_kth(*cloud, k), T) : transform_points(*cloud, T);
     merged.insert(merged.end(), w.begin(), w.end());
     const auto d = s.depth_clouds.find(id);
     if (d != s.depth_clouds.end()) {
-      const auto wd = transform_points(d->second.points, g.pose(id).matrix());
+      const Eigen::Matrix4d Td = g.pose(id).matrix();
+      const auto wd = k > 1 ? transform_points(every_kth(d->second.points, k), Td)
+                            : transform_points(d->second.points, Td);
       merged.insert(merged.end(), wd.begin(), wd.end());
     }
   }
   return voxel_downsample(merged, voxel);
 }
 
-PointCloud SlamSystem::floor_cloud_colored(FloorId floor, double voxel) const {
+PointCloud SlamSystem::floor_cloud_colored(FloorId floor, double voxel, size_t max_points) const {
   const auto& s = *impl_;
   PointCloud out;
   const auto fl = s.backend.floors();
   if (std::find(fl.begin(), fl.end(), s.key_floor(floor)) == fl.end()) return out;
   const FloorGraph& g = s.backend.floor(floor);
+  const size_t k = s.thinning(g, max_points);
   std::vector<Eigen::Vector3f> merged;
   std::vector<std::array<uint8_t, 3>> colors;
   bool any = false;
@@ -1995,26 +2157,30 @@ PointCloud SlamSystem::floor_cloud_colored(FloorId floor, double voxel) const {
   for (KeyframeId id : g.keyframe_ids()) {
     const auto* cloud = s.backend.cloud(id);
     if (cloud && !cloud->empty()) {
+      const auto pts = k > 1 ? every_kth(*cloud, k) : *cloud;
       const auto w =
-          transform_points(*cloud, (g.pose(id) * s.backend.keyframe(id).T_base_sensor).matrix());
+          transform_points(pts, (g.pose(id) * s.backend.keyframe(id).T_base_sensor).matrix());
       merged.insert(merged.end(), w.begin(), w.end());
       const auto kc = s.keyframe_colors.find(id);
       if (kc != s.keyframe_colors.end() && kc->second.rgb.size() == cloud->size()) {
         any = true;
-        colors.insert(colors.end(), kc->second.rgb.begin(), kc->second.rgb.end());
+        const auto rgb = k > 1 ? every_kth(kc->second.rgb, k) : kc->second.rgb;
+        colors.insert(colors.end(), rgb.begin(), rgb.end());
       } else {
-        colors.insert(colors.end(), cloud->size(), grey);
+        colors.insert(colors.end(), pts.size(), grey);
       }
     }
     const auto d = s.depth_clouds.find(id);
     if (d != s.depth_clouds.end() && !d->second.points.empty()) {
-      const auto wd = transform_points(d->second.points, g.pose(id).matrix());
+      const auto pts = k > 1 ? every_kth(d->second.points, k) : d->second.points;
+      const auto wd = transform_points(pts, g.pose(id).matrix());
       merged.insert(merged.end(), wd.begin(), wd.end());
       if (d->second.colors.size() == d->second.points.size()) {
         any = true;
-        colors.insert(colors.end(), d->second.colors.begin(), d->second.colors.end());
+        const auto rgb = k > 1 ? every_kth(d->second.colors, k) : d->second.colors;
+        colors.insert(colors.end(), rgb.begin(), rgb.end());
       } else {
-        colors.insert(colors.end(), d->second.points.size(), grey);
+        colors.insert(colors.end(), pts.size(), grey);
       }
     }
   }
