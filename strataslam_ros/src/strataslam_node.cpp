@@ -534,8 +534,9 @@ class StrataslamNode : public rclcpp::Node {
                        : modes.loop_closure == strataslam::LoopSource::Lidar ? "lidar"
                                                                              : "camera and lidar";
     RCLCPP_INFO(
-        get_logger(), "pipeline started: odometry from the %s%s, loop closures from the %s%s", odom,
-        cfg_.fusion.odometry_from == strataslam::OdometryFrom::Auto ? " (auto)" : "", loops,
+        get_logger(), "pipeline started: odometry from the %s%s%s, loop closures from the %s%s",
+        odom, cfg_.fusion.odometry_from == strataslam::OdometryFrom::Auto ? " (auto)" : "",
+        modes.odometry_prior ? " with the wheel odometry as its prior" : "", loops,
         cfg_.fusion.loop_closure_from == strataslam::LoopClosureFrom::Auto ? " (auto)" : "");
     visual_loops_off_ = modes.loop_closure != strataslam::LoopSource::Lidar && !tuning_.vocabulary;
     return true;
@@ -568,11 +569,12 @@ class StrataslamNode : public rclcpp::Node {
     if (s.lidar.enabled && s.lidar.type == strataslam::LidarType::Planar)
       scan_sub_ = create_subscription<sm::LaserScan>(
           s.lidar.topic, qos,
-          [this](sm::LaserScan::ConstSharedPtr m) { guard("lidar", [&] { on_laser_scan(*m); }); });
+          [this](sm::LaserScan::ConstSharedPtr m) { guard("lidar", [&] { dispatch_scan(m); }); });
     else if (s.lidar.enabled)
       lidar_sub_ = create_subscription<sm::PointCloud2>(
-          s.lidar.topic, qos,
-          [this](sm::PointCloud2::ConstSharedPtr m) { guard("lidar", [&] { on_lidar(*m); }); });
+          s.lidar.topic, qos, [this](sm::PointCloud2::ConstSharedPtr m) {
+            guard("lidar", [&] { dispatch_cloud(m); });
+          });
     if (s.imu.enabled)
       imu_sub_ = create_subscription<sm::Imu>(s.imu.topic, qos, [this](sm::Imu::ConstSharedPtr m) {
         guard("imu", [&] { on_imu(*m); });
@@ -603,36 +605,54 @@ class StrataslamNode : public rclcpp::Node {
   void on_features_guarded(const sm::Image::ConstSharedPtr& depth,
                            const strataslam_msgs::msg::FeatureFrame::ConstSharedPtr& feat,
                            const sm::CameraInfo::ConstSharedPtr& info) {
-    queue_camera(stamp_ns(depth->header.stamp), [this, depth, feat, info] {
+    queue_frame(stamp_ns(depth->header.stamp), [this, depth, feat, info] {
       guard("camera features", [&] { on_features(depth, feat, info); });
     });
   }
   void on_rgb_guarded(const sm::Image::ConstSharedPtr& depth, const sm::Image::ConstSharedPtr& rgb,
                       const sm::CameraInfo::ConstSharedPtr& info) {
-    queue_camera(stamp_ns(depth->header.stamp),
-                 [this, depth, rgb, info] { guard("camera", [&] { on_rgb(depth, rgb, info); }); });
+    queue_frame(stamp_ns(depth->header.stamp),
+                [this, depth, rgb, info] { guard("camera", [&] { on_rgb(depth, rgb, info); }); });
   }
 
-  /// With an external odometry, a camera frame waits until it covers the frame's stamp (wheel
-  /// odometry trails the camera by a fraction of a second), at most kCameraWait behind the newest
-  /// frame. In arrival order, so a bag gives the same result run after run. `all`: process every
-  /// frame waiting (end of a bag).
-  void queue_camera(Timestamp stamp, std::function<void()> process) {
-    camera_queue_.emplace_back(stamp, std::move(process));
-    newest_camera_ = std::max(newest_camera_, stamp);
-    drain_camera(false);
+  /// With the external odometry as the tracking's prior, a camera frame (and a LiDAR scan, when the
+  /// LiDAR tracks: ADR-0071) waits until it covers the frame's stamp (wheel odometry trails the
+  /// sensors by a fraction of a second), at most kFrameWait behind the newest frame. In arrival
+  /// order, so a bag gives the same result run after run. `all`: process every frame waiting (end
+  /// of a bag).
+  void queue_frame(Timestamp stamp, std::function<void()> process) {
+    frame_queue_.emplace_back(stamp, std::move(process));
+    newest_frame_ = std::max(newest_frame_, stamp);
+    drain_frames(false);
   }
-  void drain_camera(bool all) {
-    constexpr Timestamp kCameraWait = 500'000'000;  // ns
-    const bool wait = cfg_.sensors.external_odometry.enabled && !all;
-    while (!camera_queue_.empty()) {
-      const Timestamp stamp = camera_queue_.front().first;
-      if (wait && stamp > last_ext_stamp_ && stamp + kCameraWait > newest_camera_) break;
-      if (cfg_.sensors.external_odometry.enabled) warn_if_no_ext_odometry(stamp);
-      const auto process = std::move(camera_queue_.front().second);
-      camera_queue_.pop_front();
+  void drain_frames(bool all) {
+    constexpr Timestamp kFrameWait = 500'000'000;  // ns
+    const bool prior = strataslam::resolve_modes(cfg_).odometry_prior;
+    const bool wait = prior && !all;
+    while (!frame_queue_.empty()) {
+      const Timestamp stamp = frame_queue_.front().first;
+      if (wait && stamp > last_ext_stamp_ && stamp + kFrameWait > newest_frame_) break;
+      if (prior) warn_if_no_ext_odometry(stamp);
+      const auto process = std::move(frame_queue_.front().second);
+      frame_queue_.pop_front();
       process();
     }
+  }
+
+  /// A LiDAR message: queued with the camera frames when the wheel odometry is the LiDAR's prior,
+  /// so that it waits for the odometry to cover it (ADR-0071); processed at once otherwise.
+  bool lidar_waits() const {
+    const auto modes = strataslam::resolve_modes(cfg_);
+    return modes.odometry_prior && modes.odometry == strataslam::OdometrySource::Lidar;
+  }
+  void dispatch_cloud(sm::PointCloud2::ConstSharedPtr m) {
+    if (!lidar_waits()) return on_lidar(*m);
+    queue_frame(stamp_ns(m->header.stamp), [this, m] { guard("lidar", [&] { on_lidar(*m); }); });
+  }
+  void dispatch_scan(sm::LaserScan::ConstSharedPtr m) {
+    if (!lidar_waits()) return on_laser_scan(*m);
+    queue_frame(stamp_ns(m->header.stamp),
+                [this, m] { guard("lidar", [&] { on_laser_scan(*m); }); });
   }
 
   void on_ext_odom(const nav_msgs::msg::Odometry& m) {
@@ -644,7 +664,7 @@ class StrataslamNode : public rclcpp::Node {
         gtsam::Point3(p.position.x, p.position.y, p.position.z));
     if (slam_) slam_->add_odom(o);
     last_ext_stamp_ = std::max(last_ext_stamp_, o.stamp);
-    drain_camera(false);
+    drain_frames(false);
   }
 
   /// The external odometry from TF: the transforms `external_odometry.frame` -> robot.base_frame
@@ -674,7 +694,7 @@ class StrataslamNode : public rclcpp::Node {
       if (slam_) slam_->add_odom({stamp_ns(t.header.stamp), T_odom_base});
       last_ext_stamp_ = std::max(last_ext_stamp_, stamp_ns(t.header.stamp));
     }
-    drain_camera(false);
+    drain_frames(false);
   }
 
   /// `frame` -> robot.base_frame when `frame` is an ancestor of the base below the odometry frame
@@ -713,8 +733,8 @@ class StrataslamNode : public rclcpp::Node {
     const auto& ext = cfg_.sensors.external_odometry;
     if (!ext.topic.empty()) {
       RCLCPP_WARN(get_logger(),
-                  "external_odometry: nothing on %s after 2 s of camera frames: the camera "
-                  "tracks without the wheel odometry (check the topic)",
+                  "external_odometry: nothing on %s after 2 s of frames: the tracking goes on "
+                  "without the wheel odometry (check the topic)",
                   ext.topic.c_str());
       return;
     }
@@ -725,7 +745,7 @@ class StrataslamNode : public rclcpp::Node {
         children += (children.empty() ? "" : ", ") + name;
     }
     RCLCPP_WARN(get_logger(),
-                "external_odometry: no TF %s -> %s after 2 s of camera frames: the camera tracks "
+                "external_odometry: no TF %s -> %s after 2 s of frames: the tracking goes on "
                 "without the wheel odometry. TF has %s -> {%s}: set robot.base_frame to the frame "
                 "the odometry moves, or one fixed below it",
                 ext.frame.c_str(), cfg_.robot.base_frame.c_str(), ext.frame.c_str(),
@@ -861,15 +881,15 @@ class StrataslamNode : public rclcpp::Node {
           if (s.external_odometry.enabled && !s.external_odometry.frame.empty()) on_ext_tf(m);
         } else if (s.lidar.enabled && topic == s.lidar.topic &&
                    s.lidar.type == strataslam::LidarType::Planar) {
-          sm::LaserScan m;
-          ser_scan.deserialize_message(&raw, &m);
+          auto m = std::make_shared<sm::LaserScan>();
+          ser_scan.deserialize_message(&raw, m.get());
           ++n_lidar;
-          on_laser_scan(m);
+          dispatch_scan(m);
         } else if (s.lidar.enabled && topic == s.lidar.topic) {
-          sm::PointCloud2 m;
-          ser_cloud.deserialize_message(&raw, &m);
+          auto m = std::make_shared<sm::PointCloud2>();
+          ser_cloud.deserialize_message(&raw, m.get());
           ++n_lidar;
-          on_lidar(m);
+          dispatch_cloud(m);
         } else if (s.imu.enabled && topic == s.imu.topic) {
           sm::Imu m;
           ser_imu.deserialize_message(&raw, &m);
@@ -909,7 +929,7 @@ class StrataslamNode : public rclcpp::Node {
         }
       });
     }
-    drain_camera(true);
+    drain_frames(true);
     if (interrupted) {
       RCLCPP_WARN(get_logger(),
                   "bag interrupted after %zu of %zu messages: saving the map of what was processed",
@@ -1746,10 +1766,10 @@ class StrataslamNode : public rclcpp::Node {
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr ext_odom_sub_;
   rclcpp::Subscription<tf2_msgs::msg::TFMessage>::SharedPtr ext_tf_sub_;
   std::deque<std::pair<Timestamp, std::function<void()>>>
-      camera_queue_;  ///< frames waiting for the external odometry
-  Timestamp newest_camera_ = 0, last_ext_stamp_ = 0;
+      frame_queue_;  ///< frames waiting for the external odometry
+  Timestamp newest_frame_ = 0, last_ext_stamp_ = 0;
   bool ext_tf_reported_ = false, ext_odom_warned_ = false;
-  std::optional<Timestamp> first_unodometered_;  ///< first camera frame without external odometry
+  std::optional<Timestamp> first_unodometered_;  ///< first frame without external odometry
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr save_srv_, session_srv_, discard_srv_;
   std::atomic<bool> discard_on_stop_{false};  ///< ~/discard_map: no save when the node stops
   rclcpp::Service<strataslam_msgs::srv::MarkFloorChange>::SharedPtr mark_srv_;

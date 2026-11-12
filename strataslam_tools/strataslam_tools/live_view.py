@@ -41,6 +41,7 @@ ROBOT_RADIUS, POLE_RADIUS = 14.0, 3.0  # UI points: the ball stands out around t
 DRAW_SENSOR, DRAW_PATH, DRAW_ROBOT = 35.0, 40.0, 50.0
 KEYPOINT_RADIUS = 3.0  # UI points
 PATH_PERIOD_S = 0.25  # the paths are re-sent at most this often (wall clock): they grow with the run
+TRANSIT_MARGIN_S = 0.5  # s around a floor's keyframes whose transition poses its path replaces (a keyframe's spacing)
 TOPDOWN_MAX_POINTS = 300_000
 # Points of one floor sent to the 3D views (each tab): a floor of a 1 km drive has 9 million, more than the viewer
 # and the graphics card take every refresh.
@@ -93,6 +94,7 @@ class LiveView:
         self._send_static()
         self._baro_styled = False
         self._strips: dict[int, list[list[tuple[float, float, float]]]] = {}  # floor -> path pieces
+        self._transit_t: list[list[float]] = []  # the stamps of the points of the transitions' pieces (floor -1)
         self._last_floor: int | None = None
         self._t0: float | None = None
         self._series: set[int] = set()
@@ -217,8 +219,12 @@ class LiveView:
             if self._last_floor is not None:  # and a gap in the level line of the floor just left
                 rr.log(self._series_path(self._last_floor), rr.Clear(recursive=False))
             self._strips.setdefault(floor, []).append([])
+            if floor < 0:
+                self._transit_t.append([])
             self._last_floor = floor
         self._strips[floor][-1].append(xyz)
+        if floor < 0:
+            self._transit_t[-1].append(t)
         self._dirty = True
         series = self._series_path(floor)
         if floor not in self._series:
@@ -246,16 +252,47 @@ class LiveView:
         self._last_path_wall = time.monotonic()
         self._dirty = False
 
-    def floor_path(self, floor: int, pieces: list[list[tuple[float, float, float]]]) -> None:
+    def floor_path(self, floor: int, pieces: list[list[tuple[float, float, float]]],
+                   spans: list[tuple[float, float]] | None = None) -> None:
         """The optimized path of a floor (its keyframes, in pieces: one per visit), in the common frame. It replaces
         what the poses drew there, which a loop closure leaves with the drift it corrected; the poses that follow
-        continue it from its last keyframe."""
+        continue it from its last keyframe. `spans`, the first and last stamp of each piece: what the poses drew
+        as a transition over that time is the floor's now (a transition that ended on a floor, or the part of a
+        climb that joined it), and is no longer drawn twice."""
         pieces = [list(q) for q in pieces if q]
         if not pieces:
             return
+        if spans:
+            self._drop_transit(spans)
         if floor == self._last_floor:
             pieces.append([pieces[-1][-1]])  # the live tail, from the last keyframe
         self._strips[floor] = pieces
+        self._dirty = True
+
+    def _drop_transit(self, spans: list[tuple[float, float]]) -> None:
+        """Removes from the transitions' pieces the points stamped within `spans`, splitting a piece where they go."""
+        old = self._strips.get(-1)
+        if not old:
+            return
+        strips: list[list[tuple[float, float, float]]] = []
+        times: list[list[float]] = []
+        for xyz, ts in zip(old, self._transit_t):
+            keep_xyz: list[tuple[float, float, float]] = []
+            keep_t: list[float] = []
+            for p, t in zip(xyz, ts):
+                if any(t0 - TRANSIT_MARGIN_S <= t <= t1 + TRANSIT_MARGIN_S for t0, t1 in spans):
+                    if keep_xyz:
+                        strips.append(keep_xyz)
+                        times.append(keep_t)
+                    keep_xyz, keep_t = [], []
+                else:
+                    keep_xyz.append(p)
+                    keep_t.append(t)
+            if keep_xyz or (xyz is old[-1] and self._last_floor == -1):  # the live piece goes on being drawn
+                strips.append(keep_xyz)
+                times.append(keep_t)
+        self._strips[-1] = strips
+        self._transit_t = times
         self._dirty = True
 
     def floor_cloud(self, t: float, floor: int, points: Points, colours: NDArray[np.uint8] | None = None) -> None:

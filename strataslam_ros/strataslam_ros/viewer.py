@@ -227,7 +227,8 @@ class Viewer(Node):
         stamps = np.array([stamp_s(q.header.stamp) for q in m.poses])
         cuts = np.flatnonzero(np.diff(stamps) > PATH_GAP_S) + 1
         pieces = [[tuple(float(v) for v in row) for row in part] for part in np.split(xyz, cuts)]
-        self.view.floor_path(floor, pieces)
+        spans = [(float(part[0]), float(part[-1])) for part in np.split(stamps, cuts)]
+        self.view.floor_path(floor, pieces, spans)
 
     def on_cloud(self, m: PointCloud2) -> None:
         floor = floor_of_frame(m.header.frame_id)

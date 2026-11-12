@@ -17,7 +17,8 @@ from strataslam_tools import evaluation, mapio
 
 
 def _find_tool(name: str, package: str) -> str:
-    """Locate an installed executable: PATH, then lib/<package>/ of the workspace prefixes.
+    """Locate an executable of the C++ packages: PATH, then lib/<package>/ of the workspace prefixes, then the
+    repository's own CMake build (`cmake -S superbuild -B build` with `pip install -e strataslam_tools`).
 
     strataslam_core is a plain CMake package, which colcon lists in CMAKE_PREFIX_PATH but not in
     AMENT_PREFIX_PATH (that one only holds ament packages): both are searched."""
@@ -29,7 +30,20 @@ def _find_tool(name: str, package: str) -> str:
         cand = Path(prefix) / "lib" / package / name
         if cand.exists():
             return str(cand)
-    raise SystemExit(f"strataslam: cannot find '{name}'. Source your ROS 2 / strataslam workspace (install/setup.bash).")
+    cand = Path(__file__).resolve().parents[2] / "build" / package / name
+    if cand.exists():
+        return str(cand)
+    raise SystemExit(
+        f"strataslam: cannot find '{name}' (package {package}). In a colcon workspace, source it in this terminal: "
+        "source ~/strataslam_ws/install/setup.bash (or the workspace you built). With the CMake build, put "
+        f"build/{package} on PATH."
+    )
+
+
+_NO_ROS = (
+    "needs ROS 2: source /opt/ros/jazzy/setup.bash and your workspace (source ~/strataslam_ws/install/setup.bash) "
+    "in this terminal"
+)
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
@@ -42,6 +56,9 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         return 3
     try:
         code, text = doctor.run(args.profile, bag=args.bag, as_json=args.json, seconds=args.seconds)
+    except ImportError as e:  # rclpy / rosbag2_py: ROS is not sourced
+        print(f"strataslam doctor {_NO_ROS} ({e})", file=sys.stderr)
+        return 3
     except (OSError, ValueError, RuntimeError, yaml.YAMLError) as e:
         print(f"strataslam doctor: {e}", file=sys.stderr)
         return 3
@@ -50,6 +67,9 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
 
 def cmd_map(args: argparse.Namespace) -> int:
+    if shutil.which("ros2") is None:
+        print(f"strataslam map {_NO_ROS}", file=sys.stderr)
+        return 3
     cmd = ["ros2", "launch", "strataslam_ros", "strataslam.launch.py", f"profile:={args.profile}", "mode:=map"]
     if args.vocabulary:
         cmd.append(f"vocabulary:={args.vocabulary}")
@@ -179,7 +199,11 @@ def cmd_vocab(args: argparse.Namespace) -> int:
 def cmd_imu_noise(args: argparse.Namespace) -> int:
     from strataslam_tools import allan
 
-    acc, gyr, fs = allan.read_imu_bag(args.bag, args.topic)
+    try:
+        acc, gyr, fs = allan.read_imu_bag(args.bag, args.topic)
+    except ImportError as e:  # a rosbag2 needs rosbag2_py
+        print(f"strataslam imu-noise on a rosbag {_NO_ROS} ({e})", file=sys.stderr)
+        return 3
     res, curves = allan.imu_noise(acc, gyr, fs, margin=args.margin)
     print(f"{len(acc)} samples at {fs:.1f} Hz ({len(acc) / fs / 3600:.2f} h), margin x{args.margin:g}")
     for w in res.warnings:

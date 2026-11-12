@@ -59,18 +59,39 @@ Rules (validated before anything starts, all errors reported at once as `config 
   wheel odometry of most ROS robots publishes), not both; `odometry_from: camera|lidar` needs that sensor. The TF may
   move a frame above the base (`odom -> base_footprint`, with `base_footprint -> base_link` fixed in the URDF and
   `base_frame: base_link`): it is composed with that fixed chain (ADR-0063). If no odometry arrives the node says so
-  after 2 s of camera frames, with the frames TF has under `frame`.
+  after 2 s of frames (camera frames, or scans when it is the LiDAR's prior), with the frames TF has under `frame`.
 - `barometer.reference_topic`: the sensor_msgs/FluidPressure of a fixed base station; the robot's height becomes the
   difference between the two, which cancels the weather (a front moving through changes the pressure by about 1 hPa,
   8 m, in an hour). `settle_time_s` is how long the low-pass filter of the barometric height takes to settle within
   1 % after a step (2 s by default).
-- `external_odometry` is the robot's own odometry (wheels) as the motion prior of the camera tracking: it predicts
-  each frame and carries the pose through a tracking loss, which then opens no new session. It is not an odometry
-  source (`odometry_from: external` is an error) and with LiDAR odometry it is ignored, with a warning. It also
-  vetoes camera motions it could not have made (ADR-0043).
+- `external_odometry` is the robot's own odometry (wheels) as the motion prior of the tracking: it predicts each
+  frame or scan, carries the pose through a tracking loss, which then opens no new session, and vetoes motions it
+  could not have made (ADR-0043, ADR-0071). `prior` says which tracking uses it: `auto` (the default) the camera's,
+  not a LiDAR's; `true` either, the LiDAR's too (it also deskews the scans; a LiDAR's registration is vetoed only
+  when it is degraded, since wheels slip); `false` none. It is not an odometry source (`odometry_from: external` is
+  an error). With a LiDAR it helps where the scan holds little (an elevator cabin, a long corridor) and on fast
+  turns in place.
 - The IMU is used however it is mounted: its rotation and sign convention are learned from the motion when the TF or
   the driver are wrong (ADR-0044). It bounds the camera tracking's roll and pitch by gravity. `imu.floor_changes:
-  false` keeps it to that (no elevator detection by vertical acceleration), for a ground robot's vibrating base.
+  false` keeps it to that (no elevator detection by vertical acceleration). On a ground robot that rides elevators,
+  `true` measures the rides: a cabin carries the robot standing still, so the IMU measures a ride only while the base
+  does not travel, and its vibration while driving is ignored (ADR-0070).
+- `imu.accel_bias` is the accelerometer's offset: `[x, y, z]` (m/s², in the IMU's own frame) subtracted from every
+  sample, `auto` (the default) or `false`. An uncalibrated MEMS accelerometer (an OAK-D Lite's BMI270: 0.3 m/s²)
+  gives a gravity tilted by 1-2 deg, and since the IMU bounds the LiDAR's roll and pitch, every metre walked then
+  climbs 2-3 cm: a metre per floor, false ramps that open floors that are not there, and a floor reached again no
+  longer at its level. With a LiDAR the node measures it: once it has seen the floor below at all headings (a
+  minute), it compares the IMU's gravity with the floors (ADR-0072). A sloping floor turns with the heading and
+  cancels out over headings all round; the accelerometer's offset does not. With `auto` it applies what it
+  measured from then on and says it in the log with the list to set, so that the next run has it from the start
+  (ADR-0074); beyond 3 deg it is no accelerometer's offset but a TF to fix, and it is only said. `false` only says
+  it. With the offset known (given or measured), the IMU's gravity also holds the roll and pitch of every keyframe
+  in the graph, not only of those taken at rest (ADR-0073).
+- Without `floor_height_prior` a level is matched within 0.6 m (0.4 x `min_vertical_change`), with one within 0.4
+  priors. A floor reached by other stairs often comes back farther off: up to `min_vertical_change` (or half the
+  prior) away, the node looks for the place on the level near it and, if the LiDAR or the camera finds it there at
+  the same height, the arrival is that level (ADR-0073); otherwise a new level, which `strataslam fuse --same-level`
+  can still join.
 - `fusion.colorize_cloud` gives the map the camera's colours: a LiDAR's points take the colour of the pixel they
   project to in the image taken with the scan, a camera's depth points the colour of their own pixel (ADR-0068).
   When the map is saved, a LiDAR's points that image did not see are coloured from the images of the keyframes

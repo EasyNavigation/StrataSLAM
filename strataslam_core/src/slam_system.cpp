@@ -121,6 +121,17 @@ struct SlamSystem::Impl {
   // frontend's current frame (cleared at its restarts): the gyroscope's heading drift against it.
   std::deque<std::pair<Timestamp, gtsam::Rot3>> heading_obs;
   Timestamp last_confined = 0;  // of the last scan that saw a confined space
+  // The IMU's gravity against the floors the LiDAR sees (check_accel_bias): per sample, the
+  // horizontal components of their difference in the base frame, and the base's heading.
+  struct TiltSample {
+    double dx, dy, yaw;
+  };
+  std::vector<TiltSample> tilt_samples;
+  Timestamp last_tilt_check = 0;
+  bool tilt_reported = false;
+  // m/s^2, IMU frame: subtracted from every accelerometer sample. The profile's calibration, or
+  // the offset measured against the floors with `accel_bias: auto` (ADR-0072, ADR-0074).
+  std::optional<Eigen::Vector3d> accel_bias;
 
   // A floor change in progress whose record is completed by the first keyframe on the new floor.
   struct OpenTransition {
@@ -149,6 +160,7 @@ struct SlamSystem::Impl {
     base.min_vertical_change = c.multifloor.min_vertical_change;
     base.tracking_loss_timeout = c.multifloor.tracking_loss_timeout;
     base.aerial_platform = c.robot.platform == Platform::Aerial;
+    base.ground_platform = c.robot.platform == Platform::Ground;
     return base;
   }
 
@@ -160,6 +172,8 @@ struct SlamSystem::Impl {
         backend(t.backend, log),
         mgr(floor_config(c, t.floors)) {
     mgr.set_logger(log);
+    if (const auto& b = cfg.sensors.imu.accel_bias)
+      accel_bias = Eigen::Vector3d((*b)[0], (*b)[1], (*b)[2]);
     modes = resolve_modes(cfg);
     const int threads =
         cfg.runtime.threads > 0
@@ -359,6 +373,92 @@ struct SlamSystem::Impl {
     return std::abs(d) < M_PI / 180.0 ? d : 0.0;
   }
 
+  /// The accelerometer's offset, measured against the floors (ADR-0072): once a second, up by the
+  /// IMU against the normal of the floor below the LiDAR, both in the base frame (not in a cabin
+  /// the IMU measures a ride in: its accelerations are the ride's). An
+  /// offset of the accelerometer is fixed in the body and shows at every heading; a sloping floor
+  /// is fixed in the world and turns with the heading, so over headings all round its median is
+  /// the offset. Said once in the log, with the `imu.accel_bias` it asks for, and with `accel_bias:
+  /// auto` applied from then on (ADR-0074).
+  void check_accel_bias(const LidarScan& scan, const FrontendResult& r) {
+    if (tilt_reported || !cfg.sensors.imu.enabled || !imu_trusted || mgr.in_unobserved_transition())
+      return;
+    if (cfg.robot.platform == Platform::Ground && !imu_learned) return;  // its tilt's direction
+    if (!gravity.up() || imu_buf.empty() || scan.stamp - last_tilt_check < 1'000'000'000) return;
+    last_tilt_check = scan.stamp;
+    // The accelerometer itself, its mean over the last 2 s (the gait's accelerations average out
+    // there): the gravity tracker's up turns the offset round with the gyroscope at each turn and
+    // the accelerometer brings it back only over its time constant.
+    const auto up = mean_up(2'000'000'000);
+    if (!up) return;
+    const Eigen::Matrix3d R_bl = ext.T_base_lidar.rotation().matrix();
+    const auto n =
+        estimate_up_from_ground_plane(scan.points, R_bl.transpose() * *up, cfg.runtime.seed, 10.0);
+    if (!n) return;
+    const Eigen::Vector3d d = up->normalized() - R_bl * *n;
+    tilt_samples.push_back({d.x(), d.y(), r.T_odom_base.rotation().yaw()});
+    constexpr size_t kMinSamples = 60;  // a minute on floors
+    if (tilt_samples.size() < kMinSamples) return;
+    // Headings all round: the mean of their unit vectors is short.
+    double c = 0, sn = 0;
+    for (const auto& t : tilt_samples) {
+      c += std::cos(t.yaw);
+      sn += std::sin(t.yaw);
+    }
+    if (std::hypot(c, sn) / static_cast<double>(tilt_samples.size()) > 0.5) return;
+    auto median = [&](double TiltSample::*m) {
+      std::vector<double> v;
+      v.reserve(tilt_samples.size());
+      for (const auto& t : tilt_samples) v.push_back(t.*m);
+      const auto mid = v.begin() + static_cast<std::ptrdiff_t>(v.size() / 2);
+      std::nth_element(v.begin(), mid, v.end());
+      return *mid;
+    };
+    const Eigen::Vector3d d_med(median(&TiltSample::dx), median(&TiltSample::dy), 0.0);
+    const double deg = std::asin(std::min(1.0, d_med.norm())) * 180.0 / M_PI;
+    tilt_reported = true;
+    // The specific force that makes that tilt, back in the IMU's own frame and units.
+    const Eigen::Vector3d add = imu_sign / imu_scale *
+                                ext.T_base_imu.rotation().matrix().transpose() *
+                                (kStandardGravity * d_med);
+    const Eigen::Vector3d b = accel_bias.value_or(Eigen::Vector3d::Zero()) + add;
+    constexpr double kNoticeDeg = 0.5;  // a floor's own unevenness and the fits' noise
+    if (deg < kNoticeDeg) {
+      log->log(LogLevel::Info,
+               strprintf("IMU: its gravity agrees with the floors the LiDAR sees (%.2f deg, %zu "
+                         "scans at all headings)",
+                         deg, tilt_samples.size()));
+      return;
+    }
+    // `accel_bias: auto`: applied from now on. A sloping floor cannot read like this (over headings
+    // all round it cancels); a LiDAR mounted off its TF does, and then levelling the IMU on the
+    // LiDAR's floors is still what keeps them level in the map. Beyond 3 deg it is no
+    // accelerometer's offset (a BMI270's is 1.7): a TF to fix, only said (ADR-0074).
+    constexpr double kMaxAutoDeg = 3.0;
+    if (cfg.sensors.imu.accel_bias_auto && !cfg.sensors.imu.accel_bias && deg <= kMaxAutoDeg) {
+      accel_bias = b;
+      // What is already held moves with it: the samples of the last seconds (the mean up of a
+      // keyframe) and the tracker's up, which would otherwise take three time constants.
+      const Eigen::Vector3d step = imu_sign * imu_scale * add;
+      for (auto& m : imu_buf) m.accel -= step;
+      gravity.shift_up(-d_med);
+      log->log(LogLevel::Warn,
+               strprintf("IMU: its gravity is %.1f deg from the floors the LiDAR sees (median of "
+                         "%zu scans at all headings): its accelerometer's offset, applied from now "
+                         "on (accel_bias: auto). To have it from the start, set imu.accel_bias: "
+                         "[%.3f, %.3f, %.3f] (ADR-0074)",
+                         deg, tilt_samples.size(), b.x(), b.y(), b.z()));
+      return;
+    }
+    log->log(LogLevel::Warn,
+             strprintf("IMU: its gravity is %.1f deg from the floors the LiDAR sees (median of %zu "
+                       "scans at all headings): every metre travelled climbs %.0f mm. An "
+                       "accelerometer offset does that; if the floors are level and the TF right, "
+                       "set imu.accel_bias: [%.3f, %.3f, %.3f] (ADR-0072)",
+                       deg, tilt_samples.size(), 1000.0 * std::tan(deg * M_PI / 180.0), b.x(),
+                       b.y(), b.z()));
+  }
+
   void observe_heading(Timestamp stamp, const gtsam::Rot3& R) {
     constexpr Timestamp kKeep = 60'000'000'000;  // ns
     heading_obs.emplace_back(stamp, R);
@@ -489,6 +589,19 @@ struct SlamSystem::Impl {
   }
 
   /// Up direction in the base frame if the last 0.4 s of IMU data are quasi-static, else nullopt.
+  /// Up in the base frame from the accelerometer's mean over the last `window` ns (corrected
+  /// samples); none with fewer than 20 samples.
+  std::optional<Eigen::Vector3d> mean_up(Timestamp window) const {
+    if (imu_buf.empty()) return std::nullopt;
+    Eigen::Vector3d a = Eigen::Vector3d::Zero();
+    size_t n = 0;
+    for (auto it = imu_buf.rbegin();
+         it != imu_buf.rend() && imu_buf.back().stamp - it->stamp <= window; ++it, ++n)
+      a += it->accel;
+    if (n < 20 || a.norm() < 1e-6) return std::nullopt;
+    return (ext.T_base_imu.rotation().matrix() * a).normalized();
+  }
+
   std::optional<Eigen::Vector3d> quasi_static_up() const {
     if (imu_buf.size() < 40) return std::nullopt;
     std::vector<ImuSample> w(imu_buf.end() - 40, imu_buf.end());
@@ -605,6 +718,24 @@ struct SlamSystem::Impl {
     in.T_base_sensor = T_base_sensor;
     in.baro_height = baro_h;
     in.up_body = quasi_static_up();
+    // In motion, with a calibrated accelerometer, its mean over the last 2 s, looser (ADR-0073).
+    // Uncalibrated, its offset (0.5-1.5 deg on Elevator-VIGS) would tilt every floor by that much,
+    // where the frontend's 1 deg bound leaves the LiDAR room to find the level (Campus1, Station1:
+    // 0.3-0.7 m worse with it). Without it a walk's
+    // keyframes had no attitude in the graph, only relative motions, which bend at almost no cost:
+    // a loop that did not close in height was closed by tilting the floor (the portable rig's
+    // floor 0 sank 2.3 m over 40 m to absorb its two staircases' 0.7 m). Not the gravity tracker's
+    // up: with an accelerometer offset it turns the offset round with the gyroscope at each turn
+    // and brings it back over its time constant, a heading-dependent tilt that bent Elevator-VIGS
+    // floors (Station1 0.3 m, Factory-M 0.2 m). The mean has the offset the start was levelled
+    // with. Not in a ride the IMU measures (the cabin accelerates), nor on a ground robot whose IMU
+    // heading is not learned yet.
+    if (!in.up_body && imu_trusted && accel_bias && !mgr.in_unobserved_transition() &&
+        (cfg.robot.platform != Platform::Ground || imu_learned))
+      if (const auto up = mean_up(2'000'000'000)) {
+        in.up_body = *up;
+        in.up_sigma = tuning.moving_gravity_sigma;
+      }
     if (planar()) in.plane_up = plane_up();
     gtsam::Pose3 rel;
     std::optional<KeyframeId> odom_from;
@@ -1188,12 +1319,13 @@ struct SlamSystem::Impl {
       const FloorEvent ev = mgr.finish();
       if (ev.kind == FloorEvent::Kind::TransitionEnded) {
         log->log(LogLevel::Info, "end of the run with a floor transition open: decided now");
-        on_floor_event(ev);
+        // Its arrival as decided: a level reached again replaces the new one (ADR-0073).
+        const FloorEvent done = on_floor_event(ev);
         // No keyframe of the arrival floor will come: the keyframes of the climb are its first
         // ones.
-        if (!transit_kfs.empty() && ev.from != ev.to) {
+        if (!transit_kfs.empty() && done.from != done.to) {
           const KeyframeId first = transit_kfs.front();
-          absorb_transit_keyframes(ev.to);
+          absorb_transit_keyframes(done.to);
           finish_open_transition(backend.keyframe(first));
         }
       }
@@ -1387,7 +1519,67 @@ struct SlamSystem::Impl {
     }
   }
 
-  void on_floor_event(const FloorEvent& ev) {
+  /// The end of the transition just closed (its last transit keyframes) seen again on `level`: a
+  /// keyframe of that level the place recognition finds and the registration verifies, the
+  /// registration's own height between them within the level tolerance. That height is measured
+  /// against the structure itself, not through the odometry's stairs: a mezzanine looking down
+  /// onto the floor below registers 1-2 m above it. Returns the height difference (ADR-0073).
+  std::optional<double> arrival_on_level(FloorId level) {
+    if (sc_db.count(key_floor(level)) == 0 && bow_db.count(key_floor(level)) == 0)
+      return std::nullopt;
+    constexpr size_t kTried = 6;  // the last keyframes, on the level reached
+    for (size_t k = 0; k < std::min(kTried, transit_kfs.size()); ++k) {
+      const KeyframeInput& cur = backend.keyframe(transit_kfs[transit_kfs.size() - 1 - k]);
+      std::vector<std::pair<KeyframeId, gtsam::Pose3>> found;
+      if (lidar_fe && !cur.cloud.empty() && sc_db.count(key_floor(level))) {
+        const ScanContext sc = make_scan_context(cur.cloud, tuning.scan_context);
+        for (const auto& c : sc_for(level).query(sc))
+          if (const auto rel = verify_lidar(cur, c.id, c.match.yaw, nullptr))
+            found.emplace_back(c.id, *rel);
+      }
+      const auto vis = visual_kf.find(cur.id);
+      if (found.empty() && vis != visual_kf.end() && tuning.vocabulary &&
+          bow_db.count(key_floor(level))) {
+        const auto cands = bow_for(level).query(bow_of(vis->second), cur.session, cur.stamp, 0.0,
+                                                tuning.bow_min_score,
+                                                static_cast<size_t>(tuning.bow_max_candidates));
+        for (const auto& c : cands)
+          if (const auto rel = verify_visual(vis->second, c.id)) found.emplace_back(c.id, *rel);
+      }
+      for (const auto& [cand, rel] : found) {
+        // Up in the candidate's frame: the level graph is gravity-aligned.
+        const FloorGraph& g = backend.floor(level);
+        const gtsam::Rot3 R = g.has(cand) ? g.pose(cand).rotation() : gtsam::Rot3();
+        const double dz = (R.matrix() * rel.translation()).z();
+        if (debug_channel("FLOORS"))
+          log->log(LogLevel::Debug,
+                   strprintf("arrival kf %lu seen from kf %lu of level %d: %.2f m above it",
+                             static_cast<unsigned long>(cur.id), static_cast<unsigned long>(cand),
+                             level, dz));
+        if (std::abs(dz) <= mgr.level_tolerance()) return dz;
+      }
+    }
+    return std::nullopt;
+  }
+
+  /// Returns the event as it was decided: its arrival may be revised to a level seen again.
+  FloorEvent on_floor_event(FloorEvent ev) {
+    // A new level near an existing one: the place decides (ADR-0073).
+    if (ev.kind == FloorEvent::Kind::TransitionEnded && ev.near_level >= 0 && ev.from != ev.to) {
+      const double dz_level = mgr.level_altitude(ev.to) - mgr.level_altitude(ev.near_level);
+      if (const auto dz = arrival_on_level(ev.near_level);
+          dz && mgr.revise_arrival(ev.near_level)) {
+        log->log(LogLevel::Info,
+                 strprintf("floor %d reached again: its place is seen %.2f m from it (the stairs "
+                           "measured %.2f m)",
+                           ev.near_level, *dz, dz_level));
+        ev.to = ev.near_level;
+      } else {
+        log->log(LogLevel::Info,
+                 strprintf("a new level %.2f m from floor %d: not seen as the same place", dz_level,
+                           ev.near_level));
+      }
+    }
     if (ev.kind == FloorEvent::Kind::TransitionStarted)
       log->log(LogLevel::Info,
                std::string("floor transition started") +
@@ -1405,9 +1597,9 @@ struct SlamSystem::Impl {
       last_kf.reset();
       last_kf_pose.reset();
       if (pending.active && pending.kfs.empty()) pending = Pending{};
-      return;
+      return ev;
     }
-    if (ev.kind != FloorEvent::Kind::TransitionEnded) return;
+    if (ev.kind != FloorEvent::Kind::TransitionEnded) return ev;
     if (ev.from == ev.to && ev.type == TransitionType::Unknown) {
       // The height came back to where the transition started: no floor change, nothing to record.
       // Its keyframes join the floor (a pending session keeps waiting for its relocalization, as
@@ -1419,14 +1611,14 @@ struct SlamSystem::Impl {
                            ? std::optional<KeyframeId>(last_kf_on_floor[pending.from_floor])
                            : std::nullopt);
       if (!pending.active) absorb_transit_keyframes(ev.to);
-      return;
+      return ev;
     }
     if (ev.from == ev.to && ev.continuous_tracking && !ev.needs_frontend_reset && !pending.active) {
       log->log(LogLevel::Info,
                "height change was not a floor change: keeping its keyframes on floor " +
                    std::to_string(ev.to));
       absorb_transit_keyframes(ev.to);
-      return;
+      return ev;
     }
     // A ramp or stairs tracked continuously keeps its keyframes for the floor it arrives at. Not a
     // ride the odometry did not see, even tracked: the keyframes in the cabin have the height it
@@ -1478,6 +1670,7 @@ struct SlamSystem::Impl {
         finish_open_transition(backend.keyframe(first));
       }
     }
+    return ev;
   }
 
   void feed_manager(const FrontendResult& r, Timestamp stamp) {
@@ -1503,9 +1696,13 @@ SlamSystem::SlamSystem(const Config& c, const Extrinsics& e, const SystemTuning&
     : impl_(std::make_unique<Impl>(c, e, t, std::move(l))) {}
 SlamSystem::~SlamSystem() = default;
 
-void SlamSystem::add_imu(const ImuSample& m) {
+void SlamSystem::add_imu(const ImuSample& raw) {
   auto& s = *impl_;
   if (!s.cfg.sensors.imu.enabled) return;
+  // The accelerometer's calibration, in its own frame, before anything reads it (the mounting,
+  // the gravity, the vertical acceleration): ADR-0072.
+  ImuSample m = raw;
+  if (s.accel_bias) m.accel -= *s.accel_bias;
   s.imu_mount->add_imu(m);
   if (!s.imu_checked)
     s.check_imu_against_tf();
@@ -1558,7 +1755,7 @@ void SlamSystem::add_rgbd(const RgbdFrame& f) {
   SensorFrame sf;
   sf.stamp = f.stamp;
   sf.rgbd = &f;
-  const auto odom = s.ext_odom_at(f.stamp);
+  const auto odom = s.modes.odometry_prior ? s.ext_odom_at(f.stamp) : std::nullopt;
   if (odom) sf.odom = &*odom;
   if (s.planar())
     sf.up_base = s.plane_up();  // also bounds the tracking's own tilt
@@ -1611,12 +1808,19 @@ void SlamSystem::add_lidar(const LidarScan& scan) {
   SensorFrame f;
   f.stamp = scan.stamp;
   f.lidar = &scan;
+  // The robot's own odometry, when the profile makes it the LiDAR's prior (ADR-0071).
+  const auto odom = s.modes.odometry_prior ? s.ext_odom_at(scan.stamp) : std::nullopt;
+  if (odom) f.odom = &*odom;
   // A ground robot's turns leave the IMU's heading on the base unobserved, and with it the
   // direction of every tilt the IMU reports: its gravity bounds the LiDAR's attitude once the
   // accelerations have shown that heading (ADR-0058). Before, a TF that has the IMU turned half
-  // around reads every slope backwards.
-  if (!s.planar() && s.imu_trusted && (s.cfg.robot.platform != Platform::Ground || s.imu_learned))
+  // around reads every slope backwards, but not steeper: the size of the tilt bounds it until then
+  // (out of an elevator cabin the Summit XL's odometry took 7 deg of pitch on the level, a 2.7 m
+  // ramp in 55 s, on a bag too short to show the heading).
+  if (!s.planar() && s.imu_trusted) {
     f.up_base = s.gravity.up();
+    f.up_tilt_only = s.cfg.robot.platform == Platform::Ground && !s.imu_learned;
+  }
   // The gyroscope's turn since the last pose, its heading drift (measured against the odometry out
   // of confined spaces) taken out: the rotation of a scan in an elevator cabin, where the
   // registration's goes wrong by tens of degrees as the person turns round in it.
@@ -1635,7 +1839,10 @@ void SlamSystem::add_lidar(const LidarScan& scan) {
   }
   FrontendResult r = s.lidar_fe->process(f);
   if (r.confined) s.last_confined = scan.stamp;
-  if (r.valid && !r.confined) s.observe_heading(scan.stamp, r.T_odom_base.rotation());
+  if (r.valid && !r.confined) {
+    s.observe_heading(scan.stamp, r.T_odom_base.rotation());
+    s.check_accel_bias(scan, r);
+  }
   if (debug_channel("GYRO") && r.valid && f.gyro_delta && R_prev)
     s.log->log(LogLevel::Debug,
                strprintf("gyro t=%.3f confined=%d drift=%.3f deg/s registration off the "

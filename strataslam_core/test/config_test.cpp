@@ -200,20 +200,86 @@ TEST(Rules, ExternalOdometryNeedsATopicOrAFrame) {
   EXPECT_EQ(r.config->sensors.external_odometry.frame, "odom");
 }
 
-TEST(Rules, ExternalOdometryIsAPriorOfTheCameraNotAnOdometry) {
+TEST(Rules, TheAccelerometerBiasIsThreeNumbersInMetresPerSecondSquared) {
+  const auto imu = [](const std::string& bias) {
+    return load_profile_string(
+        "strataslam: {version: 1}\nsensors: {lidar: {enabled: true, topic: /points}, imu: "
+        "{enabled: true, topic: /imu, accel_bias: " +
+        bias + "}}\n");
+  };
+  auto r = imu("[-0.04, -0.01, -0.29]");
+  ASSERT_TRUE(r.ok());
+  ASSERT_TRUE(r.config->sensors.imu.accel_bias.has_value());
+  EXPECT_DOUBLE_EQ((*r.config->sensors.imu.accel_bias)[0], -0.04);
+  EXPECT_DOUBLE_EQ((*r.config->sensors.imu.accel_bias)[2], -0.29);
+  EXPECT_TRUE(has_error(imu("[0.1, 0.2]"),
+                        "config error: sensors.imu.accel_bias: expected a list of three numbers, "
+                        "[x, y, z]"));
+  EXPECT_FALSE(r.config->sensors.imu.accel_bias_auto);  // given: the calibration
+  EXPECT_TRUE(has_error(imu("0.3"),
+                        "config error: sensors.imu.accel_bias: expected a list of three numbers, "
+                        "[x, y, z], auto or false"));
+  // auto (the default): measured against the floors and applied (ADR-0074); false: only said.
+  r = imu("auto");
+  ASSERT_TRUE(r.ok());
+  EXPECT_TRUE(r.config->sensors.imu.accel_bias_auto);
+  EXPECT_FALSE(r.config->sensors.imu.accel_bias.has_value());
+  r = imu("false");
+  ASSERT_TRUE(r.ok());
+  EXPECT_FALSE(r.config->sensors.imu.accel_bias_auto);
+  r = load_profile_string(
+      "strataslam: {version: 1}\nsensors: {lidar: {enabled: true, topic: /points}, imu: "
+      "{enabled: true, topic: /imu}}\n");
+  ASSERT_TRUE(r.ok());
+  EXPECT_TRUE(r.config->sensors.imu.accel_bias_auto);
+  EXPECT_TRUE(has_error(imu("[0, 0, 9.8]"),
+                        "config error: sensors.imu.accel_bias: m/s^2, at most 2 per axis: a "
+                        "larger offset is no bias (is the unit right?)"));
+}
+
+TEST(Rules, ExternalOdometryIsAPriorOfTheTrackingNotAnOdometry) {
   auto r = load_profile_string(with(
       "  external_odometry: {enabled: true, topic: /odom}\nfusion: {odometry_from: external}\n"));
   EXPECT_TRUE(has_error(r,
                         "config error: fusion.odometry_from: \"external\" is not an odometry "
-                        "source: the external odometry is the "
-                        "motion prior of the camera tracking (keep odometry_from camera or auto)"));
-  r = load_profile_string(
-      "strataslam: {version: 1}\nsensors: {lidar: {enabled: true}, external_odometry: {enabled: "
-      "true, frame: odom}}\n");
-  EXPECT_TRUE(r.ok());
-  EXPECT_TRUE(std::any_of(r.warnings.begin(), r.warnings.end(), [](const auto& w) {
-    return w.format().find("only the camera tracking uses it") != std::string::npos;
-  }));
+                        "source: the external odometry is the motion prior of the tracking (keep "
+                        "odometry_from camera, lidar or auto; with a LiDAR, "
+                        "external_odometry.prior: true)"));
+  const auto lidar = [](const std::string& prior) {
+    return load_profile_string(
+        "strataslam: {version: 1}\nsensors: {lidar: {enabled: true, topic: /points}, "
+        "external_odometry: {enabled: true, frame: odom" +
+        prior + "}}\n");
+  };
+  const auto warned = [](const auto& res, const std::string& text) {
+    return std::any_of(res.warnings.begin(), res.warnings.end(),
+                       [&](const auto& w) { return w.format().find(text) != std::string::npos; });
+  };
+  // auto: the camera's prior only; with a LiDAR it is ignored, and the profile is told how not to.
+  r = lidar("");
+  ASSERT_TRUE(r.ok());
+  EXPECT_FALSE(resolve_modes(*r.config).odometry_prior);
+  EXPECT_TRUE(warned(r, "with LiDAR odometry it is used only with prior: true"));
+  // true: the LiDAR's prior (ADR-0071).
+  r = lidar(", prior: true");
+  ASSERT_TRUE(r.ok());
+  EXPECT_TRUE(resolve_modes(*r.config).odometry_prior);
+  EXPECT_FALSE(warned(r, "external_odometry"));
+  // With a camera: auto is its prior, false is not.
+  const auto camera = [](const std::string& prior) {
+    return load_profile_string(
+        "strataslam: {version: 1}\nsensors: {camera: {rgb_topic: a, depth_topic: b, info_topic: "
+        "c}, external_odometry: {enabled: true, topic: /odom" +
+        prior + "}}\n");
+  };
+  r = camera("");
+  ASSERT_TRUE(r.ok());
+  EXPECT_TRUE(resolve_modes(*r.config).odometry_prior) << "auto: the camera's prior";
+  r = camera(", prior: false");
+  ASSERT_TRUE(r.ok());
+  EXPECT_FALSE(resolve_modes(*r.config).odometry_prior);
+  r = lidar(", prior: maybe");
+  EXPECT_FALSE(r.ok());
 }
 
 TEST(Rules, OdometryFromRequiresSensor) {

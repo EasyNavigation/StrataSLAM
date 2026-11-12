@@ -72,7 +72,7 @@ void Backend::insert_into_graph(const KeyframeInput& kf, std::optional<KeyframeI
   if (kf.plane_up)
     fg.add_plane(kf.id, *kf.plane_up);
   else if (kf.up_body)
-    fg.add_gravity(kf.id, *kf.up_body, cfg_.gravity_sigma);
+    fg.add_gravity(kf.id, *kf.up_body, kf.up_sigma.value_or(cfg_.gravity_sigma));
 }
 
 Result<void> Backend::promote_to_floor(const std::vector<KeyframeId>& ids, FloorId floor,

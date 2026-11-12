@@ -245,6 +245,52 @@ TEST(LidarFrontend, TheImusGravityBoundsTheAttitudeToOneDegree) {
   EXPECT_NEAR(angle_deg(up, level), 4.0, 0.1);
 }
 
+namespace {
+
+/// Up in the base frame of the pose the frontend gives to a second scan of the room taken with the
+/// sensor pitched by `pitch_deg` (the first level), when the IMU reports `up_base` with or without
+/// its direction (`tilt_only`).
+Vector3d up_after_pitched_scan(double pitch_deg, const Vector3d& up_base, bool tilt_only) {
+  LidarFrontend fe{LidarFrontendConfig()};
+  LidarScan scan;
+  scan.points = room();
+  SensorFrame f;
+  f.lidar = &scan;
+  scan.stamp = f.stamp = 1'000'000'000LL;
+  EXPECT_TRUE(fe.process(f).valid);
+  scan.points = transform_points(
+      room(), gtsam::Pose3(gtsam::Rot3::Pitch(pitch_deg * M_PI / 180), Vector3d::Zero())
+                  .inverse()
+                  .matrix());
+  scan.stamp = f.stamp = 1'100'000'000LL;
+  f.up_base = up_base;
+  f.up_tilt_only = tilt_only;
+  const FrontendResult r = fe.process(f);
+  EXPECT_TRUE(r.valid);
+  return r.T_odom_base.rotation().matrix().transpose() * Vector3d::UnitZ();
+}
+
+}  // namespace
+
+// A ground robot's IMU before its heading is learned (ADR-0070): the size of its tilt is known, not
+// its direction. The registration keeps its own tilt up to that size plus the bound, in its own
+// direction.
+TEST(LidarFrontend, BeforeItsHeadingTheImuBoundsTheSizeOfTheTilt) {
+  const Vector3d level = Vector3d::UnitZ();
+  const Vector3d pitched = gtsam::Rot3::Pitch(5.0 * M_PI / 180).matrix().transpose() * level;
+  // The registration has the sensor's 5 deg of pitch; a level IMU cuts it to the bound.
+  EXPECT_NEAR(angle_deg(up_after_pitched_scan(5.0, level, true), level), 1.0, 0.05);
+  // The IMU tilted by as much, about the other axis (its heading unknown): the registration's
+  // pitch stands, where the IMU's direction would have moved it.
+  const Vector3d rolled = gtsam::Rot3::Roll(5.0 * M_PI / 180).matrix() * level;
+  const Vector3d kept = up_after_pitched_scan(5.0, rolled, true);
+  EXPECT_LT(angle_deg(kept, pitched), 0.2);
+  EXPECT_GT(angle_deg(up_after_pitched_scan(5.0, rolled, false), pitched), 3.0);
+  // The cut keeps the registration's direction: pitch, not roll.
+  const Vector3d cut = up_after_pitched_scan(5.0, level, true);
+  EXPECT_LT(angle_deg(cut, gtsam::Rot3::Pitch(1.0 * M_PI / 180).matrix().transpose() * level), 0.1);
+}
+
 // ---------------- Confined spaces: the rotation is the gyroscope's ----------------
 
 namespace {
@@ -654,4 +700,116 @@ TEST(PlanarScanWithCamera, TheImagesAroundColourWhatAKeyframesOwnImageMissed) {
   EXPECT_GT(own, 0.05);
   EXPECT_GT(around, own + 0.05);
   EXPECT_GT(half, own + 0.05);
+}
+
+// ---------------- The robot's own odometry as the LiDAR's prior (ADR-0071) ----------------
+
+namespace {
+
+/// Feeds `scenes` (each seen from the base pose given with it, the sensor at the base) to a
+/// frontend, with the wheel odometry `odom` at each scan when given; returns the last result.
+FrontendResult run_scans(const std::vector<std::pair<std::vector<Vector3f>, gtsam::Pose3>>& scenes,
+                         const std::vector<std::optional<gtsam::Pose3>>& odom,
+                         LidarFrontendConfig cfg = {}) {
+  LidarFrontend fe{cfg};
+  LidarScan scan;
+  SensorFrame f;
+  f.lidar = &scan;
+  FrontendResult r;
+  for (size_t i = 0; i < scenes.size(); ++i) {
+    const auto& [world, T_base] = scenes[i];
+    scan.points = transform_points(world, T_base.inverse().matrix());
+    scan.stamp = f.stamp = 1'000'000'000LL + static_cast<Timestamp>(i) * 100'000'000LL;
+    OdomMeasurement o;
+    if (odom[i]) {
+      o = {f.stamp, *odom[i]};
+      f.odom = &o;
+    } else {
+      f.odom = nullptr;
+    }
+    r = fe.process(f);
+  }
+  return r;
+}
+
+gtsam::Pose3 yaw_deg(double deg) {
+  return gtsam::Pose3(gtsam::Rot3::Yaw(deg * M_PI / 180), Vector3d::Zero());
+}
+
+}  // namespace
+
+// The start of a fast turn in place (the Summit XL's 1 rad/s spins): the constant-velocity model
+// predicts no turn, and the registration of a room turned by 100 deg falls in the wrong minimum.
+// The wheels predict it.
+TEST(LidarFrontend, TheWheelsPredictATurnTheConstantVelocityModelMisses) {
+  const auto w = room();
+  const std::vector<std::pair<std::vector<Vector3f>, gtsam::Pose3>> scenes = {
+      {w, gtsam::Pose3()}, {w, gtsam::Pose3()}, {w, yaw_deg(100)}};
+  const double without =
+      run_scans(scenes, {std::nullopt, std::nullopt, std::nullopt}).T_odom_base.rotation().yaw();
+  const FrontendResult with = run_scans(scenes, {gtsam::Pose3(), gtsam::Pose3(), yaw_deg(95)});
+  ASSERT_TRUE(with.valid);
+  EXPECT_EQ(with.quality.state, TrackingState::Good);
+  EXPECT_NEAR(with.T_odom_base.rotation().yaw() * 180 / M_PI, 100.0, 1.0)
+      << "the wheels predict, the registration measures (they read 95)";
+  EXPECT_GT(std::abs(without * 180 / M_PI - 100.0), 20.0) << "the case needs the prior";
+}
+
+// A scan the registration cannot place (too few points: the scanner facing a wall a hand away, or
+// the inside of a closed cabin) is carried by the wheels instead of reaching the pipeline as a
+// tracking loss, which opened a new session.
+TEST(LidarFrontend, TheWheelsCarryAScanTheRegistrationCannotPlace) {
+  const auto w = room();
+  const std::vector<Vector3f> few(w.begin(), w.begin() + 20);
+  const std::vector<std::pair<std::vector<Vector3f>, gtsam::Pose3>> scenes = {
+      {w, gtsam::Pose3()}, {w, gtsam::Pose3()}, {few, gtsam::Pose3()}};
+  const gtsam::Pose3 moved(gtsam::Rot3(), Vector3d(0.3, 0, 0));
+  EXPECT_FALSE(run_scans(scenes, {std::nullopt, std::nullopt, std::nullopt}).valid);
+  const FrontendResult r = run_scans(scenes, {gtsam::Pose3(), gtsam::Pose3(), moved});
+  ASSERT_TRUE(r.valid);
+  EXPECT_EQ(r.quality.state, TrackingState::Degraded);
+  EXPECT_NEAR(r.T_odom_base.translation().x(), 0.3, 0.01);
+  // Before any local map (a restart in a cabin): the wheels carry it too, and the first scan with
+  // enough points starts the map where they are.
+  const gtsam::Pose3 further(gtsam::Rot3(), Vector3d(0.5, 0, 0));
+  const std::vector<std::pair<std::vector<Vector3f>, gtsam::Pose3>> blind_start = {
+      {few, gtsam::Pose3()}, {few, gtsam::Pose3()}, {w, further}, {w, further}};
+  const FrontendResult b = run_scans(blind_start, {gtsam::Pose3(), moved, further, further});
+  ASSERT_TRUE(b.valid);
+  EXPECT_NEAR(b.T_odom_base.translation().x(), 0.5, 0.01);
+}
+
+// The scene stops matching the local map (out of a cabin onto a landing, doors opening): the
+// wheels carry the scan and the local map starts again from it, so that the next scan of the new
+// scene is registered (Good) where the wheels put the first.
+TEST(LidarFrontend, AfterALossTheWheelsCarryTheMapStartsAgainFromTheScan) {
+  const auto a = room();
+  const auto b = asymmetric_scene(2);
+  const gtsam::Pose3 p(gtsam::Rot3(), Vector3d(0.2, 0, 0));
+  const std::vector<std::pair<std::vector<Vector3f>, gtsam::Pose3>> scenes = {
+      {a, gtsam::Pose3()}, {a, gtsam::Pose3()}, {b, p}, {b, p}};
+  const FrontendResult r = run_scans(scenes, {gtsam::Pose3(), gtsam::Pose3(), p, p});
+  ASSERT_TRUE(r.valid);
+  EXPECT_EQ(r.quality.state, TrackingState::Good);
+  EXPECT_NEAR(r.T_odom_base.translation().x(), 0.2, 0.02);
+}
+
+// The wheels veto a degraded registration that disagrees with them (a corridor: the registration
+// is weak along it), not a good one: wheels slip, a well-constrained scan does not.
+TEST(LidarFrontend, TheWheelsVetoADegradedRegistrationNotAGoodOne) {
+  const gtsam::Pose3 aside(gtsam::Rot3(), Vector3d(0, 0.6, 0));  // the wheels: 0.6 m across
+  const auto corridor =
+      sample_room({-20, -1, -1.2}, {20, 1, 1.3}, 60, 7, {{{1.0, 0.6, -1.2}, {1.3, 1.0, -0.9}}});
+  const std::vector<std::pair<std::vector<Vector3f>, gtsam::Pose3>> in_corridor = {
+      {corridor, gtsam::Pose3()}, {corridor, gtsam::Pose3()}, {corridor, gtsam::Pose3()}};
+  const FrontendResult c = run_scans(in_corridor, {gtsam::Pose3(), gtsam::Pose3(), aside});
+  ASSERT_TRUE(c.valid);
+  EXPECT_NEAR(c.T_odom_base.translation().y(), 0.6, 1e-3) << "degraded: the wheels carry it";
+  const auto w = room();
+  const std::vector<std::pair<std::vector<Vector3f>, gtsam::Pose3>> in_room = {
+      {w, gtsam::Pose3()}, {w, gtsam::Pose3()}, {w, gtsam::Pose3()}};
+  const FrontendResult g = run_scans(in_room, {gtsam::Pose3(), gtsam::Pose3(), aside});
+  ASSERT_TRUE(g.valid);
+  EXPECT_EQ(g.quality.state, TrackingState::Good);
+  EXPECT_NEAR(g.T_odom_base.translation().y(), 0.0, 0.02) << "good: the LiDAR's";
 }

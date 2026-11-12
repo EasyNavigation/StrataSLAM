@@ -32,6 +32,9 @@ struct SensorFrame {
       nullptr;  ///< the robot's own odometry (wheels) at this stamp: a motion prior
   std::optional<Eigen::Vector3d>
       up_base;  ///< up in the base frame from the IMU's gravity: the pose's roll and pitch
+  /// `up_base` is known in its angle to the base's z axis but not in its direction about it (a
+  /// ground robot's IMU before its heading is learned, ADR-0058): only the size of the tilt bounds.
+  bool up_tilt_only = false;
   /// What the base turned since the frontend's last pose, by the gyroscope (in the base frame at
   /// that pose, its heading drift taken out), when the IMU is trusted and covers both stamps.
   std::optional<gtsam::Rot3> gyro_delta;

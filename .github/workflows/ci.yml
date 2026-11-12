@@ -71,7 +71,9 @@ jobs:
       - run: scripts/install_deps.sh core
       - run: cmake -S strataslam_core -B build -DCMAKE_BUILD_TYPE=Debug -DSTRATASLAM_ENABLE_SANITIZERS=ON
       - run: cmake --build build -j 2  # two jobs: a GTSAM translation unit takes over 1 GB; -j alone ran the 16 GB runner out of memory
-      - run: ctest --test-dir build --output-on-failure
+      # Two tests at a time, as in the coverage job: the system tests (a building walked through, an IMU turned on a
+      # floor for 100 s) take minutes each under ASan, and in series they no longer fit the 45 minutes.
+      - run: ctest --test-dir build --output-on-failure -j2
 
   ros2-jazzy:
     # The full install guide in a ROS 2 Jazzy container: the repository cloned into src/ of a workspace,
@@ -85,8 +87,8 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          path: src/strataslam
-      - run: src/strataslam/scripts/install_deps.sh ros
+          path: src/StrataSLAM
+      - run: src/StrataSLAM/scripts/install_deps.sh ros
       - shell: bash
         run: source /opt/ros/jazzy/setup.bash && colcon build --executor sequential --cmake-args -DCMAKE_BUILD_TYPE=Release && test "$(ls install | grep -c ^strataslam)" -eq 5
       - shell: bash

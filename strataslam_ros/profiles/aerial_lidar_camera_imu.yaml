@@ -35,6 +35,7 @@ sensors:
     enabled: true
     topic: /camera/imu  # the D435i's BMI055 (unite_imu_method:=2 above)
     # floor_changes: true  # false: the IMU gives gravity only, not elevators (a vibrating robot base)
+    # accel_bias: auto  # the accelerometer's offset: auto (measured against the floors a LiDAR sees and applied, ADR-0074) | false | [x, y, z] m/s^2 in the IMU frame (ADR-0072)
     noise:  # nominal BMI055 values; measure yours with `strataslam imu-noise` (docs/user/imu-noise.md)
       accel_noise_density: 2.0e-3  # m/s^2/sqrt(Hz)
       gyro_noise_density: 1.7e-4  # rad/s/sqrt(Hz)
@@ -48,9 +49,11 @@ sensors:
     # settle_time_s: 2.0  # low-pass filter settling time
   external_odometry:
     enabled: false
-    # Give a topic or a frame, not both. Only the camera tracking uses it (as its motion prior): not with a LiDAR.
+    # Give a topic or a frame, not both. With a LiDAR it is used with prior: true (ADR-0071): it predicts each scan,
+    # carries the pose through a loss (an elevator cabin) and vetoes the slide of a degraded registration.
     # topic: /odom  # nav_msgs/Odometry
     # frame: odom  # or the TF frame -> robot.base_frame
+    # prior: true  # auto (the camera tracking's prior only) | true | false
 
 fusion:
   # odometry_from: auto  # auto | camera | lidar (auto: the LiDAR if enabled, else the camera)

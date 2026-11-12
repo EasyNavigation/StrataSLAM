@@ -2,6 +2,9 @@
 
 | Symptom | Likely cause |
 | --- | --- |
+| `strataslam: command not found`, or `ros2` does not know `strataslam_ros` | the workspace is not sourced in this terminal: `source ~/strataslam_ws/install/setup.bash` (each new terminal, or once in `~/.bashrc`) |
+| `strataslam: cannot find 'strataslam_fuse'` | the command line was installed with pip but the C++ build is not found: source the colcon workspace, or build the core (`cmake -S superbuild -B build`) in the same checkout, or put the folder holding `strataslam_fuse` on `PATH` |
+| `strataslam doctor needs ROS 2` | doctor reads topics and rosbags through rclpy and rosbag2_py: source ROS 2 and the workspace |
 | `config error: ...` at launch | the profile is wrong; the message names the key |
 | "waiting for TF base_link -> ..." | the sensor mounting transforms are not published; run the doctor |
 | RViz: "No transform from [floor_0]" / "TF: odom also has the parent 'map'" | another node (a localizer such as AMCL) publishes `map -> odom`: set `output.publish_tf: false` and use the fixed frame `floor_0`, or stop the other localizer |

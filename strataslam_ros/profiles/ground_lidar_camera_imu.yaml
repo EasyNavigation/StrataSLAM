@@ -36,6 +36,7 @@ sensors:
     enabled: true
     topic: /imu  # sensor_msgs/Imu, the robot's; its mounting comes from the TF or is learned from the motion
     floor_changes: false  # gravity only: a ground robot's base vibrates, and its vertical acceleration does not
+    # accel_bias: auto  # the accelerometer's offset: auto (measured against the floors a LiDAR sees and applied, ADR-0074) | false | [x, y, z] m/s^2 in the IMU frame (ADR-0072)
     #   detect elevators reliably yet (ADR-0032); the LiDAR measures the height of each floor, its roll and pitch
     #   bounded by gravity once the IMU's heading is learned from the motion (ADR-0058)
     noise:  # nominal values (also the defaults); measure your IMU with `strataslam imu-noise`
@@ -51,9 +52,11 @@ sensors:
     # settle_time_s: 2.0  # low-pass filter settling time
   external_odometry:
     enabled: false
-    # Give a topic or a frame, not both. Only the camera tracking uses it (as its motion prior): not with a LiDAR.
+    # Give a topic or a frame, not both. With a LiDAR it is used with prior: true (ADR-0071): it predicts each scan,
+    # carries the pose through a loss (an elevator cabin) and vetoes the slide of a degraded registration.
     # topic: /odom  # nav_msgs/Odometry
     # frame: odom  # or the TF frame -> robot.base_frame
+    # prior: true  # auto (the camera tracking's prior only) | true | false
 
 fusion:
   odometry_from: auto  # auto | camera | lidar (auto: the LiDAR if enabled, else the camera)

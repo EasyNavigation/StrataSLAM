@@ -125,6 +125,28 @@ def test_core_tools_are_found_through_cmake_prefix_path(tmp_path: Path, monkeypa
         cli._find_tool("strataslam_fuse_test_tool", "strataslam_core")
 
 
+def test_a_missing_tool_says_how_to_make_it_found(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    # A new terminal without the workspace sourced: the message names the command that fixes it.
+    monkeypatch.setenv("PATH", "")
+    monkeypatch.setenv("AMENT_PREFIX_PATH", "")
+    monkeypatch.setenv("CMAKE_PREFIX_PATH", "")
+    with pytest.raises(SystemExit) as e:
+        cli._find_tool("strataslam_fuse_test_tool", "strataslam_core")
+    assert "install/setup.bash" in str(e.value) and "build/strataslam_core" in str(e.value)
+
+
+def test_doctor_without_ros_says_to_source_it(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    from strataslam_tools import doctor
+
+    def no_ros(*_a: object, **_k: object) -> tuple[int, str]:
+        raise ModuleNotFoundError("No module named 'rclpy'")
+
+    monkeypatch.setattr(doctor, "run", no_ros)
+    assert cli.main(["doctor", "p.yaml"]) == 3
+    err = capsys.readouterr().err
+    assert "source /opt/ros/jazzy/setup.bash" in err and "Traceback" not in err
+
+
 def test_fuse_passes_same_level_and_stacking_to_the_tool(monkeypatch: pytest.MonkeyPatch) -> None:
     # docs/user/fusion.md tells users to run `strataslam fuse <map> --same-level 2,3`.
     calls: list[list[str]] = []

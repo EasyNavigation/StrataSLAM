@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -13,6 +14,8 @@ enum class DeskewMode { Auto, True, False };
 /// `3d`: a 3D LiDAR's point cloud. `2d`: a planar laser scanner's sweep (sensor_msgs/LaserScan),
 /// registered in its own plane: x, y and heading only (ADR-0066).
 enum class LidarType { ThreeD, Planar };
+/// Whether the external odometry is the motion prior of the tracking (ADR-0043, ADR-0071).
+enum class OdometryPrior { Auto, True, False };
 enum class OdometryFrom { Auto, Camera, Lidar, External };
 enum class LoopClosureFrom { Auto, Camera, Lidar, Both };
 
@@ -58,6 +61,19 @@ struct ImuConfig {
   /// out that a tracking loss hid one. Off: the IMU only gives gravity (the attitude), which is
   /// what a ground robot's vibrating base allows (ADR-0032).
   bool floor_changes = true;
+  /// m/s^2, in the IMU's own frame (that of its messages): subtracted from every accelerometer
+  /// sample. An uncalibrated accelerometer's offset tilts the gravity it gives, and the LiDAR's
+  /// attitude, bounded by it (ADR-0058), turns every metre walked into a climb: 0.3 m/s^2 is
+  /// 1.7 degrees, 3 cm per metre (ADR-0072). The node estimates it against the floors the LiDAR
+  /// sees and says so in the log (and applies it, see `accel_bias_auto`). Known (given or
+  /// measured), the IMU's gravity also holds the roll and pitch of every keyframe in the graph,
+  /// not only of those taken at rest (ADR-0073): an uncalibrated one would tilt every floor by its
+  /// offset.
+  std::optional<std::array<double, 3>> accel_bias;
+  /// `accel_bias: auto` (the default, when no list is given): the offset the node measures against
+  /// the floors is applied from then on, if it is no more than 3 deg (ADR-0074). `false`: only
+  /// said.
+  bool accel_bias_auto = true;
   ImuNoise noise;
 };
 
@@ -70,13 +86,17 @@ struct BarometerConfig {
   double settle_time_s = 2.0;  ///< s for the low-pass filter to settle within 1 % after a step
 };
 
-/// The robot's own odometry (wheels, typically): the motion prior of the camera tracking, which
-/// predicts each frame and carries the pose through tracking losses. Read from TF (`frame` ->
-/// robot.base_frame, what most ROS robots publish) or from a nav_msgs/Odometry `topic`.
+/// The robot's own odometry (wheels, typically): the motion prior of the tracking, which predicts
+/// each frame or scan, carries the pose through tracking losses and vetoes motions it could not
+/// have made. Read from TF (`frame` -> robot.base_frame, what most ROS robots publish) or from a
+/// nav_msgs/Odometry `topic`.
 struct ExternalOdometryConfig {
   bool enabled = false;
   std::string topic;
   std::string frame;
+  /// auto: the camera tracking's prior, not the LiDAR's (which rarely loses the motion); true:
+  /// the prior of either; false: not used.
+  OdometryPrior prior = OdometryPrior::Auto;
 };
 
 struct SensorsConfig {
@@ -158,6 +178,7 @@ struct ResolvedModes {
   OdometrySource odometry;
   LoopSource loop_closure;
   bool verify_loop_with_lidar;  ///< camera loop candidates verified with LiDAR registration
+  bool odometry_prior;          ///< the external odometry is the tracking's motion prior
 };
 
 /// Resolve `auto` modes for a validated config.

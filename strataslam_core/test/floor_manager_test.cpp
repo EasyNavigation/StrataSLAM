@@ -291,6 +291,34 @@ TEST(FloorManager, AShortLandingIsNotAPlateau) {
   EXPECT_NEAR(r.ended()->delta_z, 3.0, 0.15);
 }
 
+// Up one staircase and down another to the floor it started on, the odometry reading the second
+// flight 0.7 m longer: over the tolerance, so a new level, flagged as near floor 0 for the place to
+// decide; told it is floor 0, the new level is withdrawn and the next climb reaches floor 1 again.
+TEST(FloorManager, AFloorReachedAgainByOtherStairsIsFlaggedNearItAndCanBeRevised) {
+  FloorManagerConfig c;
+  c.floor_height_prior.reset();
+  Rig r(c);
+  r.stand(3);
+  r.climb(3.0, 9.0, true);
+  r.stand(10);
+  ASSERT_EQ(r.mgr.floor(), 1);
+  EXPECT_EQ(r.events.back().near_level, -1) << "a storey above: never the same level";
+  r.walk(10.0);
+  r.climb(-3.7, 9.0, true);
+  r.stand(10);
+  ASSERT_EQ(r.mgr.floor(), 2);
+  EXPECT_EQ(r.events.back().near_level, 0);
+  EXPECT_FALSE(r.mgr.revise_arrival(1)) << "only the level it was flagged near, below the new one";
+  ASSERT_TRUE(r.mgr.revise_arrival(0));
+  EXPECT_EQ(r.mgr.floor(), 0);
+  EXPECT_EQ(r.mgr.num_floors(), 2u);
+  r.walk(10.0);
+  r.climb(3.0, 9.0, true);
+  r.stand(10);
+  EXPECT_EQ(r.mgr.floor(), 1);
+  EXPECT_EQ(r.mgr.num_floors(), 2u);
+}
+
 TEST(FloorManager, ALevelNearAnExistingOneIsNotANewLevel) {
   Rig r;
   r.stand(3);
@@ -930,4 +958,117 @@ TEST(FloorManager, OutOfAConfinedSpaceTheHeightGoesOnFromWhereItWasHeld) {
   r.walk(6.0);
   EXPECT_EQ(r.count(FloorEvent::Kind::TransitionStarted), 0);
   EXPECT_EQ(r.mgr.floor(), 0);
+}
+
+// A ground robot's base vibrates as it drives: on the Summit XL (prueba_03) the 1 s mean of the
+// vertical acceleration stayed at -0.1 to -0.35 m/s^2 for 27 s of driving, which opened a ride
+// and closed it as a 3.4 m elevator. A cabin carries a ground robot standing still: while it
+// drives, the IMU opens no ride.
+TEST(FloorManager, AGroundRobotDrivingWithASustainedVerticalAccelerationOpensNoRide) {
+  FloorManagerConfig c;
+  c.floor_height_prior.reset();
+  c.ground_platform = true;
+  Rig r(c);
+  for (int i = 0; i < 30; ++i) r.step(r.pos, std::nullopt, 0.0);
+  Vector3d p = r.pos;
+  for (int i = 0; i < 300; ++i)  // 30 s at 0.5 m/s
+    r.step(p += Vector3d(0.5 * kDt, 0, 0), std::nullopt, -0.3 + 0.05 * std::sin(i * 0.7));
+  EXPECT_EQ(r.count(FloorEvent::Kind::TransitionStarted), 0);
+  for (const auto& e : r.events) EXPECT_NE(e.type, TransitionType::Elevator) << e.delta_z;
+  EXPECT_EQ(r.mgr.floor(), 0);
+}
+
+// The Summit XL in an elevator (summit_20261110_150200_ascensor): it drives in and stops, the
+// LiDAR odometry is lost in the cabin, and the IMU measures the ride; the robot drives out.
+TEST(FloorManager, AGroundRobotStandingInACabinIsCarriedByTheImu) {
+  FloorManagerConfig c;
+  c.floor_height_prior.reset();
+  c.ground_platform = true;
+  Rig r(c);
+  r.walk(5.0);
+  for (int i = 0; i < 50; ++i) r.step(r.pos, std::nullopt, 0.0);         // stopped in the cabin
+  for (int i = 0; i < 30; ++i) r.step(r.pos, std::nullopt, 0.0, false);  // lost there
+  ride(r, r.pos, 0.6, 1.5, 3.0, false);  // 0.9 m/s for 4.5 s: 4.05 m up
+  for (int i = 0; i < 30; ++i) r.step(r.pos, std::nullopt, 0.0, false);
+  Vector3d p = r.pos;
+  for (int i = 0; i < 200; ++i) r.step(p += Vector3d(0.5 * kDt, 0, 0), std::nullopt, 0.0);
+  const FloorEvent* e = r.ended();
+  ASSERT_NE(e, nullptr);
+  EXPECT_EQ(e->type, TransitionType::Elevator);
+  EXPECT_NEAR(e->delta_z, 4.05, 0.2);
+  EXPECT_EQ(r.mgr.floor(), 1);
+}
+
+// A push felt while the ground robot stood (a bump, the base settling) and then the robot drives
+// off: no cabin takes it along, so the ride is dropped once it has driven further than a cabin is
+// deep, not integrated over the drive.
+TEST(FloorManager, AGroundRobotThatDrivesOffBeforeARideBrakesWasNeverInACabin) {
+  FloorManagerConfig c;
+  c.floor_height_prior.reset();
+  c.ground_platform = true;
+  Rig r(c);
+  for (int i = 0; i < 50; ++i) r.step(r.pos, std::nullopt, 0.0);
+  for (int i = 0; i < 15; ++i) r.step(r.pos, std::nullopt, 0.5);  // a push of 0.75 m/s, standing
+  ASSERT_TRUE(r.mgr.in_unobserved_transition());
+  Vector3d p = r.pos;
+  for (int i = 0; i < 100; ++i) r.step(p += Vector3d(0.5 * kDt, 0, 0), std::nullopt, 0.0);  // 5 m
+  EXPECT_FALSE(r.mgr.in_unobserved_transition()) << "the transition is the odometry's again";
+  for (int i = 0; i < 300; ++i) r.step(p += Vector3d(0.5 * kDt, 0, 0), std::nullopt, 0.0);
+  for (const auto& e : r.events) EXPECT_NE(e.type, TransitionType::Elevator) << e.delta_z;
+  EXPECT_EQ(r.mgr.floor(), 0);
+}
+
+// The Summit XL's base vibrates as it drives: the 1 s mean of its vertical acceleration stays over
+// the IMU's calm threshold, and a ramp the odometry measured never settled (prueba_00: its two
+// ramps, +2.5 and +1.7 m, read as one of 5.1 m). The IMU's calm is a ride's, not a ramp's: the
+// ramp ends as it does without the IMU.
+TEST(FloorManager, AGroundRobotsVibrationDoesNotKeepARampFromEnding) {
+  const auto run = [](std::optional<double> az) {
+    FloorManagerConfig c;
+    c.floor_height_prior.reset();
+    c.ground_platform = true;
+    Rig r(c);
+    Vector3d p = r.pos;
+    const auto drive = [&](double dist, double rise) {
+      const int n = static_cast<int>(std::lround(dist / (0.5 * kDt)));
+      for (int i = 0; i < n; ++i) r.step(p += Vector3d(dist / n, 0, rise / n), std::nullopt, az);
+    };
+    drive(10.0, 0.0);
+    drive(30.0, 3.0);  // a 10 % ramp
+    drive(12.0, 0.0);  // 24 s on the level reached
+    const FloorEvent* e = r.ended();
+    return e ? std::optional<double>(e->delta_z) : std::nullopt;
+  };
+  const auto without_imu = run(std::nullopt);
+  const auto vibrating = run(0.15);  // m/s^2, the 1 s mean while driving
+  ASSERT_TRUE(without_imu.has_value());
+  ASSERT_TRUE(vibrating.has_value()) << "the ramp ends once the odometry is calm";
+  EXPECT_DOUBLE_EQ(*vibrating, *without_imu);
+}
+
+// With the gyroscope holding its rotation in the cabin (ADR-0060) the Summit XL's odometry tracks
+// there, confined, and its degenerate registration slides by 1 m during the ride while the robot
+// stands: that is no travel, and the whole ride is measured from its push.
+TEST(FloorManager, AGroundRobotsOdometrySlidingInAConfinedCabinIsNoTravel) {
+  FloorManagerConfig c;
+  c.floor_height_prior.reset();
+  c.ground_platform = true;
+  Rig r(c);
+  r.walk(5.0);
+  for (int i = 0; i < 30; ++i) r.step(r.pos, std::nullopt, 0.0);
+  Vector3d p = r.pos;
+  const auto cabin = [&](double az, double seconds) {  // confined, sliding at 0.15 m/s
+    for (int i = 0; i < static_cast<int>(std::lround(seconds / kDt)); ++i)
+      r.step(p += Vector3d(0.15 * kDt, 0, 0), std::nullopt, az, true, true);
+  };
+  cabin(0.0, 3.0);
+  cabin(0.6, 1.5);  // 0.9 m/s for 4.5 s: 4.05 m up
+  cabin(0.0, 3.0);
+  cabin(-0.6, 1.5);
+  cabin(0.0, 3.0);
+  for (int i = 0; i < 200; ++i) r.step(p += Vector3d(0.5 * kDt, 0, 0), std::nullopt, 0.0);
+  const FloorEvent* e = r.ended();
+  ASSERT_NE(e, nullptr);
+  EXPECT_EQ(e->type, TransitionType::Elevator);
+  EXPECT_NEAR(e->delta_z, 4.05, 0.2);
 }

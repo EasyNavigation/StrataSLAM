@@ -34,10 +34,19 @@ transition constraints, the barometer, structural anchors and a weak floor-heigh
 ```bash
 # ROS 2 Jazzy, Ubuntu 24.04. The first build downloads small_gicp (pinned commit): it needs network.
 mkdir -p ~/strataslam_ws/src && cd ~/strataslam_ws/src
-git clone https://github.com/EasyNavigation/StrataSLAM.git strataslam && cd ..
+git clone https://github.com/EasyNavigation/StrataSLAM.git && cd ..
 source /opt/ros/jazzy/setup.bash
-src/strataslam/scripts/install_deps.sh ros          # apt: GTSAM, Eigen, yaml-cpp, OpenCV, libpng, libjpeg, pybind11, GTest
-colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release && source install/setup.bash
+src/StrataSLAM/scripts/install_deps.sh ros          # apt: GTSAM, Eigen, yaml-cpp, OpenCV, libpng, libjpeg, pybind11, GTest
+colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release
+source install/setup.bash
+strataslam --help                                   # the command line: doctor, map, fuse, export, eval, ...
+```
+
+**Every new terminal** needs the workspace sourced before `strataslam`, `ros2 launch strataslam_ros` or
+`ros2 run strataslam_ros` (otherwise `strataslam: command not found`):
+
+```bash
+source ~/strataslam_ws/install/setup.bash          # or once: echo "source ~/strataslam_ws/install/setup.bash" >> ~/.bashrc
 ```
 
 No sensor at hand? [A first map, start to finish](docs/user/mapping.md#a-first-map-start-to-finish-simulated-building)

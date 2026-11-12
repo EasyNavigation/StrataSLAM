@@ -3,7 +3,9 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstdio>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -521,14 +523,21 @@ struct HandheldRig {
   std::shared_ptr<Messages> messages = std::make_shared<Messages>();
   std::unique_ptr<SlamSystem> slam;
   std::vector<Vector3d> world;
-  HandheldRig() {
+  Vector3d accel_offset = Vector3d::Zero();  ///< the accelerometer's own offset (m/s^2)
+  /// `accel_bias`: the profile's calibration of it; `floor`: a floor under the walls; `bias_auto`:
+  /// `accel_bias: auto` (the default) or `false`.
+  explicit HandheldRig(const std::optional<std::array<double, 3>>& accel_bias = std::nullopt,
+                       bool floor = false, bool bias_auto = true) {
     Config cfg;
     cfg.robot.platform = Platform::Handheld;
     cfg.sensors.lidar.enabled = true;
     cfg.sensors.imu.enabled = true;
+    cfg.sensors.imu.accel_bias = accel_bias;
+    cfg.sensors.imu.accel_bias_auto = bias_auto;
     cfg.fusion.odometry_from = OdometryFrom::Lidar;
     slam = std::make_unique<SlamSystem>(cfg, Extrinsics(), SystemTuning(), messages);
     std::mt19937 rng(4);
+    if (floor) face(world, rng, {-4, -3, -1}, {9, 0, 0}, {0, 8, 0}, 10);
     face(world, rng, {-4, -3, -1}, {9, 0, 0}, {0, 0, 4}, 10);
     face(world, rng, {-4, 5, -1}, {9, 0, 0}, {0, 0, 4}, 10);
     face(world, rng, {-4, -3, -1}, {0, 8, 0}, {0, 0, 4}, 10);
@@ -542,6 +551,11 @@ struct HandheldRig {
   /// `w_base` (base frame) and not accelerating.
   void run(double seconds, const std::function<gtsam::Pose3(double)>& T_world_base,
            const Vector3d& w_base) {
+    run_turning(seconds, T_world_base, [&](double) { return w_base; });
+  }
+  /// The same, turning at `w_base(t)`.
+  void run_turning(double seconds, const std::function<gtsam::Pose3(double)>& T_world_base,
+                   const std::function<Vector3d(double)>& w_base) {
     for (int i = 0; i <= static_cast<int>(seconds * 1000); ++i) {
       const double t = i * 1e-3;
       const Timestamp stamp = 1'000'000'000LL + static_cast<Timestamp>(i) * 1'000'000LL;
@@ -549,11 +563,12 @@ struct HandheldRig {
       if (i % 5 == 0) {
         ImuSample s;
         s.stamp = stamp;
-        s.gyro = w_base;
-        s.accel = T.rotation().matrix().transpose() * Vector3d(0, 0, kStandardGravity);
+        s.gyro = w_base(t);
+        s.accel =
+            T.rotation().matrix().transpose() * Vector3d(0, 0, kStandardGravity) + accel_offset;
         slam->add_imu(s);
       }
-      if (i % 100 == 0) {
+      if (i % scan_period_ms == 0) {
         LidarScan scan;
         scan.stamp = stamp;
         for (const auto& p : world) scan.points.push_back(T.transformTo(p).cast<float>());
@@ -576,6 +591,7 @@ struct HandheldRig {
     const Vector3d up_true = T_world_base.rotation().matrix().transpose() * Vector3d::UnitZ();
     return std::acos(std::clamp(up_odom.dot(up_true), -1.0, 1.0)) * 180 / M_PI;
   }
+  int scan_period_ms = 100;          ///< 10 Hz
   std::optional<double> started_at;  ///< s, when the odometry produced its first pose
   double start_tilt_error_deg = 0;   ///< at that first pose
 };
@@ -598,6 +614,89 @@ TEST(ImuMount, AStartAtRestIsLevelledByTheImuEvenIfTheScansCameFirst) {
   // but until then the floor manager reads the vertical through it.
   EXPECT_LT(rig.start_tilt_error_deg, 0.5);
   EXPECT_LT(rig.tilt_error_deg(T), 0.5);
+}
+
+// An accelerometer's offset tilts the gravity it gives: 0.3 m/s^2 is 1.75 deg, and the odometry
+// starts that far from level (every metre walked then climbs 3 cm: the portable rig's floors rose a
+// metre each). Its calibration in the profile (`imu.accel_bias`, the IMU's frame) levels it.
+TEST(ImuMount, AnAccelerometerOffsetTiltsTheStartAndItsCalibrationLevelsIt) {
+  const gtsam::Pose3 T(gtsam::Rot3::Yaw(0.3), gtsam::Point3(0, 0, 1.2));
+  HandheldRig raw;
+  raw.accel_offset = Vector3d(0.3, 0, 0);
+  raw.run(2.0, [&](double) { return T; }, Vector3d::Zero());
+  ASSERT_TRUE(raw.started_at.has_value());
+  EXPECT_NEAR(raw.start_tilt_error_deg, 1.75, 0.2);
+  HandheldRig calibrated(std::array<double, 3>{0.3, 0, 0});
+  calibrated.accel_offset = Vector3d(0.3, 0, 0);
+  calibrated.run(2.0, [&](double) { return T; }, Vector3d::Zero());
+  ASSERT_TRUE(calibrated.started_at.has_value());
+  EXPECT_LT(calibrated.start_tilt_error_deg, 0.2);
+}
+
+namespace {
+// A quarter turn in 2 s every 12 s, standing still in between.
+double quarter_rate(double t) { return std::fmod(t, 12.0) < 2.0 ? M_PI / 4.0 : 0.0; }
+gtsam::Pose3 quarter_turns(double t) {
+  const double k = std::floor(t / 12.0), r = std::min(std::fmod(t, 12.0), 2.0);
+  return gtsam::Pose3(gtsam::Rot3::Yaw(M_PI / 2.0 * k + M_PI / 4.0 * r), gtsam::Point3(0, 0, 1.2));
+}
+}  // namespace
+
+// Turning on a level floor, the IMU's up against the floor the LiDAR sees shows the offset at every
+// heading: with `accel_bias: false` the log says it with the calibration it asks for, and the
+// odometry stays tilted by what of the offset the IMU's gravity bound leaves; the calibrated IMU
+// agrees. Scans at 5 Hz: the test runs 100 s three times, which in a coverage build (-O0) takes
+// minutes.
+TEST(ImuMount, TheAccelerometerOffsetIsMeasuredAgainstTheFloorAndSaid) {
+  auto turning = [](double t) { return quarter_turns(t); };
+  auto w = [](double t) { return Vector3d(0, 0, quarter_rate(t)); };
+  HandheldRig raw(std::nullopt, /*floor=*/true, /*bias_auto=*/false);
+  raw.scan_period_ms = 200;
+  raw.accel_offset = Vector3d(0.25, -0.1, 0);
+  raw.run_turning(100.0, turning, w);
+  EXPECT_FALSE(raw.said("applied from now on"));
+  const auto it = std::find_if(
+      raw.messages->lines.begin(), raw.messages->lines.end(),
+      [](const std::string& m) { return m.find("imu.accel_bias: [") != std::string::npos; });
+  ASSERT_NE(it, raw.messages->lines.end());
+  double b[3];
+  ASSERT_EQ(std::sscanf(it->c_str() + it->find("imu.accel_bias: [") + 17, "%lf, %lf, %lf", &b[0],
+                        &b[1], &b[2]),
+            3);
+  EXPECT_NEAR(b[0], 0.25, 0.03);
+  EXPECT_NEAR(b[1], -0.1, 0.03);
+  // 1.6 deg of offset: the LiDAR takes the odometry within the 1 deg the IMU's gravity allows it.
+  EXPECT_GT(raw.tilt_error_deg(quarter_turns(100.0)), 0.4);
+  HandheldRig calibrated(std::array<double, 3>{0.25, -0.1, 0}, /*floor=*/true);
+  calibrated.scan_period_ms = 200;
+  calibrated.accel_offset = Vector3d(0.25, -0.1, 0);
+  calibrated.run_turning(100.0, turning, w);
+  EXPECT_TRUE(calibrated.said("its gravity agrees with the floors"));
+  EXPECT_FALSE(calibrated.said("imu.accel_bias: ["));
+}
+
+// `accel_bias: auto` (the default): the offset measured against the floor is applied from then on,
+// and the odometry, bounded by the IMU's gravity, comes level, where with `false` it stays tilted
+// (the test above) (ADR-0074).
+TEST(ImuMount, TheAccelerometerOffsetMeasuredAgainstTheFloorIsAppliedByDefault) {
+  auto turning = [](double t) { return quarter_turns(t); };
+  auto w = [](double t) { return Vector3d(0, 0, quarter_rate(t)); };
+  HandheldRig autob(std::nullopt, /*floor=*/true);
+  autob.scan_period_ms = 200;
+  autob.accel_offset = Vector3d(0.25, -0.1, 0);
+  autob.run_turning(100.0, turning, w);
+  ASSERT_TRUE(autob.said("applied from now on (accel_bias: auto)"));
+  const auto it = std::find_if(
+      autob.messages->lines.begin(), autob.messages->lines.end(),
+      [](const std::string& m) { return m.find("imu.accel_bias: [") != std::string::npos; });
+  ASSERT_NE(it, autob.messages->lines.end());
+  double b[3];
+  ASSERT_EQ(std::sscanf(it->c_str() + it->find("imu.accel_bias: [") + 17, "%lf, %lf, %lf", &b[0],
+                        &b[1], &b[2]),
+            3);
+  EXPECT_NEAR(b[0], 0.25, 0.03);
+  EXPECT_NEAR(b[1], -0.1, 0.03);
+  EXPECT_LT(autob.tilt_error_deg(quarter_turns(100.0)), 0.2);
 }
 
 // A start that never rests: the odometry waits two seconds, then starts at the sensor's attitude

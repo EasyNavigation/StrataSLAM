@@ -125,7 +125,7 @@ endforeach()
 if(STRATASLAM_BUILD_TESTS)
   include(CTest)  # enable_testing() plus the DartConfiguration that `colcon test` (ctest) looks for
   find_package(GTest REQUIRED)
-  add_executable(strataslam_core_tests test/config_test.cpp test/io_test.cpp test/pose4_test.cpp test/metrics_test.cpp test/lidar_test.cpp test/visual_test.cpp test/floor_manager_test.cpp test/h6_test.cpp test/colorize_test.cpp test/fusion_test.cpp test/backend_test.cpp test/stacking_test.cpp test/imu_mount_test.cpp test/image_io_test.cpp test/ablation_factors_test.cpp)
+  add_executable(strataslam_core_tests test/config_test.cpp test/io_test.cpp test/pose4_test.cpp test/metrics_test.cpp test/lidar_test.cpp test/visual_test.cpp test/floor_manager_test.cpp test/h6_test.cpp test/colorize_test.cpp test/fusion_test.cpp test/backend_test.cpp test/stacking_test.cpp test/imu_mount_test.cpp test/floor_revisit_test.cpp test/image_io_test.cpp test/ablation_factors_test.cpp)
   target_link_libraries(strataslam_core_tests PRIVATE strataslam_core strataslam_image_io GTest::gtest_main)
   target_compile_options(strataslam_core_tests PRIVATE -Wall -Wextra -Werror)
   target_compile_definitions(strataslam_core_tests PRIVATE

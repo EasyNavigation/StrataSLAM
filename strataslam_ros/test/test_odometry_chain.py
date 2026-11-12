@@ -108,5 +108,5 @@ def test_an_odometry_that_does_not_reach_the_base_is_told(tmp_path: Path) -> Non
     path.write_text(path.read_text().replace("    frame: odom", "    frame: wheel_odom", 1))
     assert "frame: wheel_odom" in path.read_text()
     log = run(path, sim / "bag", tmp_path / "other.log")
-    assert "external_odometry: no TF wheel_odom -> base_footprint after 2 s of camera frames" in log, log[-3000:]
+    assert "external_odometry: no TF wheel_odom -> base_footprint after 2 s of frames" in log, log[-3000:]
     assert "TF has wheel_odom -> {nothing}" in log, log[-3000:]

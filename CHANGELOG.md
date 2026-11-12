@@ -18,6 +18,18 @@
   `strataslam doctor --preset-dir` and the node's `preset_dir` parameter are gone.
 
 ### Added
+
+- `imu.accel_bias: auto | false | [x, y, z]` (ADR-0072, ADR-0074): the accelerometer's offset in its own frame,
+  subtracted from every sample. With a LiDAR the node compares the IMU's gravity with the floors it sees at all
+  headings: an uncalibrated accelerometer tilts the map and every metre walked climbs (the portable rig's OAK-D Lite:
+  1.8 deg, 3 cm per metre), which opened false ramps on Elevator-VIGS. `auto` (the default) applies the offset it
+  measures, up to 3 deg, and says the list to set; `false` only says it. Known, the IMU's gravity also holds the roll
+  and pitch of every keyframe in the graph (ADR-0073). Elevator-VIGS real sequences: the sum of the height errors 22.2
+  -> 17.5 m.
+- `external_odometry.prior: auto | true | false` (ADR-0071): with `true` the robot's wheel odometry is the LiDAR's
+  motion prior too: it predicts and deskews each scan, carries the pose through a scan the registration loses (no new
+  session) and vetoes a degraded registration that leaves it; `auto` keeps it the camera's only, as before. On the
+  Summit XL's elevator bag it removes every tracking loss and brings the floor reached onto the one below.
 - `scripts/check_before_push.sh`: the CI's quick checks before a push (clang-format, clang-tidy on the changed
   sources of the core, ruff, mypy, links, licences), also as a git `pre-push` hook (`--install-hook`).
 - More of a LiDAR's map takes the camera's colours: at save time, the points a keyframe's own image did not see are
@@ -148,6 +160,36 @@
 - `docs/user/install.md` rewritten and tested; `docs/data_format.md` documents `fused/`, the optional payload folders and the integrity checks.
 
 ### Fixed
+
+- The install steps: the README cloned into `strataslam` and then ran `src/StrataSLAM/scripts/install_deps.sh`; both the
+  README and `docs/user/install.md` now clone into the repository's own folder, `StrataSLAM`, with its URL. Both say
+  that every new terminal must source `~/strataslam_ws/install/setup.bash` (or `~/.bashrc` once) before `strataslam`,
+  and the troubleshooting table lists `strataslam: command not found`. `docs/user/install.md` no longer says `fuse`
+  runs without the C++ build.
+- `strataslam doctor` without ROS sourced printed a traceback (`No module named 'rclpy'`); it now says what to source
+  (exit code 3), as do `map` and `imu-noise` on a rosbag. A missing `strataslam_fuse` names the command that makes it
+  found, and the command line also finds it in the repository's CMake build (`build/strataslam_core/`).
+- `strataslam fuse` ended its output without a newline; it now ends with the folder it wrote. `strataslam doctor`
+  with no sensor data said "static transforms for" with an empty list: it says the chain was not checked.
+- `scripts/check_install.sh ros` runs the first-map tutorial of `docs/user/mapping.md` (simulator bag, doctor, the
+  node, save_map, export, grid, fuse, eval) in a shell that sources only the workspace, not just `strataslam --help`.
+- A level reached again identified at the end of the run (ADR-0073) left the climb's keyframes on the level it had
+  withdrawn, without recording the transition (ADR-0074; Elevator-VIGS Campus4).
+- The live view drew a stretch of path twice: grey while a transition was open, and again in the floor's colour
+  once its keyframes joined a floor (a sensor lifted before an elevator, the part of a climb that joins a floor). A
+  floor's optimized path now takes over the transition's trail over the time its keyframes cover; what no floor
+  takes (a cabin) stays grey.
+- A floor bent by the graph and a floor reached again opening a level (ADR-0073). With a calibrated accelerometer
+  (`imu.accel_bias`) every keyframe now carries the IMU's gravity (in motion, the accelerometer's 2 s mean, 0.05 rad),
+  so a loop that does not close in height is no longer closed by tilting the floor (the portable rig's floor 0 sank
+  2.3 m over 40 m). A new level nearer an existing one than a whole level's change is that level when its place is
+  found there at the same height by the registration (a mezzanine registers a metre or more above the floor it
+  overlooks and stays a level).
+- A ground robot's elevator rides (ADR-0070): with `imu.floor_changes: true` the IMU measures a ride only while the
+  base stands still, drops one the robot drives out of before it brakes, and no longer keeps a ramp the odometry
+  measured from ending (a driving base vibrates); until the IMU's heading is learned, the LiDAR's tilt is bounded by
+  the size of the IMU's. On the Summit XL's elevator bag the floor reached was mapped into floor 0 (or, with the IMU,
+  a false third floor followed); now it has its two rides and nothing else.
 - The CI's Python job installs only the shared libraries the downloaded binaries and Open3D load
   (`scripts/install_deps.sh runtime`, 66 MB on a clean Ubuntu) instead of the build's -dev packages (241 MB on the
   runner): an Azure mirror serving 142 kB/s held it past its 30 minutes twice.

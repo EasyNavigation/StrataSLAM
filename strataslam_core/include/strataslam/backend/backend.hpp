@@ -21,7 +21,10 @@ struct KeyframeInput {
   gtsam::Pose3 T_base_sensor;          ///< sensor extrinsic used for `cloud`
   std::optional<double> baro_height;   ///< filtered barometric height at the keyframe (m)
   std::optional<Eigen::Vector3d>
-      up_body;  ///< measured up direction when the sensor was quasi-static
+      up_body;  ///< measured up direction (base frame): the IMU at rest, or in motion (up_sigma)
+  /// rad, the uncertainty of `up_body` when it is not the quasi-static one (BackendConfig's
+  /// gravity_sigma otherwise).
+  std::optional<double> up_sigma;
   std::optional<Eigen::Vector3d>
       plane_up;  ///< planar mode: the base stays on the floor's plane, with this up
 };

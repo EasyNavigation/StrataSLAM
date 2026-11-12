@@ -65,6 +65,8 @@ int main(int argc, char** argv) {
   }
   for (const auto& warn : result.value().warnings)
     std::fprintf(stderr, "warning: %s\n", warn.c_str());
-  std::printf("%s", result.value().transforms_yaml().c_str());
+  std::string yaml = result.value().transforms_yaml();
+  if (yaml.empty() || yaml.back() != '\n') yaml += '\n';
+  std::printf("%s# written to %s/fused\n", yaml.c_str(), dir.c_str());
   return 0;
 }

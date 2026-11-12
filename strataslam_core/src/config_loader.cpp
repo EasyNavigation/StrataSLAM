@@ -109,6 +109,32 @@ class Section {
     }
   }
 
+  /// The text of a scalar value; none for a list, a map or an absent key.
+  std::optional<std::string> scalar(const char* key) {
+    known_.insert(key);
+    if (!node_.IsMap()) return std::nullopt;
+    YAML::Node n = node_[key];
+    if (!n.IsDefined() || !n.IsScalar()) return std::nullopt;
+    return n.Scalar();
+  }
+
+  /// A list of three numbers, `[x, y, z]`.
+  void get(const char* key, std::array<double, 3>& out) {
+    known_.insert(key);
+    if (!node_.IsMap()) return;
+    YAML::Node n = node_[key];
+    if (!n.IsDefined()) return;
+    if (!n.IsSequence() || n.size() != 3) {
+      diag_->error(child_path(key), "expected a list of three numbers, [x, y, z]");
+      return;
+    }
+    try {
+      for (size_t k = 0; k < 3; ++k) out[k] = n[k].as<double>();
+    } catch (const YAML::Exception&) {
+      diag_->error(child_path(key), "expected a list of three numbers, [x, y, z]");
+    }
+  }
+
   template <typename E>
   void get_enum(const char* key, E& out, std::initializer_list<std::pair<const char*, E>> table) {
     known_.insert(key);
@@ -241,6 +267,24 @@ void parse_imu(Section s, ImuConfig& i, Diagnostics* d) {
   s.get("enabled", i.enabled);
   s.get("topic", i.topic);
   s.get("floor_changes", i.floor_changes);
+  if (const auto v = s.scalar("accel_bias")) {
+    if (*v == "auto")
+      i.accel_bias_auto = true;
+    else if (*v == "false")
+      i.accel_bias_auto = false;
+    else
+      d->error(s.child_path("accel_bias"),
+               "expected a list of three numbers, [x, y, z], auto or false");
+  } else if (s.present("accel_bias")) {
+    i.accel_bias_auto = false;  // given: it is the calibration
+    std::array<double, 3> b{0.0, 0.0, 0.0};
+    s.get("accel_bias", b);
+    i.accel_bias = b;
+    for (double v : b)
+      if (!(std::abs(v) <= 2.0))
+        d->error(s.child_path("accel_bias"),
+                 "m/s^2, at most 2 per axis: a larger offset is no bias (is the unit right?)");
+  }
   s.removed("noise_preset",
             "camera presets were removed (ADR-0053): give the IMU noise in `noise:` (or leave it "
             "out for the "
@@ -283,6 +327,10 @@ void parse_external_odometry(Section s, ExternalOdometryConfig& e, Diagnostics* 
   s.get("enabled", e.enabled);
   s.get("topic", e.topic);
   s.get("frame", e.frame);
+  s.get_enum("prior", e.prior,
+             {{"auto", OdometryPrior::Auto},
+              {"true", OdometryPrior::True},
+              {"false", OdometryPrior::False}});
   if (e.enabled && e.topic.empty() == e.frame.empty()) {
     d->error(s.path(),
              "needs either a topic (nav_msgs/Odometry) or a frame (TF frame -> robot.base_frame)");
@@ -388,7 +436,8 @@ void cross_validate(const Config& c, Diagnostics* d) {
     case OdometryFrom::External:
       d->error("fusion.odometry_from",
                "\"external\" is not an odometry source: the external odometry is the motion prior "
-               "of the camera tracking (keep odometry_from camera or auto)");
+               "of the tracking (keep odometry_from camera, lidar or auto; with a LiDAR, "
+               "external_odometry.prior: true)");
       break;
     case OdometryFrom::Auto:
       break;
@@ -400,9 +449,12 @@ void cross_validate(const Config& c, Diagnostics* d) {
         "sensors.lidar.type",
         "\"2d\" requires robot.platform: ground (a planar scan measures x, y and heading only)");
   }
-  if (s.external_odometry.enabled && resolve_modes(c).odometry != OdometrySource::Camera) {
+  if (s.external_odometry.enabled && !resolve_modes(c).odometry_prior) {
     d->warn("sensors.external_odometry",
-            "only the camera tracking uses it: with LiDAR odometry it is ignored");
+            s.external_odometry.prior == OdometryPrior::False
+                ? "prior: false: it is not used"
+                : "with LiDAR odometry it is used only with prior: true (the LiDAR's motion prior, "
+                  "carrying the pose through a loss; ADR-0071)");
   }
   switch (c.fusion.loop_closure_from) {
     case LoopClosureFrom::Camera:
@@ -500,6 +552,10 @@ ResolvedModes resolve_modes(const Config& c) {
       m.odometry = s.lidar.enabled ? OdometrySource::Lidar : OdometrySource::Camera;
       break;
   }
+  const auto& ext = s.external_odometry;
+  m.odometry_prior = ext.enabled && m.odometry != OdometrySource::External &&
+                     (ext.prior == OdometryPrior::True ||
+                      (ext.prior == OdometryPrior::Auto && m.odometry == OdometrySource::Camera));
   m.verify_loop_with_lidar = false;
   switch (c.fusion.loop_closure_from) {
     case LoopClosureFrom::Camera:

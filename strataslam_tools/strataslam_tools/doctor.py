@@ -313,6 +313,8 @@ def check_tf_chain(prof: dict[str, Any], data: DoctorData) -> Check:
         # sensor's mounting once, when the pipeline starts: it is right as long as those joints do not move.
         return Check("tf_chain", WARN, f"through moving joints (/tf): {'; '.join(moving)}",
                      "the node reads the mounting once at start: keep those joints still while mapping")
+    if not ok:
+        return Check("tf_chain", WARN, "not checked: no sensor message to read the frames from", "start the drivers (or record them in the bag)")
     return Check("tf_chain", OK, f"static transforms for {', '.join(ok)}")
 
 

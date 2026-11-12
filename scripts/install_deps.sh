@@ -20,7 +20,9 @@ apt=(apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::http
 # 407 packages, more than an hour on a slow mirror in the CI.
 install=("${apt[@]}" install -y --no-install-recommends)
 
-common=(cmake g++ git libeigen3-dev libyaml-cpp-dev libopencv-dev libpng-dev libjpeg-dev libgtest-dev libbenchmark-dev
+# make and ca-certificates: cmake and git only recommend them, and without the recommended packages a clean Ubuntu had
+# no build tool and could not fetch small_gicp over https (the CI's runner has both installed).
+common=(cmake make g++ git ca-certificates libeigen3-dev libyaml-cpp-dev libopencv-dev libpng-dev libjpeg-dev libgtest-dev libbenchmark-dev
         python3-yaml python3-numpy python3-pytest)
 
 case "$mode" in

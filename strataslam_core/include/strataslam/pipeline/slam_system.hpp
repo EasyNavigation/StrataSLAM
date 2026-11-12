@@ -33,6 +33,9 @@ struct SystemTuning {
   double max_relevel_deg =
       3.0;  ///< largest attitude correction from a ground plane at a frontend restart
   double max_relevel_imu_deg = 10.0;  ///< largest one from the IMU at rest
+  /// rad, the attitude prior of a keyframe taken in motion, from the accelerometer's mean over the
+  /// last 2 s (ADR-0073): a walk's own accelerations, which average out over many keyframes.
+  double moving_gravity_sigma = 0.05;
   FloorManagerConfig
       floors;  ///< thresholds not exposed in the profile (floor_height_prior etc. come from it)
   int pending_keyframes_for_new_floor =

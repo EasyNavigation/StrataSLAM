@@ -60,6 +60,9 @@ struct FloorManagerConfig {
   double max_transition_s = 120.0;     ///< forced close after this long
   double tracking_loss_timeout = 2.0;  ///< s
   bool aerial_platform = false;        ///< robot.platform == aerial
+  /// robot.platform == ground: a cabin carries it standing still, so the IMU measures a ride only
+  /// while the base does not travel (its vibration while driving averages to tenths of m/s^2).
+  bool ground_platform = false;
 };
 
 struct FloorSample {
@@ -93,6 +96,11 @@ struct FloorEvent {
   /// ride the IMU now measures, which stays open (its own TransitionEnded follows). What was mapped
   /// until then belongs to the floor it left.
   bool ride_follows = false;
+  /// TransitionEnded on a new level: an existing level the arrival is nearer than a whole level's
+  /// change to (`min_vertical_change`, or half the prior) but farther than the level tolerance. The
+  /// height cannot tell (stairs measured by the odometry differ by a fifth of a storey); the
+  /// pipeline asks the place, and `revise_arrival` puts it on that level (ADR-0073).
+  FloorId near_level = -1;
 };
 
 /// State machine OnFloor / InTransition(type) / Lost. Pure logic over scalar signals, so it is
@@ -130,11 +138,16 @@ class FloorManager {
   double altitude() const { return altitude_; }
   size_t num_floors() const { return levels_.size(); }
   double level_altitude(FloorId f) const { return levels_.at(static_cast<size_t>(f)); }
+  /// m, how near a height must be to a level to be that level.
+  double level_tolerance() const { return tolerance(); }
   /// The odometry was restarted with its height shifted by `dz` (a correction, not motion): keeps
   /// the altitude unchanged and forgets the vertical-speed history.
   void odometry_rebased(double dz);
   /// Creates a new level at the current altitude (used after an unobservable change).
   FloorId open_new_floor();
+  /// The level the last transition reached was its `near_level` after all (ADR-0073): the new level
+  /// it opened is withdrawn. Only that level, and only until the next transition starts.
+  bool revise_arrival(FloorId level);
   /// Re-assigns the current floor (after a relocalization).
   void set_floor(FloorId f) {
     floor_ = f;
@@ -143,11 +156,13 @@ class FloorManager {
 
  private:
   Timestamp last_ride_dbg_ = 0;  ///< FLOORS debug channel: last trace of a ride's speed
+  FloorId near_level_ = -1;      ///< the last transition's FloorEvent::near_level, until another
   struct Acc {
     Timestamp t0 = 0;
     double alt0 = 0, baro0 = 0;
     bool had_baro = false;
     double s_h = 0;
+    double s_h_open = 0;  ///< m, the part of s_h out of confined spaces
     Eigen::Vector3d last_pos = Eigen::Vector3d::Zero();
     std::vector<std::pair<double, double>> profile;  ///< (horizontal run, altitude)
     Timestamp calm_since = 0;
@@ -162,6 +177,7 @@ class FloorManager {
     Timestamp last_ride_stamp = 0;  ///< its last sample
     Timestamp last_pulse = 0;       ///< its last pulse (a cabin starting or braking)
     double ride_s_h0 = 0;           ///< m, the horizontal run when it started
+    double ride_open0 = 0;          ///< m, s_h_open when it started
     Timestamp ride_calm_since = 0;  ///< since when it has looked stopped
     Timestamp imu_end = 0;          ///< where the IMU's integration ends (0: now)
     double ride_ref = 0;            ///< m/s^2, the vertical acceleration before its onset
@@ -185,6 +201,12 @@ class FloorManager {
   FloorEvent close_transition(const FloorSample& s, bool plateau = false);
   /// The decision of a settled (or forced) transition; nothing when it must keep waiting.
   FloorEvent decide_transition(const FloorSample& s, bool forced);
+  /// The transition ends on the floor it left, the floor's reference at the current height.
+  FloorEvent end_on_floor(const FloorSample& s, double dz);
+  /// An IMU ride that was none: the transition goes back to the odometry.
+  void drop_ride();
+  /// A ground robot's base has not travelled over the last 2 s (any other platform: always).
+  bool base_still(const FloorSample& s) const;
   FloorSample last_sample_;
   double median_slope() const;
   FloorId assign_level(double altitude, double tol_override = -1.0, double sigma = 0.0);
@@ -209,6 +231,10 @@ class FloorManager {
   std::deque<std::tuple<Timestamp, double, double>>
       slope_win_;  ///< (stamp, cumulative horizontal run, altitude)
   double hrun_ = 0;
+  /// m, horizontal run out of confined spaces (a degenerate registration in a cabin slides), and
+  /// its last seconds: whether a ground robot's base stands still.
+  double open_run_ = 0;
+  std::deque<std::pair<Timestamp, double>> open_win_;
   Timestamp settle_until_ = 0;  ///< after an elevator the restarted odometry keeps settling: the
                                 ///< reference follows it until then
   Timestamp last_ref_stamp_ =

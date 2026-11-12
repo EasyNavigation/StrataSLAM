@@ -137,6 +137,11 @@ class GravityTracker {
     bias_ = dR * bias_;
     gyro_sum_ = dR * gyro_sum_;
   }
+  /// The accelerometer's offset changed by what moves up by `d` (base frame, small): up follows at
+  /// once instead of over three time constants, its gyroscope bias undisturbed.
+  void shift_up(const Eigen::Vector3d& d) {
+    if (up_) up_ = (*up_ + d).normalized();
+  }
   bool started() const { return up_.has_value(); }
   const Eigen::Vector3d& gyro_bias() const { return bias_; }
 

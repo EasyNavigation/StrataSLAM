@@ -242,6 +242,41 @@ struct LidarFrontend::Impl {
   bool force_kf = false;
   bool confined = false;        // the last scan saw a confined space (kept across restarts)
   Timestamp left_confined = 0;  // when the scans last came out of a confined space
+  std::optional<OdomMeasurement> last_ext;  // the robot's odometry at the previous scan
+
+  /// The registration lost the scan, or slid where the robot's odometry says it could not have
+  /// gone: the pose follows the odometry (degraded, so the backend weighs it less) and no tracking
+  /// loss reaches the pipeline (ADR-0071). After a loss (`restart_pts`) the local map, which no
+  /// longer matches, starts again from this scan; a keyframe is made once the robot has moved.
+  FrontendResult& bridge(const gtsam::Pose3& new_base, Timestamp stamp, FrontendResult& res,
+                         const std::vector<Eigen::Vector3f>* restart_pts) {
+    res.delta = T_odom_base.between(new_base);
+    res.T_odom_base = new_base;
+    res.valid = true;
+    res.quality.state = TrackingState::Degraded;
+    last_quality = res.quality;
+    velocity = res.delta;
+    recent.clear();
+    recent.push_back(new_base);
+    T_odom_base = new_base;
+    last_stamp = stamp;
+    lost_count = 0;
+    if (restart_pts) {
+      const gtsam::Pose3 T_ol = new_base * T_base_lidar;
+      const gtsam::Pose3 rel = last_keyframe_pose.between(T_ol);
+      Keyframe kf{T_ol, voxel_downsample(*restart_pts, cfg.keyframe_cloud_voxel)};
+      keyframes.clear();
+      keyframes.push_back(kf);
+      rebuild_map(T_ol);
+      if (rel.translation().norm() > cfg.keyframe_translation ||
+          gtsam::Rot3::Logmap(rel.rotation()).norm() * 180.0 / M_PI > cfg.keyframe_rotation_deg) {
+        last_keyframe_pose = T_ol;
+        last_kf_cloud = kf.cloud;
+        res.is_keyframe = true;
+      }
+    }
+    return res;
+  }
 
   void rebuild_map(const gtsam::Pose3& T_odom_lidar_now) {
     std::vector<Eigen::Vector3f> pts;
@@ -330,12 +365,25 @@ namespace {
 /// brings them back to the bound; heading and sensor position (what the registration measures)
 /// kept.
 gtsam::Pose3 level_lidar(const gtsam::Pose3& T_ol, const gtsam::Pose3& T_base_lidar,
-                         const Eigen::Vector3d& up_base, double max_tilt_error_deg) {
+                         const Eigen::Vector3d& up_base, double max_tilt_error_deg,
+                         bool tilt_only) {
   const gtsam::Rot3 R_base = T_ol.rotation() * T_base_lidar.rotation().inverse();
   const Eigen::Vector3d up_now = R_base.matrix().transpose() * Eigen::Vector3d::UnitZ();
   const Eigen::Vector3d up_imu = up_base.normalized();
-  const double angle = std::acos(std::clamp(up_now.dot(up_imu), -1.0, 1.0));
   const double bound = max_tilt_error_deg * M_PI / 180.0;
+  if (tilt_only) {
+    // The size of the tilt only: the registration's, up to the IMU's plus the bound, in the
+    // direction the registration has it.
+    const double tilt_now = std::acos(std::clamp(up_now.z(), -1.0, 1.0));
+    const double tilt_max = std::acos(std::clamp(up_imu.z(), -1.0, 1.0)) + bound;
+    const Eigen::Vector2d h = up_now.head<2>();
+    if (tilt_now <= tilt_max || h.norm() < 1e-9) return T_ol;
+    const Eigen::Vector2d d = h.normalized();
+    const Eigen::Vector3d up_target(std::sin(tilt_max) * d.x(), std::sin(tilt_max) * d.y(),
+                                    std::cos(tilt_max));
+    return gtsam::Pose3(level_to(R_base, up_target) * T_base_lidar.rotation(), T_ol.translation());
+  }
+  const double angle = std::acos(std::clamp(up_now.dot(up_imu), -1.0, 1.0));
   if (angle <= bound) return T_ol;
   const Eigen::Vector3d axis = up_imu.cross(up_now).normalized();
   const Eigen::Vector3d up_target = Eigen::AngleAxisd(bound, axis) * up_imu;
@@ -349,12 +397,23 @@ FrontendResult LidarFrontend::process(const SensorFrame& frame) {
   FrontendResult res;
   if (!frame.lidar) return res;
   const LidarScan& scan = *frame.lidar;
+  // The robot's own odometry (ADR-0071): its motion since the previous scan, when it has both.
+  std::optional<gtsam::Pose3> ext_delta;
+  double ext_dt = 0;
+  if (frame.odom && s.last_ext) {
+    ext_delta = s.last_ext->pose.between(frame.odom->pose);
+    ext_dt = (frame.odom->stamp - s.last_ext->stamp) * 1e-9;
+  }
+  s.last_ext = frame.odom ? std::optional<OdomMeasurement>(*frame.odom) : std::nullopt;
 
-  // Range filter (+ constant-velocity deskew to the scan-start frame).
+  // Range filter (+ deskew to the scan-start frame: by the robot's odometry when there is one,
+  // else at constant velocity).
   const bool can_deskew = s.cfg.deskew && !scan.time_offsets_s.empty() && s.last_stamp > 0;
   const double dt_scan = s.last_stamp > 0 ? (frame.stamp - s.last_stamp) * 1e-9 : 0.1;
   gtsam::Vector6 twist = gtsam::Vector6::Zero();  // per-second body twist in the lidar frame
-  if (can_deskew && dt_scan > 1e-3) {
+  if (can_deskew && ext_delta && ext_dt > 1e-3) {
+    twist = gtsam::Pose3::Logmap(s.T_base_lidar.inverse() * *ext_delta * s.T_base_lidar) / ext_dt;
+  } else if (can_deskew && dt_scan > 1e-3) {
     const gtsam::Pose3 vel_lidar = s.T_base_lidar.inverse() * s.velocity * s.T_base_lidar;
     twist = gtsam::Pose3::Logmap(vel_lidar) / dt_scan;
   }
@@ -381,16 +440,34 @@ FrontendResult LidarFrontend::process(const SensorFrame& frame) {
   s.confined = res.confined;
   const bool gyro_led = res.confined && frame.gyro_delta;
   const auto cloud = voxel_downsample(pts, gyro_led ? 0.5 * s.cfg.scan_voxel : s.cfg.scan_voxel);
+  const gtsam::Pose3 T_lidar_base = s.T_base_lidar.inverse();
+  // Where the robot's odometry puts the base, its attitude bounded by the IMU's gravity when there
+  // is one: the pose of a scan the registration cannot place.
+  const auto odometry_pose = [&] {
+    gtsam::Pose3 T_ol = s.T_odom_base * *ext_delta * s.T_base_lidar;
+    if (frame.up_base)
+      T_ol = level_lidar(T_ol, s.T_base_lidar, *frame.up_base, s.cfg.max_tilt_error_deg,
+                         frame.up_tilt_only);
+    return T_ol * T_lidar_base;
+  };
   if (static_cast<int>(cloud.size()) < s.cfg.min_points) {
+    // Also before a local map (restarted in an elevator cabin, the LiDAR's minimum range leaving
+    // too little of it): the first scan that has enough starts the map where the wheels are.
+    if (ext_delta) {
+      res.quality.state = TrackingState::Lost;
+      return s.bridge(odometry_pose(), frame.stamp, res, nullptr);
+    }
     s.last_quality.state = TrackingState::Lost;
     res.quality = s.last_quality;
     return res;
   }
 
-  const gtsam::Pose3 T_lidar_base = s.T_base_lidar.inverse();
   if (!s.initialized) {
-    // Started some scans after the restart (they were not tracked): turned by the gyroscope since.
-    if (gyro_led)
+    // Started some scans after the restart (they were not tracked): moved by the wheels since, or
+    // turned by the gyroscope.
+    if (ext_delta)
+      s.T_odom_base = odometry_pose();
+    else if (gyro_led)
       s.T_odom_base = s.T_odom_base * gtsam::Pose3(*frame.gyro_delta, gtsam::Point3(0, 0, 0));
     const gtsam::Pose3 T_ol = s.T_odom_base * s.T_base_lidar;
     Impl::Keyframe kf{T_ol, voxel_downsample(pts, s.cfg.keyframe_cloud_voxel)};
@@ -408,14 +485,14 @@ FrontendResult LidarFrontend::process(const SensorFrame& frame) {
     return res;
   }
 
-  // Predict with the constant-velocity model, then register against the local map. In a confined
-  // space the rotation is the gyroscope's and only the translation is registered.
+  // Predict with the robot's odometry when there is one, else at constant velocity, then register
+  // against the local map. In a confined space the rotation is the gyroscope's and only the
+  // translation is registered.
+  const gtsam::Pose3 motion = ext_delta ? *ext_delta : s.velocity;
   const auto gyro_pred = [&] {
-    return s.T_odom_base * gtsam::Pose3(*frame.gyro_delta, s.velocity.translation()) *
-           s.T_base_lidar;
+    return s.T_odom_base * gtsam::Pose3(*frame.gyro_delta, motion.translation()) * s.T_base_lidar;
   };
-  const gtsam::Pose3 pred_lidar =
-      gyro_led ? gyro_pred() : s.T_odom_base * s.velocity * s.T_base_lidar;
+  const gtsam::Pose3 pred_lidar = gyro_led ? gyro_pred() : s.T_odom_base * motion * s.T_base_lidar;
   const auto h = registration_points(cloud, s.cfg);
   small_gicp::PointCloud raw(h);
   auto sp = preprocess(raw, s.cfg.scan_voxel * 0.5, s.cfg.num_neighbors, s.cfg.threads);
@@ -460,11 +537,25 @@ FrontendResult LidarFrontend::process(const SensorFrame& frame) {
   s.last_stamp = frame.stamp;
 
   if (q.state == TrackingState::Lost) {
+    if (ext_delta) return s.bridge(odometry_pose(), frame.stamp, res, &pts);
     ++s.lost_count;
     return res;  // no pose: the caller decides (floor manager / session reset)
   }
   s.lost_count = 0;
   gtsam::Pose3 T_ol = from_iso(r.T_target_source);
+  if (q.state == TrackingState::Degraded && ext_delta) {
+    // A degraded registration can slide along its weak direction or turn where the scan has
+    // little to hold on to: the robot's odometry vetoes a motion it could not have made.
+    const gtsam::Pose3 reg_delta = s.T_odom_base.between(T_ol * T_lidar_base);
+    const double trans_err = (reg_delta.translation() - ext_delta->translation()).norm();
+    const double turn_deg = gtsam::Rot3::Logmap(ext_delta->rotation()).norm() * 180.0 / M_PI;
+    const double rot_err_deg =
+        gtsam::Rot3::Logmap(reg_delta.rotation().between(ext_delta->rotation())).norm() * 180.0 /
+        M_PI;
+    if (trans_err > s.cfg.odom_veto_m + s.cfg.odom_veto_ratio * ext_delta->translation().norm() ||
+        rot_err_deg > s.cfg.odom_veto_deg + s.cfg.odom_veto_ratio * turn_deg)
+      return s.bridge(odometry_pose(), frame.stamp, res, nullptr);
+  }
   if (rotation_from_gyro)  // the rotation was held: keep it a rotation to the last digit
     T_ol = gtsam::Pose3(gtsam::Rot3::ClosestTo(T_ol.rotation().matrix()), T_ol.translation());
   if (q.state == TrackingState::Degraded && s.cfg.pin_degenerate) {
@@ -490,7 +581,8 @@ FrontendResult LidarFrontend::process(const SensorFrame& frame) {
           Eigen::Vector3d(T_ol.translation() - weak * (along - std::copysign(bound, along))));
   }
   if (frame.up_base)
-    T_ol = level_lidar(T_ol, s.T_base_lidar, *frame.up_base, s.cfg.max_tilt_error_deg);
+    T_ol = level_lidar(T_ol, s.T_base_lidar, *frame.up_base, s.cfg.max_tilt_error_deg,
+                       frame.up_tilt_only);
   const gtsam::Pose3 new_base = T_ol * T_lidar_base;
   res.delta = s.T_odom_base.between(new_base);
   s.recent.push_back(new_base);

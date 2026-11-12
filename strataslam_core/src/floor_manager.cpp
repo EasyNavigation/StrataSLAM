@@ -305,10 +305,26 @@ FloorEvent FloorManager::close_transition(const FloorSample& s, bool plateau) {
   constexpr double kImuRideRelError = 0.05;
   double sigma = level_sigma_.at(static_cast<size_t>(from));
   if (elevator_imu) sigma = std::hypot(sigma, kImuRideRelError * dz);
+  const size_t n_levels = levels_.size();
   const FloorId to =
       (elevator || valid_level_change(dz) || plateau)
           ? assign_level(target, plateau ? 0.5 * cfg_.plateau_min_change : -1.0, sigma)
           : from;
+  // A new level: is an existing one nearer than a whole level's change? Two identical floors
+  // stacked are a storey apart and never this near; a level reached again by other stairs is
+  // (ADR-0073).
+  near_level_ = -1;
+  if (levels_.size() > n_levels) {
+    const double band =
+        cfg_.floor_height_prior ? 0.5 * *cfg_.floor_height_prior : cfg_.min_vertical_change;
+    double best = band;
+    for (size_t i = 0; i < n_levels; ++i)
+      if (std::abs(levels_[i] - target) < best) {
+        best = std::abs(levels_[i] - target);
+        ev.near_level = static_cast<FloorId>(i);
+      }
+    near_level_ = ev.near_level;
+  }
   ev.kind = FloorEvent::Kind::TransitionEnded;
   ev.type = type;
   ev.from = from;
@@ -390,6 +406,8 @@ FloorManager::Motion FloorManager::update_odometry(const FloorSample& s) {
     // A gentle ramp climbs slower than calm_vz: while moving, judge the climb per metre travelled
     // too.
     hrun_ += m.dh;
+    if (s.vertical_observed) open_run_ += m.dh;
+    push(open_win_, s.stamp, open_run_, 3.0);
     slope_win_.emplace_back(s.stamp, hrun_, altitude_);
     while (slope_win_.size() > 2 &&
            (s.stamp - std::get<0>(slope_win_.front())) * 1e-9 > cfg_.slope_long_window_s)
@@ -444,7 +462,7 @@ FloorEvent FloorManager::update_on_floor(const FloorSample& s, const Motion& m) 
   // under depart_dz, kept the IMU from opening the 3.3 m ride that followed).
   bool imu_departure = false;
   Timestamp imu_onset = 0;
-  if (s.imu_vertical_accel &&
+  if (s.imu_vertical_accel && (!s.tracking_ok || base_still(s)) &&
       (!s.tracking_ok ||
        (std::abs(m.vz) < 0.1 && std::abs(altitude_ - ref_alt_) < 0.5 * cfg_.depart_dz))) {
     if (std::abs(az_mean(s.stamp, 1.0)) > cfg_.imu_depart_accel) {
@@ -470,6 +488,7 @@ FloorEvent FloorManager::update_on_floor(const FloorSample& s, const Motion& m) 
                           settle_until_ ? (s.stamp - settle_until_) * 1e-9 + 30.0 : -1.0));
     az_over_since_ = 0;
     state_ = FloorState::InTransition;
+    near_level_ = -1;
     acc_ = Acc();
     run_win_.clear();
     acc_.t0 = s.stamp;
@@ -507,11 +526,17 @@ FloorEvent FloorManager::update_in_transition(const FloorSample& s, const Motion
   const double vb = s.baro_height ? rate(baro_hist_) : 0.0;
   if (s.tracking_ok) {
     acc_.s_h += m.dh;
+    if (s.vertical_observed) acc_.s_h_open += m.dh;
     acc_.profile.push_back({acc_.s_h, altitude_});
   }
   push(run_win_, s.stamp, acc_.s_h, 3.0);
+  // A ground robot's base vibrates as it drives (the Summit XL's 1 s mean: tenths of m/s^2): its
+  // IMU's calm says nothing of a ramp the odometry measures, which never settled with it (two
+  // ramps of prueba_00 read as one of 5.1 m). Only a ride the IMU measures waits for it.
+  const bool imu_calm_counts =
+      s.imu_vertical_accel.has_value() && (!cfg_.ground_platform || acc_.unobserved);
   bool calm = std::abs(m.vz) < cfg_.calm_vz && std::abs(vb) < 0.1 &&
-              (!s.imu_vertical_accel || std::abs(az_mean(s.stamp, 1.0)) < cfg_.imu_calm_accel);
+              (!imu_calm_counts || std::abs(az_mean(s.stamp, 1.0)) < cfg_.imu_calm_accel);
   if (climbing_ || climbing_long_) calm = false;
   // Opened by the odometry, but the IMU accelerates vertically as it does to open a ride while the
   // odometry does not follow: an elevator whose closing doors made the odometry jump before it was
@@ -547,7 +572,7 @@ FloorEvent FloorManager::update_in_transition(const FloorSample& s, const Motion
             std::abs(gain) >= kCabinSpeed &&
             (lost_through ||
              (s.tracking_ok && odom_vz < std::max(kStillVz, kSeenShare * std::abs(gain)) &&
-              az_spread(s.stamp - 1'000'000'000, s.stamp) < kCabinSpread));
+              az_spread(s.stamp - 1'000'000'000, s.stamp) < kCabinSpread && base_still(s)));
         if (unseen) {
           acc_.unobserved = true;
           acc_.imu_onset = onset;
@@ -621,6 +646,7 @@ FloorEvent FloorManager::update_in_transition(const FloorSample& s, const Motion
     };
     if (acc_.last_ride_stamp == 0) {
       acc_.ride_s_h0 = acc_.s_h;
+      acc_.ride_open0 = acc_.s_h_open;
       acc_.ride_ref = std::clamp(az_mean_between(acc_.imu_onset - kRideRefWindow, acc_.imu_onset),
                                  -kPulseAccel, kPulseAccel);
       // Counted from the onset: a ride taken over from the odometry is 1.5 s into its push, which
@@ -704,7 +730,19 @@ FloorEvent FloorManager::update_in_transition(const FloorSample& s, const Motion
                             (stopped_moving || gait || walked >= kNoCabinM);
     const bool calm_long_enough =
         acc_.ride_calm_since != 0 && (s.stamp - acc_.ride_calm_since) * 1e-9 >= cfg_.ride_stop_s;
-    if (calm_long_enough || walked_out) {
+    // A ground robot is carried standing still: driving further than a cabin is deep before the
+    // ride has braked, it was never in one. Its base's vibration, a bump or a ramp's foot read as
+    // a push (or a brake) that never comes back to rest (Summit XL, prueba_03: -0.1 to -0.35
+    // m/s^2 for 27 s while it drove 24 m, a -3.4 m ride).
+    // Out of the cabin: a degenerate registration slides in it while the robot stands (the Summit
+    // XL's: 1 m during a 3.7 m ride).
+    const double drove = acc_.s_h_open - acc_.ride_open0;
+    if (cfg_.ground_platform && !braked && drove >= kWalkedOutM) {
+      if (debug_channel("FLOORS"))
+        log_->log(LogLevel::Debug,
+                  strprintf("no ride: the ground robot drove %.1f m before it braked", drove));
+      drop_ride();
+    } else if (calm_long_enough || walked_out) {
       acc_.imu_end =
           calm_long_enough
               ? acc_.ride_calm_since
@@ -741,18 +779,7 @@ FloorEvent FloorManager::update_in_transition(const FloorSample& s, const Motion
       // Not a floor's height: no ride after all. The transition goes back to the odometry, so that
       // a ride that follows is taken from its own onset (Elevator-VIGS Factory-H: a jolt while
       // boarding, then the 50 m ride integrated from it, read -27 m).
-      acc_.unobserved = false;
-      acc_.az_over_since = 0;
-      acc_.imu_end = 0;
-      acc_.ride_push = acc_.ride_brake = 0;
-      acc_.ride_sign = 0;
-      acc_.ride_calm_since = 0;
-      acc_.last_ride_stamp = acc_.last_pulse = 0;
-      acc_.ride_ref = 0;
-      acc_.ride_v = acc_.ride_v_peak = 0;
-      acc_.pulse1_end = 0;
-      acc_.pulse1_v = 0;
-      acc_.gait_since = 0;
+      drop_ride();
     }
   }
   const double settle = cfg_.settle_s * (cfg_.floor_height_prior ? 1.0 : 2.5);
@@ -764,6 +791,35 @@ FloorEvent FloorManager::update_in_transition(const FloorSample& s, const Motion
       acc_.calm_since = 0;  // a landing in the middle of a stair or ramp: keep waiting
   }
   return ev;
+}
+
+void FloorManager::drop_ride() {
+  acc_.unobserved = false;
+  acc_.az_over_since = 0;
+  acc_.imu_end = 0;
+  acc_.ride_push = acc_.ride_brake = 0;
+  acc_.ride_sign = 0;
+  acc_.ride_calm_since = 0;
+  acc_.last_ride_stamp = acc_.last_pulse = 0;
+  acc_.ride_ref = 0;
+  acc_.ride_v = acc_.ride_v_peak = 0;
+  acc_.pulse1_end = 0;
+  acc_.pulse1_v = 0;
+  acc_.gait_since = 0;
+}
+
+bool FloorManager::base_still(const FloorSample& s) const {
+  if (!cfg_.ground_platform) return true;
+  // m over the last 2 s: a robot creeping at 0.15 m/s, or the registration's jitter at rest. Out
+  // of confined spaces only: in a cabin a degenerate registration slides while the robot stands.
+  constexpr double kStillRunM = 0.3;
+  constexpr Timestamp kStillWindow = 2'000'000'000;
+  if (open_win_.empty() || s.stamp - open_win_.front().first < kStillWindow)
+    return true;  // too little history to say it travels
+  auto it = open_win_.end();
+  while (it != open_win_.begin() && s.stamp - std::prev(it)->first <= kStillWindow) --it;
+  if (it != open_win_.begin()) --it;  // the sample at or just before the window's start
+  return open_run_ - it->second < kStillRunM;
 }
 
 FloorEvent FloorManager::decide_transition(const FloorSample& s, bool forced) {
@@ -781,25 +837,39 @@ FloorEvent FloorManager::decide_transition(const FloorSample& s, bool forced) {
                         "onset_to_now=%.1fs az_samples=%zu",
                         dz_odom, dz_baro, dz_imu, acc_.unobserved, forced,
                         (s.stamp - acc_.imu_onset) * 1e-9, az_hist_.size()));
-  if (std::abs(dz) < cfg_.depart_dz) {
-    // Went back to where it started: no floor change. Said as a transition that ended on its own
-    // floor, so that the keyframes taken meanwhile join that floor (before 2026-11-04 nothing was
-    // said and they were left out).
-    state_ = FloorState::OnFloor;
-    ref_alt_ = altitude_;
-    if (s.baro_height) baro_ref_ = s.baro_height;
-    ev.kind = FloorEvent::Kind::TransitionEnded;
-    ev.type = TransitionType::Unknown;
-    ev.from = ev.to = floor_;
-    ev.delta_z = dz;
-    ev.continuous_tracking = true;
-    return ev;
-  }
+  // Went back to where it started: no floor change.
+  if (std::abs(dz) < cfg_.depart_dz) return end_on_floor(s, dz);
   if (valid_level_change(dz) || forced) return close_transition(s);
   if (std::abs(dz) >= cfg_.plateau_min_change && acc_.plateau_since != 0 &&
       (s.stamp - acc_.plateau_since) * 1e-9 >= cfg_.plateau_s &&
       acc_.s_h - acc_.plateau_h0 >= cfg_.plateau_travel_m)
     return close_transition(s, true);
+  return ev;
+}
+
+bool FloorManager::revise_arrival(FloorId level) {
+  if (state_ != FloorState::OnFloor || level < 0 || level != near_level_ ||
+      static_cast<size_t>(floor_) + 1 != levels_.size())
+    return false;
+  levels_.pop_back();
+  level_sigma_.pop_back();
+  floor_ = level;
+  near_level_ = -1;
+  return true;
+}
+
+FloorEvent FloorManager::end_on_floor(const FloorSample& s, double dz) {
+  // Said as a transition that ended on its own floor, so that the keyframes taken meanwhile join
+  // that floor (before 2026-11-04 nothing was said and they were left out).
+  FloorEvent ev;
+  state_ = FloorState::OnFloor;
+  ref_alt_ = altitude_;
+  if (s.baro_height) baro_ref_ = s.baro_height;
+  ev.kind = FloorEvent::Kind::TransitionEnded;
+  ev.type = TransitionType::Unknown;
+  ev.from = ev.to = floor_;
+  ev.delta_z = dz;
+  ev.continuous_tracking = true;
   return ev;
 }
 

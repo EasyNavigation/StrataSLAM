@@ -15,13 +15,25 @@ workspace and build it with colcon:
 ```bash
 source /opt/ros/jazzy/setup.bash
 mkdir -p ~/strataslam_ws/src && cd ~/strataslam_ws/src
-git clone <this repository> strataslam
-strataslam/scripts/install_deps.sh ros
+git clone https://github.com/EasyNavigation/StrataSLAM.git
+StrataSLAM/scripts/install_deps.sh ros
 cd ~/strataslam_ws
 colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release
 source install/setup.bash
 strataslam --help            # the command line is now on PATH
 ```
+
+`source install/setup.bash` holds for the terminal it runs in. In **every new terminal**, before `strataslam`,
+`ros2 launch strataslam_ros ...` or `ros2 run strataslam_ros ...`, source the workspace again (it sources ROS 2 too),
+or add it to `~/.bashrc` once:
+
+```bash
+source ~/strataslam_ws/install/setup.bash
+echo "source ~/strataslam_ws/install/setup.bash" >> ~/.bashrc     # optional: every new terminal does it
+```
+
+Without it the shell answers `strataslam: command not found`, and `ros2` does not know `strataslam_ros`. Sourcing only
+`/opt/ros/jazzy/setup.bash` is not enough: the command line lives in the workspace.
 
 colcon builds five packages: `strataslam_core`, `strataslam_sim`, `strataslam_msgs`, `strataslam_ros` and
 `strataslam_tools` (four without the simulator, see below). If it reports fewer, check that you cloned into
@@ -43,7 +55,7 @@ is installed (`pip install open3d`).
 ## Core and simulator only (no ROS)
 
 ```bash
-git clone <this repository> strataslam && cd strataslam
+git clone https://github.com/EasyNavigation/StrataSLAM.git && cd StrataSLAM
 scripts/install_deps.sh core
 cmake -S superbuild -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
@@ -63,8 +75,10 @@ The `strataslam` command line is a normal Python package. Outside a colcon works
 pip install -e "strataslam_tools[dev]"      # dev adds pytest, ruff, mypy and Open3D
 ```
 
-`strataslam map` and `strataslam doctor` on rosbags need a sourced ROS 2 environment; `fuse`, `export`, `eval`
-and `imu-noise` (with a CSV) do not.
+`export` and `eval` are pure Python. `fuse` runs the core's `strataslam_fuse` executable: the command line finds it in
+a sourced colcon workspace, in this repository's `build/strataslam_core/` (the CMake build above) or on `PATH`.
+`strataslam doctor`, `strataslam map` and `strataslam imu-noise` on a rosbag need a sourced ROS 2 environment (rclpy,
+rosbag2_py); `imu-noise` on a CSV does not. `strataslam vocab train` needs the colcon workspace (`strataslam_ros`).
 
 ## Notes
 

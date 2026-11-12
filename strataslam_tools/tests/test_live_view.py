@@ -96,6 +96,23 @@ def test_the_optimized_path_replaces_the_drifted_one_and_the_live_tail_continues
     assert 1 not in view._strips
 
 
+def test_a_transition_that_joined_a_floor_is_not_drawn_twice(tmp_path: Path) -> None:
+    """The poses of an open transition are drawn grey; once its keyframes are a floor's, the floor's path covers
+    that time and the grey trail goes, except what no floor took (a cabin) and the transition still open."""
+    require_module("rerun", "pip install rerun-sdk, the optional extra `viewer`")
+    view = live_view.LiveView(save=tmp_path / "run.rrd")
+    for i in range(10):
+        view.pose(float(i), (float(i), 0.0, 0.0), 0 if i < 2 else -1)  # a transition from t=2 s
+    view.floor_path(0, [[(0.0, 0.0, 0.0), (5.0, 0.0, 0.0)]], [(0.0, 5.0)])  # it ended on floor 0 up to t=5 s
+    assert view._strips[-1] == [[(6.0, 0.0, 0.0), (7.0, 0.0, 0.0), (8.0, 0.0, 0.0), (9.0, 0.0, 0.0)]]
+    view.pose(10.0, (10.0, 0.0, 0.0), -1)  # still in a transition: its piece goes on
+    assert view._strips[-1][-1][-1] == (10.0, 0.0, 0.0)
+    view.floor_path(1, [[(7.0, 0.0, 3.0), (10.0, 0.0, 3.0)]], [(7.0, 10.0)])  # the rest joined floor 1
+    assert view._strips[-1] == [[(6.0, 0.0, 0.0)], []]  # 6 s, between the two floors' keyframes; the live piece
+    view.pose(11.0, (11.0, 0.0, 3.0), 1)
+    view.flush_paths()
+
+
 def test_a_large_floor_is_thinned_for_the_3d_views(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     require_module("rerun", "pip install rerun-sdk, the optional extra `viewer`")
     monkeypatch.setattr(live_view, "WORLD_MAX_POINTS", 1000)

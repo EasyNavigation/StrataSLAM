@@ -58,6 +58,12 @@ struct LidarFrontendConfig {
   int min_points = 100;
   int planar_layers = 3;
   double planar_layer_spacing = 0.1;  ///< m
+  /// With the robot's own odometry as the prior (`SensorFrame::odom`, ADR-0071), a `Degraded`
+  /// registration whose motion differs from the odometry's by more than `odom_veto_m` plus
+  /// `odom_veto_ratio` of the step, or by more than `odom_veto_deg` plus that share of the turn, is
+  /// taken for a slide and the odometry carries the scan. A `Good` one is the LiDAR's: wheels slip,
+  /// and a skid-steer base's turns are what its wheels measure worst.
+  double odom_veto_m = 0.10, odom_veto_ratio = 0.2, odom_veto_deg = 3.0;
 };
 
 /// Scan-to-local-map LiDAR odometry with GICP (small_gicp).

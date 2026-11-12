@@ -36,6 +36,7 @@ sensors:
     enabled: false  # an IMU (the robot's or the camera's) bounds the camera's roll and pitch by gravity
     # topic: /imu  # sensor_msgs/Imu
     # floor_changes: true  # false: the IMU gives gravity only, not elevators (a vibrating robot base)
+    # accel_bias: auto  # the accelerometer's offset: auto (measured against the floors a LiDAR sees and applied, ADR-0074) | false | [x, y, z] m/s^2 in the IMU frame (ADR-0072)
     # noise:  # nominal values (also the defaults); measure your IMU with `strataslam imu-noise`
     #   accel_noise_density: 2.0e-3  # m/s^2/sqrt(Hz)
     #   gyro_noise_density: 1.7e-4  # rad/s/sqrt(Hz)
@@ -53,6 +54,7 @@ sensors:
     # dark room), which then opens no new session. Give a topic or a frame, not both.
     # topic: /odom  # nav_msgs/Odometry
     frame: odom  # the TF odom -> robot.base_frame that the base driver publishes
+    # prior: auto  # auto or true: the camera tracking's prior | false: not used
 
 fusion:
   # odometry_from: auto  # auto | camera | lidar (auto: the LiDAR if enabled, else the camera)
