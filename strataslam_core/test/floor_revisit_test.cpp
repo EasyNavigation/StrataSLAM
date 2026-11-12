@@ -123,6 +123,8 @@ struct Walk {
   std::shared_ptr<Messages> messages = std::make_shared<Messages>();
   std::unique_ptr<SlamSystem> slam;
   std::vector<Vector3d> world;
+  double noise = 0;  ///< m, standard deviation of each point's range noise
+  std::mt19937 rng{11};
   double t = 0;
   double x = -0.5, yaw = M_PI;  // in room A, facing its back wall
 
@@ -141,8 +143,13 @@ struct Walk {
     const gtsam::Pose3 T(gtsam::Rot3::Yaw(yaw), gtsam::Point3(x, 0, surface(x) + 1.2));
     LidarScan s;
     s.stamp = 1'000'000'000LL + static_cast<Timestamp>(std::llround(t * 1e9));
+    std::normal_distribution<double> n(0.0, 1.0);
     for (const auto& p : world)
-      if ((p - T.translation()).norm() < 12.0) s.points.push_back(T.transformTo(p).cast<float>());
+      if ((p - T.translation()).norm() < 12.0) {
+        Vector3d q = T.transformTo(p);
+        if (noise > 0) q *= 1.0 + noise * n(rng) / q.norm();
+        s.points.push_back(q.cast<float>());
+      }
     slam->add_lidar(s);
     t += 0.2;
   }
@@ -227,4 +234,37 @@ TEST(FloorRevisit, ANewLevelNearAFloorStaysWhenItsPlaceIsAnother) {
   EXPECT_FALSE(w.messages->said("reached again"));
   EXPECT_EQ(w.slam->transitions()[1].to, 2);
   EXPECT_EQ(w.slam->floor_status().num_floors, 3u);
+}
+
+// The TF floor_<k> -> odom carries the graph's correction: the robot drawn from its odometry stands
+// on its latest optimized keyframe. The floor's anchor (the odometry when the floor was opened)
+// leaves it off by the drift the loop closures corrected; with a 3 cm range noise the scans drift,
+// and walking up and down room A closes loops. The Summit's elevator bag was 4.5 m off with the
+// anchor, in the live view as in RViz.
+TEST(FloorRevisit, TheFloorToOdometryTransformCarriesTheCorrectionOfTheGraph) {
+  Walk w;
+  w.noise = 0.03;
+  w.stand(2);
+  for (int k = 0; k < 3; ++k) {
+    w.walk_to(-7);
+    w.turn_round();
+    w.walk_to(-0.5);
+    w.turn_round();
+  }
+  int loops = 0;
+  for (const auto& m : w.messages->lines)
+    loops += m.find("loop closure accepted") != std::string::npos;
+  ASSERT_GT(loops, 0);
+  const auto corrected = w.slam->floor_from_odom();
+  const auto anchor = w.slam->floor_anchor_from_odom();
+  ASSERT_TRUE(corrected && anchor);
+  const auto path = w.slam->floor_path(0);
+  const auto& kfs = w.slam->keyframes();
+  ASSERT_FALSE(path.empty());
+  ASSERT_EQ(kfs.back().stamp, path.back().first);
+  const gtsam::Pose3 drawn = *corrected * kfs.back().T_odom_base;
+  const gtsam::Pose3 anchored = *anchor * kfs.back().T_odom_base;
+  // The loops moved the latest keyframe (1.7 mm here): the anchor misses it, the TF does not.
+  EXPECT_GT((anchored.translation() - path.back().second.translation()).norm(), 5e-4);
+  EXPECT_LT((drawn.translation() - path.back().second.translation()).norm(), 1e-6);
 }

@@ -1930,12 +1930,25 @@ SlamSystem::FloorStatus SlamSystem::floor_status() const {
   return st;
 }
 
-std::optional<gtsam::Pose3> SlamSystem::floor_from_odom() const {
+std::optional<gtsam::Pose3> SlamSystem::floor_anchor_from_odom() const {
   const auto& s = *impl_;
   const FloorId f = s.mgr.last_floor();
   const auto fl = s.backend.floors();
   if (std::find(fl.begin(), fl.end(), s.key_floor(f)) == fl.end()) return std::nullopt;
   return s.backend.floor(f).T_odom_floor().inverse();
+}
+
+std::optional<gtsam::Pose3> SlamSystem::floor_from_odom() const {
+  const auto& s = *impl_;
+  const FloorId f = s.mgr.last_floor();
+  const auto fl = s.backend.floors();
+  if (std::find(fl.begin(), fl.end(), s.key_floor(f)) == fl.end()) return std::nullopt;
+  const FloorGraph& g = s.backend.floor(f);
+  const auto ids = g.keyframe_ids();
+  if (ids.empty()) return g.T_odom_floor().inverse();
+  // The optimized pose of the latest keyframe against the odometry's when it was taken: the
+  // drift the graph has corrected so far (zero until a loop closes).
+  return g.pose(ids.back()) * s.backend.keyframe(ids.back()).T_odom_base.inverse();
 }
 
 std::vector<std::pair<Timestamp, gtsam::Pose3>> SlamSystem::floor_path(FloorId floor) const {

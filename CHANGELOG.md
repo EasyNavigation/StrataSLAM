@@ -161,6 +161,10 @@
 
 ### Fixed
 
+- The TF `floor_<k> -> odom` was the floor's fixed anchor: the loop closures corrected the map but never the TF, so the
+  live view, RViz and a navigation stack showed the robot off the optimized map by the drift corrected so far (4.5 m
+  after the ride on the Summit's elevator bag). It now carries the graph's correction at the floor's latest keyframe;
+  `map -> floor_<k>` keeps the anchors (ADR-0075).
 - The install steps: the README cloned into `strataslam` and then ran `src/StrataSLAM/scripts/install_deps.sh`; both the
   README and `docs/user/install.md` now clone into the repository's own folder, `StrataSLAM`, with its URL. Both say
   that every new terminal must source `~/strataslam_ws/install/setup.bash` (or `~/.bashrc` once) before `strataslam`,
@@ -171,6 +175,9 @@
   found, and the command line also finds it in the repository's CMake build (`build/strataslam_core/`).
 - `strataslam fuse` ended its output without a newline; it now ends with the folder it wrote. `strataslam doctor`
   with no sensor data said "static transforms for" with an empty list: it says the chain was not checked.
+- `scripts/install_deps.sh` installs `make` and `ca-certificates`: since it skips apt's recommended packages, a clean
+  Ubuntu 24.04 had no build tool and could not fetch small_gicp over https (`check_install.sh core` failed; the CI's
+  runners have both).
 - `scripts/check_install.sh ros` runs the first-map tutorial of `docs/user/mapping.md` (simulator bag, doctor, the
   node, save_map, export, grid, fuse, eval) in a shell that sources only the workspace, not just `strataslam --help`.
 - A level reached again identified at the end of the run (ADR-0073) left the climb's keyframes on the level it had

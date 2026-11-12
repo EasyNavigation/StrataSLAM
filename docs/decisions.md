@@ -347,7 +347,7 @@ is advice, not a classification.
 
 The node runs the same check while mapping (`same_level_candidate()`, the test that `fuse` applies to each pair): every
 20 keyframes on a floor, that floor against the others within `same_level_max_dz` of it, and every pair at the end of a
-bag. The relative pose comes in the plane from the odometry (the TF `floor_<k> -> odom` of each floor) and in height
+bag. The relative pose comes in the plane from the odometry (each floor's anchor: where the odometry entered it) and in height
 from the floor manager's level altitudes (`SlamSystem::floor_altitude()`, the `altitude_m` that `fuse` reads): the
 odometry frame misses the height of an elevator or of a change while lost, and with it the two identical floors of
 the simulated elevator (S05, 2.9 m apart by the barometer) were reported 0.05 m apart. The clouds are copied
@@ -1388,3 +1388,23 @@ loop closure corrects it.
 - **Limits.** The first minute (until the floors have been seen at all headings) runs uncalibrated. A building of
   sloping floors only, or a rig that never turns, gives no measurement. The tilted loop closures remain: with the
   drift gone they can be measured again.
+
+## ADR-0075 · `floor_<k> -> odom` carries the graph's correction
+
+The node published `floor_<k> -> odom` as the floor's anchor: where the odometry was when the floor was opened, fixed
+from then on. The loop closures corrected the floor's graph but never reached the TF, so everything that draws the robot
+through it (the live view, RViz, a navigation stack) showed it off the optimized map by the drift corrected so far. On
+the Summit's elevator bag the robot stood 0.5 m off on floor 0 before the ride and 4.5 m off after it, while 24 loop
+closures had put the keyframes right; in the live view it looked as if the robot did not move with the loops.
+
+**Decision.** As `map -> odom` in slam_toolbox, Cartographer or RTAB-Map (REP-105), `floor_<k> -> odom` is the graph's
+correction of the odometry: the optimized pose of the floor's latest keyframe times the inverse of its odometry pose
+(`SlamSystem::floor_from_odom()`). It changes with every loop closure. The anchor (`floor_anchor_from_odom()`) stays for
+what must not move with the corrections: `map -> floor_<k>` (each floor where the odometry entered it) and the relative
+placement of two floors in the node's same-level check. The map itself does not change: the TF is only published.
+
+**Result.** The Summit's elevator bag: the robot within 0.01 m of its latest optimized keyframe all along (4.56 m at
+most before), the same map (346 keyframes, 24 loop closures).
+
+**Tests.** `strataslam_core/test/floor_revisit_test.cpp`: on a walk whose loops move the latest keyframe, the TF puts
+the odometry's pose on it (within 1e-6 m) where the anchor misses it.

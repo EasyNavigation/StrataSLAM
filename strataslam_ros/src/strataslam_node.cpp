@@ -1380,7 +1380,8 @@ class StrataslamNode : public rclcpp::Node {
         // where the odometry entered it (its height included). `strataslam fuse` refines this
         // offline.
         auto floors = floor_from_odom_;
-        if (st.floor >= 0) floors[st.floor] = *fo;
+        if (st.floor >= 0)
+          if (const auto anchor = slam_->floor_anchor_from_odom()) floors[st.floor] = *anchor;
         if (!root_floor_ && !floors.empty()) root_floor_ = floors.begin()->first;
         if (root_floor_ && floors.count(*root_floor_)) {
           for (const auto& [k, T_floor_odom] : floors) {
@@ -1431,7 +1432,7 @@ class StrataslamNode : public rclcpp::Node {
     }
     if (st.floor >= 0) {
       last_floor_ = st.floor;
-      if (const auto fo = slam_->floor_from_odom()) floor_from_odom_[st.floor] = *fo;
+      if (const auto anchor = slam_->floor_anchor_from_odom()) floor_from_odom_[st.floor] = *anchor;
     }
     if (st.floor != last_state_floor_ || st.pending != last_pending_ ||
         st.num_floors != last_num_floors_ || state_counter_++ % 10 == 0) {
@@ -1725,8 +1726,8 @@ class StrataslamNode : public rclcpp::Node {
   std::chrono::steady_clock::time_point cloud_not_before_{};  ///< see publish_cloud
   double wait_for_viewer_s_ = 0.0;
   strataslam::Extrinsics ext_;
-  std::map<int, gtsam::Pose3>
-      floor_from_odom_;  ///< latest T_floor_odom of every floor (same-level checks)
+  std::map<int, gtsam::Pose3> floor_from_odom_;  ///< every floor's anchor T_floor_odom (map ->
+                                                 ///< floor_<k>, same-level checks)
   std::map<int, size_t> level_checked_kfs_;  ///< keyframes of a floor at its last same-level check
   std::set<std::pair<int, int>> level_reported_;
   std::future<std::vector<strataslam::LevelCandidate>> level_job_;

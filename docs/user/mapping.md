@@ -52,7 +52,8 @@ and nothing starts.
   type), `/strataslam/floor_cloud` (current floor).
 - **TF.** The node owns the frames above the robot's odometry, as a SLAM does in REP-105:
   `map -> floor_<k> -> odom -> base_frame`. `map` (`robot.map_frame`) is the first floor; every other floor hangs from
-  it where the odometry entered it, its height included (`strataslam fuse` refines that offline). If nothing else
+  it where the odometry entered it, its height included (`strataslam fuse` refines that offline). `floor_<k> -> odom` carries the
+  loop closures' correction of the odometry, so it changes with each (ADR-0075). If nothing else
   publishes `odom -> base_frame`, the node does, from its odometry; if the robot does (wheel odometry, as the Summit and
   the Tiago), the node publishes `floor_<k> -> odom` as the correction on top of it, and its own odometry
   (`/strataslam/odometry`) is in a sibling frame `strataslam_odom`. The start-up log says which.

@@ -111,8 +111,14 @@ class SlamSystem {
     std::optional<TransitionType> last_transition;
   };
   FloorStatus floor_status() const;
-  /// T_floor_odom of the active floor (for the TF `floor_<k> -> odom`), if a floor graph exists.
+  /// T_floor_odom of the active floor (the TF `floor_<k> -> odom`), if a floor graph exists: the
+  /// graph's correction of the odometry at the floor's latest keyframe, so that the robot drawn
+  /// from its odometry stands where the optimized map puts it (REP-105, as `map -> odom` in other
+  /// SLAM stacks). It changes with every loop closure.
   std::optional<gtsam::Pose3> floor_from_odom() const;
+  /// The floor's fixed anchor: where the odometry was when the floor was opened. It places the
+  /// floors against each other (`map -> floor_<k>`) and does not move with the corrections.
+  std::optional<gtsam::Pose3> floor_anchor_from_odom() const;
   /// Optimized keyframe poses (stamp, T_floor_base) of a floor, in insertion order.
   std::vector<std::pair<Timestamp, gtsam::Pose3>> floor_path(FloorId floor) const;
   /// Voxelized cloud of a floor in its own frame, rebuilt from the optimized keyframe poses.
