@@ -644,9 +644,9 @@ gtsam::Pose3 quarter_turns(double t) {
 
 // Turning on a level floor, the IMU's up against the floor the LiDAR sees shows the offset at every
 // heading: with `accel_bias: false` the log says it with the calibration it asks for, and the
-// odometry stays tilted by what of the offset the IMU's gravity bound leaves; the calibrated IMU
-// agrees. Scans at 5 Hz: the test runs 100 s three times, which in a coverage build (-O0) takes
-// minutes.
+// odometry stays tilted by what of the offset the IMU's gravity bound leaves. Scans at 5 Hz: 100 s
+// of a walk take minutes in a coverage or sanitizer build (-O0), so the calibrated run is a test of
+// its own, which CI runs alongside (the two in one test took 21 min under ASan, the job's 45).
 TEST(ImuMount, TheAccelerometerOffsetIsMeasuredAgainstTheFloorAndSaid) {
   auto turning = [](double t) { return quarter_turns(t); };
   auto w = [](double t) { return Vector3d(0, 0, quarter_rate(t)); };
@@ -667,6 +667,12 @@ TEST(ImuMount, TheAccelerometerOffsetIsMeasuredAgainstTheFloorAndSaid) {
   EXPECT_NEAR(b[1], -0.1, 0.03);
   // 1.6 deg of offset: the LiDAR takes the odometry within the 1 deg the IMU's gravity allows it.
   EXPECT_GT(raw.tilt_error_deg(quarter_turns(100.0)), 0.4);
+}
+
+// The same walk with the offset calibrated in the profile: the IMU agrees with the floors.
+TEST(ImuMount, ACalibratedAccelerometerAgreesWithTheFloor) {
+  auto turning = [](double t) { return quarter_turns(t); };
+  auto w = [](double t) { return Vector3d(0, 0, quarter_rate(t)); };
   HandheldRig calibrated(std::array<double, 3>{0.25, -0.1, 0}, /*floor=*/true);
   calibrated.scan_period_ms = 200;
   calibrated.accel_offset = Vector3d(0.25, -0.1, 0);
