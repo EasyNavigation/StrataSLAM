@@ -291,6 +291,32 @@ TEST(FloorManager, ACarriedRigsStairsEndWhileItsBearerWalksOn) {
   EXPECT_NEAR(r.ended()->delta_z, 3.0, 0.2);
 }
 
+// A hand-held rig picked up 1 m: the odometry's height opens a transition; told it was the device
+// (ADR-0076), the transition it opened ends on its floor and the altitude stays there. A transition
+// open before the lift (stairs) is left open.
+TEST(FloorManager, ATransitionAPickUpOpenedEndsOnItsFloor) {
+  Rig r;
+  r.stand(3);
+  const Timestamp lift_start = r.t;
+  for (int i = 1; i <= 10; ++i) r.step(r.pos + Vector3d(0, 0, 0.1));  // 1 m in 1 s, straight up
+  ASSERT_EQ(r.count(FloorEvent::Kind::TransitionStarted), 1);
+  const FloorEvent ev = r.mgr.device_lifted(1.0, lift_start);
+  EXPECT_EQ(ev.kind, FloorEvent::Kind::TransitionEnded);
+  EXPECT_EQ(ev.from, 0);
+  EXPECT_EQ(ev.to, 0);
+  r.walk(20.0);  // carried at the new height: no transition opens again
+  EXPECT_EQ(r.count(FloorEvent::Kind::TransitionStarted), 1);
+  EXPECT_EQ(r.mgr.floor(), 0);
+  EXPECT_EQ(r.mgr.num_floors(), 1u);
+
+  Rig stairs;
+  stairs.stand(3);
+  stairs.climb(1.5, 6.0, true);  // half a flight: a transition is open
+  ASSERT_EQ(stairs.mgr.state(), FloorState::InTransition);
+  EXPECT_EQ(stairs.mgr.device_lifted(0.5, stairs.t - 1'000'000'000).kind, FloorEvent::Kind::None);
+  EXPECT_EQ(stairs.mgr.state(), FloorState::InTransition);
+}
+
 TEST(FloorManager, ALongPlateauAfterAClimbThatIsNotAWholeFloorIsALevel) {
   // 1.5 m up a ramp, then 60 m on a level: a mezzanine, not a multiple of the 3 m prior.
   Rig r;
