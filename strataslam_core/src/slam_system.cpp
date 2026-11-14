@@ -39,7 +39,12 @@ struct SlamSystem::Impl {
   bool imu_checked = false;             // the start-up check of gravity against the TF has run
   bool imu_trusted = false;  // its samples are used: the TF agreed, or the mounting was learned
   bool imu_learned = false;  // the mounting was learned from the motion (no more checks)
+  // Height sensors still sending: a sample since the last frame, and the frame time (the frontend's
+  // clock, not the sensor's) when one last came. A silent IMU or barometer sees no floor change.
+  bool imu_since_frame = false, baro_since_frame = false;
+  bool imu_silent = false, baro_silent = false;
   double imu_sign = 1.0, imu_scale = 1.0;
+  Timestamp imu_frame = 0, baro_frame = 0, watch_start = 0;
   Timestamp last_fe_stamp =
       0;  // stamp of the last valid frontend pose (rotations for the IMU mounting)
   Timestamp turn_start =
@@ -163,6 +168,7 @@ struct SlamSystem::Impl {
     FloorId from_floor = 0;
     std::optional<KeyframeId> kf_before;
     bool in_transition = false;  ///< started inside stairs or a ramp the odometry was measuring
+    bool height_cues = false;    ///< a height sensor was sending all along (height_cues_live)
   } pending;
 
   static FloorManagerConfig floor_config(const Config& c, FloorManagerConfig base) {
@@ -1231,6 +1237,45 @@ struct SlamSystem::Impl {
                             ? std::optional<KeyframeId>(last_kf_on_floor[from_floor])
                             : std::nullopt;
     pending.in_transition = mgr.in_observed_transition();
+    pending.height_cues = height_cues_live();
+  }
+
+  /// A height sensor of the profile (barometer, IMU measuring floor changes) is still sending: a
+  /// floor change could not go unnoticed. One that fell silent sees none (the portable rig's camera
+  /// and IMU stopped 20 s before an elevator ride three floors down: the loss in the cabin was
+  /// taken for no floor change, as if the IMU had seen the cabin stand still).
+  bool height_cues_live() const {
+    return (cfg.sensors.barometer.enabled && !baro_silent && baro_frame != 0) ||
+           (cfg.sensors.imu.enabled && cfg.sensors.imu.floor_changes && !imu_silent &&
+            imu_frame != 0);
+  }
+
+  /// Per frame: which height sensors have sent since the last one, said in the log when one falls
+  /// silent and when it comes back.
+  void watch_height_sensors(Timestamp stamp) {
+    constexpr Timestamp kSilence = 2'000'000'000;
+    if (watch_start == 0) watch_start = stamp;
+    const auto watch = [&](bool enabled, bool& since, Timestamp& last, bool& silent,
+                           const char* name) {
+      if (!enabled) return;
+      if (since) {
+        if (silent)
+          log->log(LogLevel::Info,
+                   strprintf("%s: data again after %.1f s", name, (stamp - last) * 1e-9));
+        silent = false;
+        last = stamp;
+      } else if (!silent && stamp - (last ? last : watch_start) > kSilence) {
+        silent = true;
+        log->log(LogLevel::Warn,
+                 strprintf("%s: no data for %.1f s: floor changes it would measure go unnoticed "
+                           "until it comes back, and a tracking loss may be one",
+                           name, (stamp - (last ? last : watch_start)) * 1e-9));
+      }
+      since = false;
+    };
+    watch(cfg.sensors.imu.enabled && cfg.sensors.imu.floor_changes, imu_since_frame, imu_frame,
+          imu_silent, "IMU");
+    watch(cfg.sensors.barometer.enabled, baro_since_frame, baro_frame, baro_silent, "barometer");
   }
 
   /// Tries to place the pending session on an existing floor (relocalization); otherwise opens a
@@ -1244,13 +1289,12 @@ struct SlamSystem::Impl {
     // when the odometry is lost in the cabin: a glass cabin looks onto the floor it left
     // (Elevator-VIGS Mall-E: relocalized on floor 0 half-way up, the ride was dropped).
     if (mgr.state() == FloorState::InTransition) return;
-    // With a barometer or an IMU a floor change cannot go unnoticed, so a tracking loss is not one:
-    // the session stays on its floor; with `multifloor.enabled: false` there is no other floor to
-    // go to. Otherwise the change is unobservable and every floor is a relocalization candidate
-    // (and a failure to relocalize opens a new floor).
-    const bool height_sensors = cfg.sensors.barometer.enabled ||
-                                (cfg.sensors.imu.enabled && cfg.sensors.imu.floor_changes) ||
-                                !cfg.multifloor.enabled;
+    // With a barometer or an IMU sending a floor change cannot go unnoticed, so a tracking loss is
+    // not one: the session stays on its floor; with `multifloor.enabled: false` there is no other
+    // floor to go to. Otherwise (none, or silent since the loss) the change is unobservable and
+    // every floor is a relocalization candidate (and a failure to relocalize opens a new floor).
+    pending.height_cues = pending.height_cues && height_cues_live();
+    const bool height_sensors = pending.height_cues || !cfg.multifloor.enabled;
     // Relocalization may legitimately look at every floor: it decides which floor this session is
     // on.
     if (vis && tuning.vocabulary) {
@@ -1288,9 +1332,8 @@ struct SlamSystem::Impl {
   /// sensors the session stays on its floor, otherwise the change was unobservable and it gets a
   /// new floor.
   void give_up_pending() {
-    const bool height_sensors = cfg.sensors.barometer.enabled ||
-                                (cfg.sensors.imu.enabled && cfg.sensors.imu.floor_changes) ||
-                                !cfg.multifloor.enabled;
+    const bool height_sensors =
+        (pending.height_cues && height_cues_live()) || !cfg.multifloor.enabled;
     if (height_sensors) {
       // Not relocalized, but the height sensors saw no change: a new session of the same floor.
       const FloorId f = pending.from_floor;
@@ -1798,6 +1841,7 @@ struct SlamSystem::Impl {
     // `multifloor.enabled: false`: one level, the floor manager never leaves floor 0 (an outdoor
     // drive has slopes, not floors). A tracking loss still splits sessions (handle_lost).
     if (!cfg.multifloor.enabled) return;
+    watch_height_sensors(stamp);
     FloorSample fs;
     fs.stamp = stamp;
     fs.tracking_ok = r.valid;
@@ -1822,6 +1866,7 @@ void SlamSystem::add_imu(const ImuSample& raw) {
   if (!s.cfg.sensors.imu.enabled) return;
   // The accelerometer's calibration, in its own frame, before anything reads it (the mounting,
   // the gravity, the vertical acceleration): ADR-0072.
+  s.imu_since_frame = true;
   ImuSample m = raw;
   if (s.accel_bias) m.accel -= *s.accel_bias;
   s.imu_mount->add_imu(m);
@@ -1834,6 +1879,7 @@ void SlamSystem::add_imu(const ImuSample& raw) {
 void SlamSystem::add_baro(const BaroSample& b) {
   auto& s = *impl_;
   if (!s.baro_filter) return;
+  s.baro_since_frame = true;
   s.baro_h = s.baro_filter->update(b.stamp, b.pressure_pa);
 }
 void SlamSystem::add_baro_reference(const BaroSample& b) {

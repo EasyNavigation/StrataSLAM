@@ -19,6 +19,8 @@
 
 ### Added
 
+- The IMU and the barometer are watched: one that falls silent for 2 s is said in the log (and when it comes back),
+  and a tracking loss while no height sensor sends is an unobservable change, not a stay on the floor (ADR-0077).
 - A hand-held rig picked up or put down (from a table, the floor) is told from a floor change by the floor the LiDAR
   sees under it staying, and opens no transition: the portable rig's walk on floor 0 was 120 s in a transition, and
   Elevator-VIGS rigs are put down at every control point. A carried rig's stairs end when its bearer walks on, and a ride

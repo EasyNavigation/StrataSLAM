@@ -110,9 +110,13 @@ std::vector<Vector3d> building(bool same_room) {
   return w;
 }
 
+/// Where a room unlike any other stands, far from the route (reached only by a jump: a ride the
+/// odometry did not follow).
+constexpr double kFar = 100.0;
+
 /// Height of the walking surface at x along the route.
 double surface(double x) {
-  if (x <= 0) return 0;
+  if (x <= 0 || x > kFar - 20) return 0;
   if (x <= kRampA) return kSlope * x;
   if (x <= kCorridorEnd) return 3;
   if (x <= kFootB) return 3 - kSlope * (x - kCorridorEnd);
@@ -128,22 +132,48 @@ struct Walk {
   double t = 0;
   double x = -0.5, yaw = M_PI;  // in room A, facing its back wall
   double carry = 1.2;           ///< m, the sensor above the walking surface
+  bool imu_sends = false;       ///< an IMU at rest in the vertical (100 Hz) before each scan
+  double last_yaw = M_PI;
 
-  /// `same_room`: room B is room A turned round (the place of floor 0), or another room.
-  explicit Walk(bool same_room = true) : world(building(same_room)) {
+  /// `same_room`: room B is room A turned round (the place of floor 0), or another room. `imu`:
+  /// the profile declares an IMU that measures floor changes, sending while `imu_sends`.
+  explicit Walk(bool same_room = true, bool imu = false) : world(building(same_room)) {
     Config cfg;
     cfg.robot.platform = Platform::Handheld;
     cfg.sensors.lidar.enabled = true;
-    cfg.sensors.imu.enabled = false;
+    cfg.sensors.imu.enabled = imu;
+    imu_sends = imu;
     cfg.fusion.odometry_from = OdometryFrom::Lidar;
     cfg.multifloor.floor_height_prior.reset();  // as Elevator-VIGS is mapped: storeys differ
     slam = std::make_unique<SlamSystem>(cfg, Extrinsics(), SystemTuning(), messages);
+    // A hall at kFar, 14 x 7 m, its pillars where no room of the route has them.
+    std::mt19937 rng(13);
+    face(world, rng, {kFar - 14, -3.5, 0}, {14, 0, 0}, {0, 7, 0}, kDensity);
+    face(world, rng, {kFar - 14, -3.5, 0}, {14, 0, 0}, {0, 0, 3}, kDensity);
+    face(world, rng, {kFar - 14, 3.5, 0}, {14, 0, 0}, {0, 0, 3}, kDensity);
+    face(world, rng, {kFar - 14, -3.5, 0}, {0, 7, 0}, {0, 0, 3}, kDensity);
+    face(world, rng, {kFar, -3.5, 0}, {0, 7, 0}, {0, 0, 3}, kDensity);
+    for (const auto& [px, py] :
+         std::vector<std::pair<double, double>>{{-3, 1.5}, {-6.5, -2}, {-10, 0.5}, {-12, -1}}) {
+      face(world, rng, {kFar + px, py, 0}, {0.5, 0, 0}, {0, 0, 3}, 2 * kDensity);
+      face(world, rng, {kFar + px, py, 0}, {0, 0.5, 0}, {0, 0, 3}, 2 * kDensity);
+    }
   }
   /// A scan (5 Hz) of the world within 12 m, the sensor 1.2 m above the walking surface.
   void scan() {
     const gtsam::Pose3 T(gtsam::Rot3::Yaw(yaw), gtsam::Point3(x, 0, surface(x) + carry));
     LidarScan s;
     s.stamp = 1'000'000'000LL + static_cast<Timestamp>(std::llround(t * 1e9));
+    if (imu_sends) {
+      for (int k = 19; k >= 0; --k) {  // the 0.2 s since the last scan, turning as the scan did
+        ImuSample m;
+        m.stamp = s.stamp - k * 10'000'000LL;
+        m.accel = Vector3d(0, 0, 9.80665);
+        m.gyro = Vector3d(0, 0, std::remainder(yaw - last_yaw, 2 * M_PI) / 0.2);
+        slam->add_imu(m);
+      }
+    }
+    last_yaw = yaw;
     std::normal_distribution<double> n(0.0, 1.0);
     for (const auto& p : world)
       if ((p - T.translation()).norm() < 12.0) {
@@ -330,4 +360,36 @@ TEST(FloorRevisit, AViewsFloorCloudIsBuiltFromFewerPointsAndCoversTheSameFloor) 
   const auto [lo_v, hi_v] = extent(view);
   EXPECT_LT((lo_f - lo_v).norm(), 1.0f);
   EXPECT_LT((hi_f - hi_v).norm(), 1.0f);
+}
+
+// The portable rig (2026-11-13): its camera and IMU stopped 20 s before an elevator ride, and the
+// session lost in the cabin was kept on the floor it left, as a height sensor that saw no change
+// keeps it. A sensor that fell silent sees none, and says so: the loss is an unobservable change,
+// and a place relocalization does not find is a new floor. While the IMU sends, the session stays.
+TEST(FloorRevisit, ASessionLostAfterTheImuFellSilentIsNotKeptOnItsFloor) {
+  for (const bool still_sends : {true, false}) {
+    Walk w(/*same_room=*/true, /*imu=*/true);
+    w.stand(2);
+    w.walk_to(-7);
+    w.turn_round();
+    w.walk_to(-1);
+    w.imu_sends = still_sends;
+    w.stand(3);
+    w.x = 3 * kFar;  // a cabin the LiDAR sees nothing of: the odometry is lost
+    w.stand(3);
+    w.x = kFar - 1;  // and out of it, in a room it never saw
+    w.stand(3);
+    w.walk_to(kFar - 9);
+    w.stand(2);
+    w.slam->finalize();  // the session not relocalized is decided at the end of the run
+    SCOPED_TRACE(still_sends ? "the IMU sends" : "the IMU fell silent");
+    EXPECT_EQ(w.messages->said("IMU: no data for"), !still_sends);
+    if (still_sends) {
+      EXPECT_TRUE(w.messages->said("session kept on its floor"));
+      EXPECT_EQ(w.slam->floor_status().num_floors, 1u);
+    } else {
+      EXPECT_TRUE(w.messages->said("opened a new floor (unobservable change)"));
+      EXPECT_EQ(w.slam->floor_status().num_floors, 2u);
+    }
+  }
 }

@@ -1483,3 +1483,21 @@ results move with the times the floors open; Table II changes (`paper/README.md`
 **Tests.** `floor_revisit_test.cpp`: a sensor picked up from the floor and put down again opens no transition; the
 ramps of the other tests are no lift. `floor_manager_test.cpp`: a carried rig's stairs end while its bearer walks on.
 
+## ADR-0077 · A height sensor that falls silent is said, and sees no floor change
+
+The portable rig, 2026-11-13: its camera and IMU (one device, the OAK-D Lite) stopped sending 20 s before an elevator
+ride three floors down. Nothing said so, and the session lost in the cabin was kept on the floor it left, as a height
+sensor that saw no change keeps it: a height sensor was one the profile declared, not one that sent.
+
+**Decision.** Per frame (the frontend's clock, not the sensor's), the IMU (with `floor_changes`) and the barometer are
+watched: silent for 2 s, the log says so ("IMU: no data for ... s"), and again when they come back. A session lost
+while no height sensor sends (or one fell silent since the loss) is an unobservable change: every floor is a
+relocalization candidate and a failure to relocalize opens a new floor, as without height sensors. While they send,
+nothing changes.
+
+**Result.** The scenarios (`docs/results.md`) and the Elevator-VIGS sequences are unchanged: their sensors never stop. The portable rig's bag says that its
+IMU stopped; its session lost in the cabin is still relocalized, by the place, onto the identical lobby it left,
+which is the ambiguity no sensor was left to resolve.
+
+**Tests.** `floor_revisit_test.cpp`: a session lost after the IMU fell silent opens a new floor and the log says the
+IMU stopped; with the IMU sending it stays on its floor.
