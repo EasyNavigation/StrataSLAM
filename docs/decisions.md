@@ -1499,5 +1499,6 @@ nothing changes.
 IMU stopped; its session lost in the cabin is still relocalized, by the place, onto the identical lobby it left,
 which is the ambiguity no sensor was left to resolve.
 
-**Tests.** `floor_revisit_test.cpp`: a session lost after the IMU fell silent opens a new floor and the log says the
-IMU stopped; with the IMU sending it stays on its floor.
+**Tests.** `floor_revisit_test.cpp`: a session lost after the IMU or the barometer fell silent opens a new floor, also
+when the sensor comes back after the loss, and the log says it stopped and came back; with the sensor sending, the
+session stays on its floor.

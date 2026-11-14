@@ -133,16 +133,21 @@ struct Walk {
   double x = -0.5, yaw = M_PI;  // in room A, facing its back wall
   double carry = 1.2;           ///< m, the sensor above the walking surface
   bool imu_sends = false;       ///< an IMU at rest in the vertical (100 Hz) before each scan
+  bool baro_sends = false;      ///< a barometer at a constant pressure, one sample per scan
   double last_yaw = M_PI;
 
-  /// `same_room`: room B is room A turned round (the place of floor 0), or another room. `imu`:
-  /// the profile declares an IMU that measures floor changes, sending while `imu_sends`.
-  explicit Walk(bool same_room = true, bool imu = false) : world(building(same_room)) {
+  /// `same_room`: room B is room A turned round (the place of floor 0), or another room. `imu`,
+  /// `baro`: the profile declares an IMU that measures floor changes, a barometer, sending while
+  /// `imu_sends`, `baro_sends`.
+  explicit Walk(bool same_room = true, bool imu = false, bool baro = false)
+      : world(building(same_room)) {
     Config cfg;
     cfg.robot.platform = Platform::Handheld;
     cfg.sensors.lidar.enabled = true;
     cfg.sensors.imu.enabled = imu;
+    cfg.sensors.barometer.enabled = baro;
     imu_sends = imu;
+    baro_sends = baro;
     cfg.fusion.odometry_from = OdometryFrom::Lidar;
     cfg.multifloor.floor_height_prior.reset();  // as Elevator-VIGS is mapped: storeys differ
     slam = std::make_unique<SlamSystem>(cfg, Extrinsics(), SystemTuning(), messages);
@@ -174,6 +179,7 @@ struct Walk {
       }
     }
     last_yaw = yaw;
+    if (baro_sends) slam->add_baro({s.stamp, 101325.0});
     std::normal_distribution<double> n(0.0, 1.0);
     for (const auto& p : world)
       if ((p - T.translation()).norm() < 12.0) {
@@ -365,31 +371,38 @@ TEST(FloorRevisit, AViewsFloorCloudIsBuiltFromFewerPointsAndCoversTheSameFloor) 
 // The portable rig (2026-11-13): its camera and IMU stopped 20 s before an elevator ride, and the
 // session lost in the cabin was kept on the floor it left, as a height sensor that saw no change
 // keeps it. A sensor that fell silent sees none, and says so: the loss is an unobservable change,
-// and a place relocalization does not find is a new floor. While the IMU sends, the session stays.
-TEST(FloorRevisit, ASessionLostAfterTheImuFellSilentIsNotKeptOnItsFloor) {
-  for (const bool still_sends : {true, false}) {
-    Walk w(/*same_room=*/true, /*imu=*/true);
-    w.stand(2);
-    w.walk_to(-7);
-    w.turn_round();
-    w.walk_to(-1);
-    w.imu_sends = still_sends;
-    w.stand(3);
-    w.x = 3 * kFar;  // a cabin the LiDAR sees nothing of: the odometry is lost
-    w.stand(3);
-    w.x = kFar - 1;  // and out of it, in a room it never saw
-    w.stand(3);
-    w.walk_to(kFar - 9);
-    w.stand(2);
-    w.slam->finalize();  // the session not relocalized is decided at the end of the run
-    SCOPED_TRACE(still_sends ? "the IMU sends" : "the IMU fell silent");
-    EXPECT_EQ(w.messages->said("IMU: no data for"), !still_sends);
-    if (still_sends) {
-      EXPECT_TRUE(w.messages->said("session kept on its floor"));
-      EXPECT_EQ(w.slam->floor_status().num_floors, 1u);
-    } else {
-      EXPECT_TRUE(w.messages->said("opened a new floor (unobservable change)"));
-      EXPECT_EQ(w.slam->floor_status().num_floors, 2u);
+// and a place relocalization does not find is a new floor, even if the sensor comes back after the
+// loss. While the sensor sends, the session stays. The IMU and the barometer alike.
+TEST(FloorRevisit, ASessionLostAfterAHeightSensorFellSilentIsNotKeptOnItsFloor) {
+  for (const bool imu : {true, false}) {
+    const std::string name = imu ? "IMU" : "barometer";
+    for (const bool still_sends : {true, false}) {
+      Walk w(/*same_room=*/true, imu, !imu);
+      bool& sends = imu ? w.imu_sends : w.baro_sends;
+      w.stand(2);
+      w.walk_to(-7);
+      w.turn_round();
+      w.walk_to(-1);
+      sends = still_sends;
+      w.stand(3);
+      w.x = 3 * kFar;  // a cabin the LiDAR sees nothing of: the odometry is lost
+      w.stand(3);
+      w.x = kFar - 1;  // and out of it, in a room it never saw
+      w.stand(3);
+      w.walk_to(kFar - 9);
+      sends = true;  // back, after the loss
+      w.stand(2);
+      w.slam->finalize();  // the session not relocalized is decided at the end of the run
+      SCOPED_TRACE(name + (still_sends ? " sends" : " fell silent"));
+      EXPECT_EQ(w.messages->said(name + ": no data for"), !still_sends);
+      EXPECT_EQ(w.messages->said(name + ": data again"), !still_sends);
+      if (still_sends) {
+        EXPECT_TRUE(w.messages->said("session kept on its floor"));
+        EXPECT_EQ(w.slam->floor_status().num_floors, 1u);
+      } else {
+        EXPECT_TRUE(w.messages->said("opened a new floor (unobservable change)"));
+        EXPECT_EQ(w.slam->floor_status().num_floors, 2u);
+      }
     }
   }
 }
