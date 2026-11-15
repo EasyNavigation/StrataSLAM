@@ -18,6 +18,7 @@ scen=()
 if [ -n "${STRATASLAM_RESULTS_SCENARIOS:-}" ]; then scen=(--scenarios "$STRATASLAM_RESULTS_SCENARIOS"); fi
 repo="$(cd "$(dirname "$0")/.." && pwd)"
 mkdir -p "$out/scenarios_seed42"
+out="$(cd "$out" && pwd)"  # absolute: the parts of a split run are copied from inside each one
 sim="$b/strataslam_sim"; core="$b/strataslam_core"
 # Every step below goes on past a failed run (`|| true`) so that one bad case does not lose the rest: a binary
 # that cannot even start (a shared library not found) would then publish zero passes everywhere. Refuse up front.
