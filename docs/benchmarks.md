@@ -52,7 +52,7 @@ The ORB benchmark warms OpenCV up outside the timed loop: the first call in a pr
 (initialisation of its backends), which a single measured iteration reported once as the cost of an extraction.
 
 The iSAM2 figure is for a mostly sequential graph with sparse loops; graphs with dense loop
-closures cost more (relinearisation), see the S01–S15 reports for end-to-end runtimes.
+closures cost more (relinearisation), see the S01–S17 reports for end-to-end runtimes.
 The tracking number uses simulated feature-level frames (descriptor matching and PnP, no
 image processing), so it is a lower bound for real images.
 

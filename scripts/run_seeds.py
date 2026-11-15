@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Runs the scenarios S01-S15 on several seeds and summarizes them (multi-seed acceptance, ADR-0035).
+"""Runs the scenarios S01-S17 on several seeds and summarizes them (multi-seed acceptance, ADR-0035).
 
     scripts/run_seeds.py --runner build/strataslam_sim/strataslam_scenario_runner --seeds 1001-1020 \
         --out seeds.jsonl --table seeds.md [--scenarios S07,S11] [--jobs 6]
@@ -26,7 +26,7 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-SCENARIOS = [f"S{i:02d}" for i in range(1, 16)]
+SCENARIOS = [f"S{i:02d}" for i in range(1, 18)]
 
 # Metrics the acceptance criteria use, and whether the worst case is the maximum (True) or minimum.
 METRICS: dict[str, list[tuple[str, bool]]] = {
@@ -48,6 +48,10 @@ METRICS: dict[str, list[tuple[str, bool]]] = {
     "S13": [("ate_rmse_m", True), ("map_coverage", False), ("floor_height_err_m", True), ("floors", True)],
     "S14": [("ate_rmse_m", True), ("map_coverage", False), ("floors", True)],
     "S15": [("ate_rmse_m", True), ("map_coverage", False), ("inter_session_loops", False), ("floor_height_err_m", True)],
+    "S16": [("collapse_rate", True), ("floor_height_err_m", True), ("ate_rmse_m", True), ("map_coverage", False), ("floors", True),
+            ("cross_floor_candidates", True)],
+    "S17": [("collapse_rate", True), ("floor_height_err_m", True), ("ate_rmse_m", True), ("map_coverage", False), ("floors", True),
+            ("cross_floor_candidates", True)],
 }
 
 

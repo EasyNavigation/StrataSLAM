@@ -1502,3 +1502,24 @@ which is the ambiguity no sensor was left to resolve.
 **Tests.** `floor_revisit_test.cpp`: a session lost after the IMU or the barometer fell silent opens a new floor, also
 when the sensor comes back after the loss, and the log says it stopped and came back; with the sensor sending, the
 session stays on its floor.
+
+## ADR-0078 · Ramps between identical floors (S16, S17)
+
+No scenario had a ramp between identical floors: S08 and S13 climb to a floor that does not look like the one left,
+and S03, S11 and S15 join their identical floors by stairs and elevators.
+
+**Decision.** Two scenarios join the suite: S16, two identical floors joined by the 11.3 degree ramp, the same ring
+walked on both, camera; S17, the same with a gentle ramp (2.9 degrees, 30 m flights, as S13). Both require no
+collapse, two submaps, a ramp transition, no cross-floor candidate and an ATE under 0.15 m; the floor height error must
+stay under 0.40 m in S16 (S08, on the same ramp: 0.10 m on average and 0.34 at worst over seeds 1001-1020) and 0.25 m
+in S17. `scripts/run_seeds.py` runs S01-S17 by default (it stopped at S15).
+
+**Result.** S16 passes in every seed of 1001-1020 and S17 in 15: no collapse in any, but in five the floor height is
+off by 0.26-1.16 m. In two of them the visual odometry reads 1.84 m at the landing between the ramp's two 1.5 m
+flights, a valid floor change, so the transition closes there and the second flight (1 m) is taken as no floor change;
+in the other three the drift along 60 m of gentle ramp reaches the height. Merging a climb that resumes right after a
+new level was reached into the same transition would cure the first case, but it changes how consecutive floors
+passed by stairs are counted (S15), so it is left for later. With 1 px of camera noise (seeds 1001-1005) neither
+collapses, but the floor height error passes in 4 and 3 of 5 runs at 640x480 and in 4 and 1 at 320x240, as S13 does
+on the gentle ramp of S17 (4 and 2): the height of a ramp is the visual odometry's, and its noise adds up along the
+flights. `docs/seeds_baseline.json` holds S16 at 20 of 20 and S17 at 15 of 20.

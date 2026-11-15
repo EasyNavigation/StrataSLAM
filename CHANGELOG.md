@@ -19,6 +19,9 @@
 
 ### Added
 
+- Two scenarios with a ramp between identical floors, S16 (11.3 degrees) and S17 (2.9 degrees) (ADR-0078).
+  `scripts/run_seeds.py` runs S01-S17 by default (it stopped at S15), and `docs/seeds_baseline.json` holds the rates
+  of S16 (20 of 20) and S17 (15 of 20).
 - The IMU and the barometer are watched: one that falls silent for 2 s is said in the log (and when it comes back),
   and a tracking loss while no height sensor sends is an unobservable change, not a stay on the floor (ADR-0077).
 - A hand-held rig picked up or put down (from a table, the floor) is told from a floor change by the floor the LiDAR

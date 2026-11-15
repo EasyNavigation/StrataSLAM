@@ -127,6 +127,21 @@ ScenarioSpec make_scenario(const std::string& id, uint64_t seed) {
     s.trajectory = share(tb.build());
     enable_camera(s);
     s.tuning.backend.debug_disable_floor_gating = (id == "S04");
+  } else if (id == "S16" || id == "S17") {
+    s.description = id == "S16" ? "Two identical floors, ramp, the same ring walked on both, camera"
+                                : "S16 with a gentle ramp (2.9 degrees, 30 m flights)";
+    bc.num_floors = 2;
+    bc.identical_floors = true;
+    bc.with_ramp = true;
+    if (id == "S17") bc.ramp_length = 30.0;
+    bc.with_stairs = bc.with_elevator = false;
+    s.building = std::make_shared<Building>(bc);
+    TrajectoryBuilder tb(*s.building, tc, 0, {3, 3}, 0.0);
+    tb.walk({{29, 3}, {29, 19}, {3, 19}, {3, 3}, {29, 3}, {29, 9.1}}).ramp(0, true);
+    // Same ring on floor 1 (identical geometry and texture), from the ramp's exit.
+    tb.walk({{29, 12}, {29, 19}, {3, 19}, {3, 3}, {29, 3}, {29, 10}});
+    s.trajectory = share(tb.build());
+    enable_camera(s);
   } else if (id == "S08") {
     s.description = "Ramp between floors, camera";
     bc.num_floors = 2;
@@ -755,6 +770,19 @@ void apply_acceptance_criteria(const ScenarioSpec& spec, const Simulator& sim, c
     if (r.map.floors.size() != 2)
       fail("expected 2 submaps, got " + std::to_string(r.map.floors.size()));
     expect_transition(strataslam::TransitionType::Stairs);
+    if (r.cross_floor_candidates != 0) fail("gating layer 1 returned cross-floor candidates");
+  } else if (spec.id == "S16" || spec.id == "S17") {
+    // S03's criteria with a ramp. The camera measures the 11 deg ramp's 3 m to 0.10 m on average
+    // and 0.34 m at worst in S08 over seeds 1001-1020; the gentle one as S13.
+    if (m.collapse != 0.0) fail("collapse rate " + std::to_string(m.collapse) + " != 0");
+    const double limit = spec.id == "S16" ? 0.40 : 0.25;
+    if (m.worst_height_err > limit)
+      fail("floor height error " + std::to_string(m.worst_height_err) + " > " +
+           std::to_string(limit) + " m");
+    check_ate(0.15);
+    if (r.map.floors.size() != 2)
+      fail("expected 2 submaps, got " + std::to_string(r.map.floors.size()));
+    expect_transition(strataslam::TransitionType::Ramp);
     if (r.cross_floor_candidates != 0) fail("gating layer 1 returned cross-floor candidates");
   } else if (spec.id == "S04") {
     // Negative control: without the gate, aliased candidates become accepted loops across floors.
