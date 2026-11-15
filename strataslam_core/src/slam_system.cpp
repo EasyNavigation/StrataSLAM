@@ -733,7 +733,10 @@ struct SlamSystem::Impl {
     in.cloud = std::move(cloud);
     in.T_base_sensor = T_base_sensor;
     in.baro_height = baro_h;
-    in.up_body = quasi_static_up();
+    // Not on a ground robot whose IMU heading is not learned yet: a TF that has it turned half
+    // around reads every tilt backwards, and these priors tilted the floor its keyframes were on
+    // (0.6 deg, a 2.5 m drop over 120 m that the odometry did not have).
+    if (cfg.robot.platform != Platform::Ground || imu_learned) in.up_body = quasi_static_up();
     // In motion, with a calibrated accelerometer, its mean over the last 2 s, looser (ADR-0073).
     // Uncalibrated, its offset (0.5-1.5 deg on Elevator-VIGS) would tilt every floor by that much,
     // where the frontend's 1 deg bound leaves the LiDAR room to find the level (Campus1, Station1:

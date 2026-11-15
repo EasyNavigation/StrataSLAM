@@ -177,6 +177,10 @@
   `colour` start hidden.
 ### Fixed
 
+- A ground robot's keyframes took the IMU's quasi-static gravity as an attitude prior before the IMU's mounting was
+  learned: with a TF that has the IMU turned half around, every tilt was read backwards and the floor those keyframes
+  were on tilted (0.6 deg, a 2.5 m drop over 120 m that the odometry did not have). They wait for the mounting, as
+  every other use of that IMU already did (ADR-0058).
 - The live view's floor cloud lagged a loop closure by up to 20 s on a long drive (KITTI 06): the node built it from
   every keyframe point at the map's voxel (9 million points, 2.3 s), and its 10 % budget spaced the refreshes 25 s
   apart. The published floor cloud is now a view's: built from at most 3 million keyframe points, its voxel grown to
