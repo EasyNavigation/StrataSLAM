@@ -10,7 +10,8 @@ acceptance criteria use, plus each failure.
 
 Exit code: without --baseline, 1 if any run fails its criteria (or crashes). With --baseline FILE (JSON
 {scenario: pass rate}), 1 only if a scenario passes on fewer seeds than its baseline rate: the nightly
-regression gate of ADR-0035. --write-baseline FILE records the rates of this run.
+regression gate of ADR-0035. --write-baseline FILE records the rates of this run. --input FILE... summarizes runs
+already made (JSONL written by --out, e.g. the parts of a split nightly) instead of running any.
 """
 from __future__ import annotations
 
@@ -110,7 +111,8 @@ def table(rows: list[dict[str, object]]) -> str:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--runner", required=True, help="strataslam_scenario_runner executable")
+    ap.add_argument("--runner", help="strataslam_scenario_runner executable (not with --input)")
+    ap.add_argument("--input", type=Path, nargs="+", help="summarize these JSONL files instead of running")
     ap.add_argument("--seeds", default="1-5", help="e.g. 1-5 or 1001-1020 or 3,7,9")
     ap.add_argument("--scenarios", default=",".join(SCENARIOS))
     ap.add_argument("--jobs", type=int, default=4)
@@ -120,13 +122,18 @@ def main() -> int:
     ap.add_argument("--write-baseline", type=Path, help="write this run's pass rates as a baseline")
     ap.add_argument("--runner-args", default="", help="extra runner options, e.g. '--pixel-sigma 1 --image 640x480'")
     a = ap.parse_args()
+    if not a.input and not a.runner:
+        ap.error("--runner is required unless --input is given")
     jobs = [(s, seed) for s in a.scenarios.split(",") for seed in parse_seeds(a.seeds)]
     # The simulator's ray casting uses OpenMP: share the cores between the parallel runs (the SLAM itself
     # runs on one thread, and the simulated data do not depend on the number of OpenMP threads).
     env = dict(os.environ)
     env.setdefault("OMP_NUM_THREADS", str(max(1, (os.cpu_count() or 1) // a.jobs)))
-    with ThreadPoolExecutor(max_workers=a.jobs) as ex:
-        rows = list(ex.map(lambda j: run_one(a.runner, j[0], j[1], a.runner_args.split(), env), jobs))
+    if a.input:
+        rows = [json.loads(line) for f in a.input for line in f.read_text().splitlines() if line.strip()]
+    else:
+        with ThreadPoolExecutor(max_workers=a.jobs) as ex:
+            rows = list(ex.map(lambda j: run_one(a.runner, j[0], j[1], a.runner_args.split(), env), jobs))
     if a.out:
         a.out.write_text("".join(json.dumps(r) + "\n" for r in rows))
     md = table(rows)

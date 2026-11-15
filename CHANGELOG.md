@@ -178,6 +178,10 @@
   height colours and the camera's colours keeps the camera, since each tab had a camera of its own (Rerun 0.22 cannot
   share one). The three are layers (`floors`, `height`, `colour`) that the eye in the panel shows or hides; `height` and
   `colour` start hidden.
+- The nightly results run as five jobs side by side (seed 42 with the real data and benchmarks, and four groups of
+  scenarios) and a sixth that joins them and applies the regression gates: in one job they took 2.6-4.5 h and went
+  past the 6 h a job may run on a slow runner. `scripts/make_results.sh` takes `STRATASLAM_RESULTS_STEPS` and
+  `STRATASLAM_RESULTS_SCENARIOS`, and `scripts/run_seeds.py --input` summarizes runs already made.
 ### Fixed
 
 - A ground robot's keyframes took the IMU's quasi-static gravity as an attitude prior before the IMU's mounting was

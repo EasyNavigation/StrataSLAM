@@ -6,16 +6,22 @@
 #   scripts/download_datasets.sh data
 #   scripts/make_results.sh build data results [jobs]
 # STRATASLAM_RESULTS_FROM=N resumes at step N (the outputs of the earlier steps must be in results/).
+# Split runs (the nightly, whose single job outgrew the 6 h a runner allows): STRATASLAM_RESULTS_STEPS=2,3 runs only
+# those steps, STRATASLAM_RESULTS_SCENARIOS=S01,S02 only those scenarios in steps 2 and 3, and
+# STRATASLAM_RESULTS_STEPS=none runs nothing: the parts found in <out_dir>/parts/*/ are merged and the pages written.
 set -euo pipefail
 b="$1"; data="$2"; out="$3"; jobs="${4:-4}"
 from="${STRATASLAM_RESULTS_FROM:-1}"
-step() { [ "$1" -ge "$from" ]; }
+steps=",${STRATASLAM_RESULTS_STEPS:-1,2,3,4,5,6,7},"
+step() { [ "$1" -ge "$from" ] && [[ "$steps" == *",$1,"* ]]; }
+scen=()
+if [ -n "${STRATASLAM_RESULTS_SCENARIOS:-}" ]; then scen=(--scenarios "$STRATASLAM_RESULTS_SCENARIOS"); fi
 repo="$(cd "$(dirname "$0")/.." && pwd)"
 mkdir -p "$out/scenarios_seed42"
 sim="$b/strataslam_sim"; core="$b/strataslam_core"
 # Every step below goes on past a failed run (`|| true`) so that one bad case does not lose the rest: a binary
 # that cannot even start (a shared library not found) would then publish zero passes everywhere. Refuse up front.
-for t in "$sim/strataslam_scenario_tests" "$sim/strataslam_scenario_runner" "$sim/strataslam_fusion_ablation" \
+[ "$steps" = ",none," ] || for t in "$sim/strataslam_scenario_tests" "$sim/strataslam_scenario_runner" "$sim/strataslam_fusion_ablation" \
          "$sim/strataslam_fusion_ablation_synthetic" "$sim/strataslam_benchmarks" "$core/strataslam_tum_run" \
          "$core/strataslam_kitti_run"; do
   if [ ! -x "$t" ] || ldd "$t" | grep -q "not found"; then
@@ -32,15 +38,15 @@ STRATASLAM_REPORT_DIR="$out/scenarios_seed42" "$sim/strataslam_scenario_tests" -
 fi
 if step 2; then
 echo "2/7 scenarios S01-S17, seeds 1001-1020"
-python3 "$repo/scripts/run_seeds.py" --runner "$sim/strataslam_scenario_runner" --seeds 1001-1020 --jobs "$jobs" \
+python3 "$repo/scripts/run_seeds.py" --runner "$sim/strataslam_scenario_runner" --seeds 1001-1020 --jobs "$jobs" "${scen[@]}" \
   --out "$out/seeds.jsonl" --table "$out/seeds.md" --write-baseline "$out/seeds_baseline.json" > "$out/seeds.log" || true
 
 fi
 if step 3; then
 echo "3/7 camera noise: 1 px at 640x480 and at 320x240, seeds 1001-1005"
-python3 "$repo/scripts/run_seeds.py" --runner "$sim/strataslam_scenario_runner" --seeds 1001-1005 --jobs "$jobs" \
+python3 "$repo/scripts/run_seeds.py" --runner "$sim/strataslam_scenario_runner" --seeds 1001-1005 --jobs "$jobs" "${scen[@]}" \
   --runner-args '--pixel-sigma 1 --image 640x480' --out "$out/noise_640.jsonl" --table "$out/noise_640.md" > "$out/noise_640.log" || true
-python3 "$repo/scripts/run_seeds.py" --runner "$sim/strataslam_scenario_runner" --seeds 1001-1005 --jobs "$jobs" \
+python3 "$repo/scripts/run_seeds.py" --runner "$sim/strataslam_scenario_runner" --seeds 1001-1005 --jobs "$jobs" "${scen[@]}" \
   --runner-args '--pixel-sigma 1' --out "$out/noise_320.jsonl" --table "$out/noise_320.md" > "$out/noise_320.log" || true
 
 fi
@@ -70,6 +76,19 @@ fi
 if step 7; then
 echo "7/7 benchmarks (spec 12.8)"
 "$sim/strataslam_benchmarks" --benchmark_format=json --benchmark_out="$out/benchmarks.json" > "$out/benchmarks.txt" 2>&1 || true
+fi
+
+# The parts of a split run: the runs of steps 2 and 3 joined and summarized again, everything else copied.
+if [ -d "$out/parts" ]; then
+  for k in seeds noise_640 noise_320; do
+    shopt -s nullglob; f=("$out"/parts/*/"$k.jsonl"); shopt -u nullglob
+    [ ${#f[@]} -gt 0 ] || continue
+    extra=(); [ "$k" = seeds ] && extra=(--write-baseline "$out/seeds_baseline.json")
+    python3 "$repo/scripts/run_seeds.py" --input "${f[@]}" --out "$out/$k.jsonl" --table "$out/$k.md" "${extra[@]}" > /dev/null || true
+  done
+  for d in "$out"/parts/*/; do
+    (cd "$d" && find . -type f ! -name 'seeds*' ! -name 'noise_*' -exec cp --parents {} "$out/" \;)
+  done
 fi
 
 # When and from what: the date, and the commit when the sources are a git checkout (AUD-054).
