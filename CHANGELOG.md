@@ -25,20 +25,19 @@
 - The IMU and the barometer are watched: one that falls silent for 2 s is said in the log (and when it comes back),
   and a tracking loss while no height sensor sends is an unobservable change, not a stay on the floor (ADR-0077).
 - A hand-held rig picked up or put down (from a table, the floor) is told from a floor change by the floor the LiDAR
-  sees under it staying, and opens no transition: the portable rig's walk on floor 0 was 120 s in a transition, and
-  Elevator-VIGS rigs are put down at every control point. A carried rig's stairs end when its bearer walks on, and a ride
-  the IMU detects must brake as it pushed. Elevator-VIGS: the 16 real errors sum to 13.3 m instead of 17.5 m, no false
-  level, simulated sequences and Table I unchanged (ADR-0076).
+  sees under it staying, and opens no transition: a hand-held rig's walk on its first floor stayed minutes in a
+  transition, and the Elevator-VIGS rigs are put down at every control point. A carried rig's stairs end when its bearer
+  walks on, and a ride the IMU detects must brake as it pushed. On Elevator-VIGS the real sequences' height errors fall,
+  with no false level; the simulated sequences and the scenarios over seeds 1001-1020 are unchanged (ADR-0076).
 - The live view marks where each transition joins two floors: a cyan marker where it left (the foot of an elevator
   ride, the top or foot of stairs and ramps) and a larger one where it arrived, labelled with the type and height the
   node measured (`elevator 0→1 +14.77 m`), in the 3D and the top view (`transitions` in the panel).
 - `imu.accel_bias: auto | false | [x, y, z]` (ADR-0072, ADR-0074): the accelerometer's offset in its own frame,
   subtracted from every sample. With a LiDAR the node compares the IMU's gravity with the floors it sees at all
-  headings: an uncalibrated accelerometer tilts the map and every metre walked climbs (the portable rig's OAK-D Lite:
-  1.8 deg, 3 cm per metre), which opened false ramps on Elevator-VIGS. `auto` (the default) applies the offset it
-  measures, up to 3 deg, and says the list to set; `false` only says it. Known, the IMU's gravity also holds the roll
-  and pitch of every keyframe in the graph (ADR-0073). Elevator-VIGS real sequences: the sum of the height errors 22.2
-  -> 17.5 m.
+  headings: an uncalibrated accelerometer tilts the map and every metre walked climbs (a hand-held OAK-D Lite's: about 3
+  cm per metre), which opened false ramps on Elevator-VIGS. `auto` (the default) applies the offset it measures, up to 3
+  deg, and says the list to set; `false` only says it. Known, the IMU's gravity also holds the roll and pitch of every
+  keyframe in the graph (ADR-0073). On the real Elevator-VIGS sequences the height errors fall.
 - `external_odometry.prior: auto | true | false` (ADR-0071): with `true` the robot's wheel odometry is the LiDAR's
   motion prior too: it predicts and deskews each scan, carries the pose through a scan the registration loses (no new
   session) and vetoes a degraded registration that leaves it; `auto` keeps it the camera's only, as before. On the
@@ -94,17 +93,17 @@
   node publishes the floor cloud from the bag loop and waits for the viewer; the map is unchanged by it. What the
   sensors see right now is published on `/strataslam/scan` and `/strataslam/depth_cloud` (odometry frame).
 - Same-level candidates while mapping: the node checks each floor against the others as `fuse` does
-  (`same_level_candidate()`, ADR-0031) in a background thread and logs the pairs that could be one level; nothing
-  is applied and the map is unchanged. On `prueba_03` it reports the same three pairs as the fusion. The height
-  between two floors comes from the floor manager (`SlamSystem::floor_altitude()`), not from the odometry frame,
-  which misses an elevator.
+  (`same_level_candidate()`, ADR-0031) in a background thread and logs the pairs that could be one level; nothing is
+  applied and the map is unchanged. On a Summit XL recording it reports the same pairs as the fusion. The height between
+  two floors comes from the floor manager (`SlamSystem::floor_altitude()`), not from the odometry frame, which misses an
+  elevator.
 - The node says at start which sensor tracks the motion and which closes loops, with `auto` resolved
   (`pipeline started: odometry from the lidar (auto), loop closures from the camera and lidar`).
 - Profiles of the PAL Tiago: `tiago_lidar_camera.yaml` (the profile of the corridor rosbag) and
   `tiago_camera_only.yaml` (to study the visual tracking).
-- `multifloor.mode: floors | single | planar` (ADR-0045). `planar` keeps a ground robot on one plane: no drift in
-  height reaches the map (the Tiago corridor: 0.12 m in z, 0.75 m in xy with the camera, wheels and IMU).
-  `enabled: false` still means `single`.
+- `multifloor.mode: floors | single | planar` (ADR-0045). `planar` keeps a ground robot on one plane: no drift in height
+  reaches the map (on a Tiago corridor recording the camera, wheels and IMU came closer to the LiDAR map in xy and much
+  closer in z). `enabled: false` still means `single`.
 - `multifloor: {enabled: false}` also holds through a tracking loss: a session that relocalization cannot place stays
   on the only level instead of opening a floor (ADR-0042).
 - The IMU is used however it is mounted (ADR-0044): its rotation, sign convention and scale are learned from the
@@ -149,10 +148,10 @@
   length (525 px) and grow with a longer one: the same motion and calibration errors cover more pixels. A hand-held
   OAK-D Lite at 720p (1000 px) lost tracking in 46 % of its frames, now 25 %, as at 360p; VGA cameras and the
   simulator are unchanged.
-- With an IMU, the LiDAR odometry keeps its roll and pitch within 1 deg of gravity (`max_tilt_error_deg` of the
-  LiDAR frontend), as the visual one did: its pitch drift no longer turns a flat drive into a climb (ADR-0058).
-  On a ground robot this waits until the IMU's heading is learned from the accelerations. With the Summit XL's IMU,
-  `prueba_03` has 3 floors instead of 4, without the floor 2.2 m under floor 0.
+- With an IMU, the LiDAR odometry keeps its roll and pitch within 1 deg of gravity (`max_tilt_error_deg` of the LiDAR
+  frontend), as the visual one did: its pitch drift no longer turns a flat drive into a climb (ADR-0058). On a ground
+  robot this waits until the IMU's heading is learned from the accelerations. With the Summit XL's IMU, a false floor
+  under floor 0 is gone.
 - A LiDAR loop closure whose GICP residual is above the fixed bound (`loop_max_mean_error`, tuned indoors) is accepted
   when the residual is at most four times that of the scan registered against its own predecessors (ADR-0057). Outdoors
   most right loops were rejected: KITTI 07 now closes its loop (ATE 0.81 to 0.41 m), 05 gains 12 loops; 06 and 09 are
@@ -192,29 +191,29 @@
   every keyframe point at the map's voxel (9 million points, 2.3 s), and its 10 % budget spaced the refreshes 25 s
   apart. The published floor cloud is now a view's: built from at most 3 million keyframe points, its voxel grown to
   keep it under the 1.5 million a viewer draws; refreshed every 3-5 s on KITTI 06, the saved map unchanged.
-- The robot's height jumped where it reached a new floor (1.44 m and 0.66 m on the Summit's prueba_03, in the live view
-  as in RViz): the correction in `floor_<k> -> odom` carried the latest keyframe's roll and pitch (3.5 deg on a ramp),
-  which tilted the whole odometry frame, and each new floor was placed in `map` by its anchor, with the odometry's
-  drift since the start. The correction is level now (heading and position), and a new floor is placed where the floor
-  the robot came from had it on its corrected map (ADR-0075). The saved maps do not change.
+- The robot's height jumped where it reached a new floor (by up to more than a metre on a Summit XL recording, in the
+  live view as in RViz): the correction in `floor_<k> -> odom` carried the latest keyframe's roll and pitch (degrees on
+  a ramp), which tilted the whole odometry frame, and each new floor was placed in `map` by its anchor, with the
+  odometry's drift since the start. The correction is level now (heading and position), and a new floor is placed where
+  the floor the robot came from had it on its corrected map (ADR-0075). The saved maps do not change.
 - The live view's path broke at an elevator: in the cabin the odometry stays at the floor it left and the ride's height
   comes at once with the next floor, which started a new piece of path. The pieces are joined where the floor changed,
   to the floors' optimized paths and the transitions' trail as drawn, nearest in time (the floor state and the
-  odometry's jump do not arrive together: on the Summit the first pose on the new floor was still at the old height,
-  on Elevator-VIGS Office4 the ride's 14.7 m came while the transition was open). Where a floor's path took over part
-  of a transition's trail (stairs whose lower half joined the floor reached), the trail is joined to it at the cut:
-  the step there is what that floor's loop closures corrected (Office4's stairs down, 2.1 m; prueba_03 at 211 s, 3.1 m,
-  where floor 2's map came out tilted). Transitions are drawn in cyan and lost
-  tracking in grey, each with its own name in the level line (they were white like the rest on the path, and both
-  "transition / lost" in grey in the level line).
+  odometry's jump do not arrive together: on a Summit XL recording the first pose on the new floor was still at the old
+  height, on an Elevator-VIGS sequence the ride's height came while the transition was open). Where a floor's path took
+  over part of a transition's trail (stairs whose lower half joined the floor reached), the trail is joined to it at the
+  cut: the step there is what that floor's loop closures corrected (metres on an Elevator-VIGS sequence's stairs down,
+  and on a Summit XL recording where a floor's map came out tilted). Transitions are drawn in cyan and lost tracking in
+  grey, each with its own name in the level line (they were white like the rest on the path, and both "transition /
+  lost" in grey in the level line).
 - The live view drew the floors in the odometry frame, each with its `floor_<k> -> odom`: since that TF carries the
-  correction (ADR-0075), each floor sat where the odometry was on its last visit, and on the Summit's elevator bag
-  floor 0 turned 11 deg against floor 1. It draws in `map` now: the floors with `map -> floor_<k>` (their anchors),
-  the robot and the sensors through `map -> floor_<k> -> odom` (on the optimized map).
+  correction (ADR-0075), each floor sat where the odometry was on its last visit, and on the Summit XL's elevator
+  recording floor 0 turned by degrees against floor 1. It draws in `map` now: the floors with `map -> floor_<k>` (their
+  anchors), the robot and the sensors through `map -> floor_<k> -> odom` (on the optimized map).
 - The TF `floor_<k> -> odom` was the floor's fixed anchor: the loop closures corrected the map but never the TF, so the
-  live view, RViz and a navigation stack showed the robot off the optimized map by the drift corrected so far (4.5 m
-  after the ride on the Summit's elevator bag). It now carries the graph's correction at the floor's latest keyframe;
-  `map -> floor_<k>` keeps the anchors (ADR-0075).
+  live view, RViz and a navigation stack showed the robot off the optimized map by the drift corrected so far (metres
+  after the ride on the Summit XL's elevator recording). It now carries the graph's correction at the floor's latest
+  keyframe; `map -> floor_<k>` keeps the anchors (ADR-0075).
 - The install steps: the README cloned into `strataslam` and then ran `src/StrataSLAM/scripts/install_deps.sh`; both the
   README and `docs/user/install.md` now clone into the repository's own folder, `StrataSLAM`, with its URL. Both say
   that every new terminal must source `~/strataslam_ws/install/setup.bash` (or `~/.bashrc` once) before `strataslam`,
@@ -231,17 +230,17 @@
 - `scripts/check_install.sh ros` runs the first-map tutorial of `docs/user/mapping.md` (simulator bag, doctor, the
   node, save_map, export, grid, fuse, eval) in a shell that sources only the workspace, not just `strataslam --help`.
 - A level reached again identified at the end of the run (ADR-0073) left the climb's keyframes on the level it had
-  withdrawn, without recording the transition (ADR-0074; Elevator-VIGS Campus4).
+  withdrawn, without recording the transition (ADR-0074).
 - The live view drew a stretch of path twice: grey while a transition was open, and again in the floor's colour
   once its keyframes joined a floor (a sensor lifted before an elevator, the part of a climb that joins a floor). A
   floor's optimized path now takes over the transition's trail over the time its keyframes cover; what no floor
   takes (a cabin) stays grey.
 - A floor bent by the graph and a floor reached again opening a level (ADR-0073). With a calibrated accelerometer
   (`imu.accel_bias`) every keyframe now carries the IMU's gravity (in motion, the accelerometer's 2 s mean, 0.05 rad),
-  so a loop that does not close in height is no longer closed by tilting the floor (the portable rig's floor 0 sank
-  2.3 m over 40 m). A new level nearer an existing one than a whole level's change is that level when its place is
-  found there at the same height by the registration (a mezzanine registers a metre or more above the floor it
-  overlooks and stays a level).
+  so a loop that does not close in height is no longer closed by tilting the floor (a hand-held rig's floor 0 sank by
+  metres across it). A new level nearer an existing one than a whole level's change is that level when its place is
+  found there at the same height by the registration (a mezzanine registers a metre or more above the floor it overlooks
+  and stays a level).
 - A ground robot's elevator rides (ADR-0070): with `imu.floor_changes: true` the IMU measures a ride only while the
   base stands still, drops one the robot drives out of before it brakes, and no longer keeps a ramp the odometry
   measured from ending (a driving base vibrates); until the IMU's heading is learned, the LiDAR's tilt is bounded by
@@ -266,18 +265,18 @@
   failed on 4 of 20 seeds, the floor reached 3-6 m off). A degenerate registration now leaves the prediction along its
   weak direction by no more than a physical acceleration allows (`max_acceleration`, 30 m/s^2, ADR-0061): S15 and S11
   pass on 20 of 20 seeds, KITTI and the Summit and Tiago bags are unchanged.
-- After an elevator ride the floor reached was mapped turned against the one left (Elevator-VIGS: 29-162 deg on the
-  real sequences that had it): the LiDAR odometry turns wrong in a cabin. In a confined space (95 % of the scan within
-  3 m) the rotation is now the gyroscope's and the registration solves the translation only; the floor manager holds
-  the odometry's height there (ADR-0060). Those floors are within 0-13 deg; maps without a cabin are identical. The
-  gyroscope's record no longer loses up to 20 ms of turn at each scan.
-- Elevator rides were lost when the odometry had opened a transition before them (its drift while walking, a jump as
-  the doors closed) and was then lost in the cabin or saw it still: the IMU now takes such a ride, measures it from its
-  onset to the cabin's stop, and leaves what came before on the floor it left (ADR-0059). On Elevator-VIGS the 16 real
-  sequences come closer to their measured rises and round trips (Office4: up by elevator, down by the stairs, a loop
-  closed with its start) and the simulated rides are measured (per-floor ATE 0.07-0.39 m, before up to 23 m). Stairs
-  and steps the odometry tracks are not taken for rides (the IMU's spread), nor is a jolt or a lone brake: the ride
-  whose gentle push a brake ended is found back in 60 s of history.
+- After an elevator ride the floor reached was mapped turned against the one left (on Elevator-VIGS by tens of degrees
+  on the real sequences that had it): the LiDAR odometry turns wrong in a cabin. In a confined space (95 % of the scan
+  within 3 m) the rotation is now the gyroscope's and the registration solves the translation only; the floor manager
+  holds the odometry's height there (ADR-0060). Those floors now arrive much closer to the one left; maps without a
+  cabin are identical. The gyroscope's record no longer loses up to 20 ms of turn at each scan.
+- Elevator rides were lost when the odometry had opened a transition before them (its drift while walking, a jump as the
+  doors closed) and was then lost in the cabin or saw it still: the IMU now takes such a ride, measures it from its
+  onset to the cabin's stop, and leaves what came before on the floor it left (ADR-0059). On Elevator-VIGS every real
+  sequence comes closer to its measured rise or round trip (one that goes up by elevator and down by the stairs closes
+  its loop with its start) and the simulated rides, lost before, are measured. Stairs and steps the odometry tracks are
+  not taken for rides (the IMU's spread), nor is a jolt or a lone brake: the ride whose gentle push a brake ended is
+  found back in 60 s of history.
 - A floor reached again by the stairs after an elevator ride was linked to its keyframes a ride's height off, and its
   loops with them were rejected: the odometry restarts after the ride at the height measured (ADR-0059). New scenario
   S15 (three floors up by elevator, down the stairs).
@@ -286,13 +285,13 @@
   gyroscope measured meanwhile.
 - A hand-held camera with an IMU (OAK-D Lite) mapped almost nothing: three false floor transitions, one ending as a
   63 m lift. Three causes, all fixed:
-  - The start was never levelled: it was tried once, on the first frame, before the IMU had reached the pipeline
-    (0.3 s in). When the first frame does not show the floor either, the start now waits for the IMU at rest over
-    half a second, up to 2 s, and says so when it gives up. It does not wait when the floor is in view: a start that
-    is already moving accelerates in a straight line, which the IMU cannot tell from a tilt (S06 walks off at
-    0.8 m/s^2: 4.7 deg of pitch, a corridor climbed as a 2.3 m ramp). A ground robot's start is still levelled by the ground plane it stands on: until the accelerations show its
-    heading, a TF with the IMU turned half around reads its tilt backwards (the Summit's `prueba_03` got a fourth
-    floor that way).
+  - The start was never levelled: it was tried once, on the first frame, before the IMU had reached the pipeline (0.3 s
+    in). When the first frame does not show the floor either, the start now waits for the IMU at rest over half a
+    second, up to 2 s, and says so when it gives up. It does not wait when the floor is in view: a start that is already
+    moving accelerates in a straight line, which the IMU cannot tell from a tilt (S06 walks off at 0.8 m/s^2: 4.7 deg of
+    pitch, a corridor climbed as a 2.3 m ramp). A ground robot's start is still levelled by the ground plane it stands
+    on: until the accelerations show its heading, a TF with the IMU turned half around reads its tilt backwards (a
+    Summit XL recording got a false floor that way).
   - The floor manager read the IMU's vertical acceleration through the odometry's attitude, so an unlevelled start
     (20 deg) looked like a lift (-0.6 m/s^2). It now uses the IMU's own gravity, from when that can be trusted.
   - The accelerometer's scale was taken from the norm of its mean reading, which shrinks on a sensor that tilts
