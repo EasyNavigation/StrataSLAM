@@ -113,9 +113,8 @@ ScenarioSpec make_scenario(const std::string& id, uint64_t seed) {
     s.trajectory = share(tb.build());
     s.sim.lidar = true;
     s.slam.sensors.lidar.enabled = true;
-  } else if (id == "S03" || id == "S04") {
-    s.description = id == "S03" ? "Two identical floors, stairs, camera, no IMU"
-                                : "S03 with the floor gate disabled (negative control)";
+  } else if (id == "S03") {
+    s.description = "Two identical floors, stairs, camera, no IMU";
     bc.num_floors = 2;
     bc.identical_floors = true;
     bc.with_elevator = false;
@@ -126,7 +125,6 @@ ScenarioSpec make_scenario(const std::string& id, uint64_t seed) {
     tb.walk({{13.2, 3}, {29, 3}, {29, 19}, {3, 19}, {3, 3}, {13.2, 3}});
     s.trajectory = share(tb.build());
     enable_camera(s);
-    s.tuning.backend.debug_disable_floor_gating = (id == "S04");
   } else if (id == "S16" || id == "S17") {
     s.description = id == "S16" ? "Two identical floors, ramp, the same ring walked on both, camera"
                                 : "S16 with a gentle ramp (2.9 degrees, 30 m flights)";
@@ -636,10 +634,9 @@ void apply_acceptance_criteria(const ScenarioSpec& spec, const Simulator& sim, c
                                ScenarioResult& r) {
   const auto fail = [&](const std::string& msg) { r.failures.push_back(msg); };
   // Layer 1 of the floor gate in every scenario, not only S03: the place databases (BoW and Scan
-  // Context) are per floor, so no candidate of another floor may ever come up. Only the negative
-  // control (S04, gate off) sees them. Before, a single Scan Context database for all floors passed
-  // every LiDAR scenario (audit AUD-034).
-  if (!spec.tuning.backend.debug_disable_floor_gating && r.cross_floor_candidates != 0)
+  // Context) are per floor, so no candidate of another floor may ever come up. Before, a single
+  // Scan Context database for all floors passed every LiDAR scenario (audit AUD-034).
+  if (r.cross_floor_candidates != 0)
     fail(std::to_string(r.cross_floor_candidates) +
          " loop candidates from another floor reached the loop search (layer 1 of the gate)");
   const auto check_ate = [&](double limit) {
@@ -784,10 +781,6 @@ void apply_acceptance_criteria(const ScenarioSpec& spec, const Simulator& sim, c
       fail("expected 2 submaps, got " + std::to_string(r.map.floors.size()));
     expect_transition(strataslam::TransitionType::Ramp);
     if (r.cross_floor_candidates != 0) fail("gating layer 1 returned cross-floor candidates");
-  } else if (spec.id == "S04") {
-    // Negative control: without the gate, aliased candidates become accepted loops across floors.
-    if (!(m.collapse > 0.0))
-      fail("negative control did not m.collapse: the test cannot detect the problem");
   } else if (spec.id == "S08" || spec.id == "S13") {
     expect_transition(strataslam::TransitionType::Ramp);
     check_ate(0.15);

@@ -1,7 +1,7 @@
 # Fusing floors, export, evaluation
 
 ```bash
-strataslam fuse <map_dir> [--formulation lie4|se3soft|euler] [--anchors anchors.yaml] [--floor-height-prior 3.0]
+strataslam fuse <map_dir> [--anchors anchors.yaml] [--floor-height-prior 3.0]
 strataslam export <map_dir> [--format pcd|ply]       # default: pcd
 strataslam export <map_dir> --format grid [--resolution 0.05] [--min-height 0.05] [--max-height 2.0]
 strataslam eval <map_dir> --gt <ground_truth_dir> [--json]

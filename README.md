@@ -109,7 +109,7 @@ its reason) in [docs/decisions.md](docs/decisions.md).
 | `strataslam_core/` | ROS-free C++ library: config, Pose4 and Lie-group math, frontends, place recognition, floor manager, backend, mapping, I/O, fusion, metrics |
 | `strataslam_sim/` | synthetic multi-floor buildings (stairs, elevator, ramp, atrium), trajectories, sensors with exact ground truth, scenarios S01-S17, benchmarks |
 | `strataslam_msgs/`, `strataslam_ros/` | messages/services, the node, launch file, example profiles, simulator-bag exporter |
-| `strataslam_tools/` | Python: the `strataslam` command line, doctor, evaluation, export, fusion ablation |
+| `strataslam_tools/` | Python: the `strataslam` command line, doctor, evaluation, export |
 
 ## Build and test
 
@@ -140,9 +140,8 @@ Sanitizers: `-DSTRATASLAM_ENABLE_SANITIZERS=ON`. Coverage: `-DSTRATASLAM_ENABLE_
 
 ## Results
 
-[docs/results.md](docs/results.md): the seventeen synthetic scenarios on 20 seeds (pass rate, mean, deviation and worst
-case of every criterion, each failure with its seed), a camera-noise study, the fusion ablation, TUM RGB-D fr1/fr2 and
-a KITTI drive. [docs/scenarios.md](docs/scenarios.md) has the full report of every scenario on the CI seed. Both are
+[docs/results.md](docs/results.md): the sixteen synthetic scenarios on 20 seeds (pass rate, mean, deviation and worst
+case of every criterion, each failure with its seed), a camera-noise study, TUM RGB-D fr1/fr2 and a KITTI drive. [docs/scenarios.md](docs/scenarios.md) has the full report of every scenario on the CI seed. Both are
 written by `scripts/make_results.sh` (ADR-0035). [docs/benchmarks.md](docs/benchmarks.md) keeps the history of the
 real-data and performance figures, one row per measurement, taken from the same script's output.
 

@@ -169,27 +169,21 @@ struct Synthetic {
 
 }  // namespace
 
-TEST(Fusion, AllThreeFormulationsRecoverTheFloorTransformsFromTransitions) {
+TEST(Fusion, RecoversTheFloorTransformsFromTransitions) {
   const Synthetic s;
-  for (Formulation f : {Formulation::Lie4, Formulation::Se3Soft, Formulation::Euler}) {
-    FusionOptions opt;
-    opt.formulation = f;
-    opt.floor_height_prior = 3.0;
-    const auto r = fuse(s.map, opt);
-    ASSERT_TRUE(r.ok()) << to_string(f) << ": " << r.error().message;
-    ASSERT_TRUE(r.value().finite());
-    EXPECT_TRUE(r.value().converged);
-    for (const auto& [floor, X] : s.truth) {
-      EXPECT_LT(pose4_err(r.value().floor_to_map.at(floor), X), 2e-3)
-          << to_string(f) << " floor " << floor;
-    }
-    EXPECT_EQ(r.value().covariance.size(), 3u);
-    // The ablation compares formulations by the time of their own part: graph and optimization, a
-    // part of the whole (audit AUD-053: the published time was the whole of fuse(), dominated by
-    // the stacking common to all three).
-    EXPECT_GT(r.value().optimize_seconds, 0.0);
-    EXPECT_LE(r.value().optimize_seconds, r.value().seconds);
+  FusionOptions opt;
+  opt.floor_height_prior = 3.0;
+  const auto r = fuse(s.map, opt);
+  ASSERT_TRUE(r.ok()) << r.error().message;
+  ASSERT_TRUE(r.value().finite());
+  EXPECT_TRUE(r.value().converged);
+  for (const auto& [floor, X] : s.truth) {
+    EXPECT_LT(pose4_err(r.value().floor_to_map.at(floor), X), 2e-3) << "floor " << floor;
   }
+  EXPECT_EQ(r.value().covariance.size(), 3u);
+  // The graph and its optimization are a part of the whole, which includes the stacking.
+  EXPECT_GT(r.value().optimize_seconds, 0.0);
+  EXPECT_LE(r.value().optimize_seconds, r.value().seconds);
 }
 
 TEST(Fusion, ElevatorHeightComesFromTheBarometerFactor) {
@@ -330,16 +324,6 @@ TEST(Fusion, AnchorsLoadFromYaml) {
   EXPECT_NEAR(a.value()[0].sigma, 0.02, 1e-12);
   EXPECT_EQ(a.value()[0].points.at(1).size(), 2u);
   EXPECT_FALSE(load_anchors(path + ".missing").ok());
-}
-
-TEST(Fusion, FormulationNamesRoundTrip) {
-  for (Formulation f : {Formulation::Lie4, Formulation::Se3Soft, Formulation::Euler}) {
-    Formulation back;
-    ASSERT_TRUE(parse_formulation(to_string(f), &back));
-    EXPECT_EQ(back, f);
-  }
-  Formulation x;
-  EXPECT_FALSE(parse_formulation("nope", &x));
 }
 
 // ---------------- same level ----------------

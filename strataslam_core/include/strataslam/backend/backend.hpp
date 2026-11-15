@@ -78,7 +78,7 @@ class Backend {
   /// Read-only: every insertion goes through the backend, which applies the floor gate (audit
   /// A4A5-05: a mutable FloorGraph& let a caller insert a keyframe of another floor and then close
   /// a loop to it).
-  const FloorGraph& floor(FloorId id) const { return *graphs_.at(graph_key(id)); }
+  const FloorGraph& floor(FloorId id) const { return *graphs_.at(id); }
   /// Pose in the odometry frame of the (optimized) keyframe, or the recorded odometry for -1.
   gtsam::Pose3 pose_odom(KeyframeId id) const;
   const std::vector<AcceptedLoop>& loops() const { return loops_; }
@@ -89,7 +89,6 @@ class Backend {
   void optimize_all();
 
  private:
-  FloorId graph_key(FloorId f) const { return cfg_.debug_disable_floor_gating ? 0 : f; }
   void insert_into_graph(const KeyframeInput& kf, std::optional<KeyframeId> odom_from,
                          const gtsam::Pose3& odom_rel, std::optional<KeyframeId> bridge_from);
 

@@ -35,7 +35,6 @@ jobs:
             build/strataslam_sim/libstrataslam_sim.so
             build/strataslam_core/strataslam_write_sample_clouds
             build/strataslam_core/strataslam_eval_tool
-            build/strataslam_sim/strataslam_fusion_ablation
             build/strataslam_sim/strataslam_scenario_runner
 
   coverage:

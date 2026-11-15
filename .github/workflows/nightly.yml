@@ -8,7 +8,7 @@ on:
 jobs:
   part:
     # Every published result regenerated with scripts/make_results.sh: scenarios on seed 42 and on seeds
-    # 1001-1020, camera-noise study, fusion ablations, TUM fr1/fr2, KITTI, benchmarks. Split into parts that run
+    # 1001-1020, camera-noise study, TUM fr1/fr2, KITTI, benchmarks. Split into parts that run
     # side by side: in one job the whole took 2.6-4.5 h on a normal runner and went past the 6 h a job may run on a
     # slow one (the same build took 15 min instead of 3). The scenario groups balance their run times.
     name: results (${{ matrix.part }})
@@ -18,8 +18,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {part: other, steps: "1,4,5,6,7", scenarios: ""}
-          - {part: s01-s06, steps: "2,3", scenarios: "S01,S02,S03,S04,S05,S06"}
+          - {part: other, steps: "1,4,5,6", scenarios: ""}
+          - {part: s01-s06, steps: "2,3", scenarios: "S01,S02,S03,S05,S06"}
           - {part: s07-s14, steps: "2,3", scenarios: "S07,S08,S09,S10,S12,S13,S14"}
           - {part: s11-s16, steps: "2,3", scenarios: "S11,S16"}
           - {part: s15-s17, steps: "2,3", scenarios: "S15,S17"}
@@ -79,8 +79,6 @@ jobs:
           worse = [f"{k}: {now.get(k, float('inf')):.4f} > 1.1 x {v:.4f}" for k, v in base.items() if not now.get(k, float("inf")) <= 1.1 * v]
           print("\n".join(worse) or "real-data ATE within 10 % of the baseline"); sys.exit(1 if worse else 0)
           PY
-      # Fusion ablation (spec 12.5): every formulation converges, no NaN, on S07 and S11 over 20 seeds.
-      - run: python3 strataslam_tools/bench/fusion_ablation.py --input results/ablation_scenarios.jsonl
       - uses: actions/upload-artifact@v4
         if: always()
         with:

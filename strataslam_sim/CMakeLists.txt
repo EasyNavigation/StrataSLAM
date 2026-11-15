@@ -30,11 +30,6 @@ add_executable(strataslam_probe_scenario tools/probe_scenario.cpp)
 target_link_libraries(strataslam_probe_scenario PRIVATE strataslam_sim)
 add_executable(strataslam_dump_scenario tools/dump_scenario.cpp)
 target_link_libraries(strataslam_dump_scenario PRIVATE strataslam_sim)
-add_executable(strataslam_fusion_ablation tools/fusion_ablation.cpp)
-target_link_libraries(strataslam_fusion_ablation PRIVATE strataslam_sim)
-add_executable(strataslam_fusion_ablation_synthetic tools/fusion_ablation_synthetic.cpp)
-target_link_libraries(strataslam_fusion_ablation_synthetic PRIVATE strataslam::core)
-target_compile_options(strataslam_fusion_ablation_synthetic PRIVATE -Wall -Wextra -Werror)
 add_executable(strataslam_probe_pairs tools/probe_pairs.cpp)
 target_link_libraries(strataslam_probe_pairs PRIVATE strataslam_sim)
 add_executable(strataslam_scenario_runner tools/scenario_runner.cpp)
@@ -74,7 +69,7 @@ include(\"\${CMAKE_CURRENT_LIST_DIR}/strataslam_simTargets.cmake\")
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/strataslam_simConfig.cmake DESTINATION share/strataslam_sim/cmake)
 
 # Same warning policy as the library for every tool, test and benchmark (spec 12.9; audit AUD-019).
-foreach(t strataslam_probe_lidar strataslam_probe_visual strataslam_probe_scenario strataslam_dump_scenario strataslam_fusion_ablation
+foreach(t strataslam_probe_lidar strataslam_probe_visual strataslam_probe_scenario strataslam_dump_scenario
           strataslam_probe_pairs strataslam_sim_tests strataslam_scenario_tests strataslam_benchmarks)
   if(TARGET ${t})
     target_compile_options(${t} PRIVATE -Wall -Wextra -Werror)

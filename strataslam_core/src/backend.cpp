@@ -26,9 +26,8 @@ Result<void> Backend::add_keyframe(const KeyframeInput& kf, std::optional<Keyfra
   if (registry_.count(kf.id)) return Error{"duplicate keyframe id"};
   registry_[kf.id] = kf;
   order_.push_back(kf.id);
-  // Transition keyframes are recorded but join no graph - except in the debug control mode, which
-  // emulates a system without floor-gated submaps (one graph, odometry chained through everything).
-  if (kf.floor < 0 && !cfg_.debug_disable_floor_gating) return {};
+  // Transition keyframes are recorded but join no graph.
+  if (kf.floor < 0) return {};
   insert_into_graph(kf, odom_from, odom_rel, bridge_from);
   return {};
 }
@@ -36,7 +35,7 @@ Result<void> Backend::add_keyframe(const KeyframeInput& kf, std::optional<Keyfra
 void Backend::insert_into_graph(const KeyframeInput& kf, std::optional<KeyframeId> odom_from,
                                 const gtsam::Pose3& odom_rel,
                                 std::optional<KeyframeId> bridge_from) {
-  const FloorId g = graph_key(kf.floor);
+  const FloorId g = kf.floor;
   auto it = graphs_.find(g);
   if (it == graphs_.end()) {
     // Floor frame origin: yaw and translation of this keyframe, gravity-aligned (no roll/pitch).
@@ -113,8 +112,6 @@ Result<void> Backend::promote_to_floor(const std::vector<KeyframeId>& ids, Floor
 Result<void> Backend::promote_transit_before(const std::vector<KeyframeId>& ids, FloorId floor,
                                              KeyframeId next) {
   if (floor < 0) return Error{"cannot promote keyframes to an unassigned floor"};
-  if (cfg_.debug_disable_floor_gating)
-    return {};  // that control mode already put them in its single graph
   if (!registry_.count(next) || registry_.at(next).floor != floor)
     return Error{"promote_transit_before: the next keyframe is not on the floor"};
   KeyframeId nxt = next;
@@ -132,18 +129,17 @@ Result<void> Backend::promote_transit_before(const std::vector<KeyframeId>& ids,
                         nxt);  // a frontend restart in between: weak link only
     nxt = *it_id;
   }
-  graphs_.at(graph_key(floor))->sort_by_stamp();
+  graphs_.at(floor)->sort_by_stamp();
   return {};
 }
 
 void Backend::add_gravity(KeyframeId id, const Eigen::Vector3d& up_body, double sigma_rad) {
   const FloorId f = floor_of(id);
   if (f < 0) return;
-  graphs_.at(graph_key(f))->add_gravity(id, up_body, sigma_rad);
+  graphs_.at(f)->add_gravity(id, up_body, sigma_rad);
 }
 
 Result<void> Backend::verify_loop_allowed(KeyframeId a, KeyframeId b) const {
-  if (cfg_.debug_disable_floor_gating) return {};
   const FloorId fa = floor_of(a), fb = floor_of(b);
   if (fa < 0 || fb < 0) return Error{"loop closure rejected: keyframe without an assigned floor"};
   if (fa != fb) return Error{"loop closure rejected: keyframes belong to different floors"};
@@ -156,9 +152,8 @@ Result<void> Backend::add_loop(KeyframeId from, KeyframeId to, const gtsam::Pose
   if (auto allowed = verify_loop_allowed(from, to); !allowed) return allowed;
   const FloorId fa = floor_of(from), fb = floor_of(to);
   // Layer 3 lives in FloorGraph::add_loop: the graph of `from` refuses a node it does not hold.
-  // With the debug flag every floor shares one graph, which is how the negative control passes it.
-  FloorGraph& g = *graphs_.at(graph_key(fa));
-  auto r = g.add_loop(from, to, T_from_to, /*check_consistency=*/!cfg_.debug_disable_floor_gating);
+  FloorGraph& g = *graphs_.at(fa);
+  auto r = g.add_loop(from, to, T_from_to, /*check_consistency=*/true);
   if (!r) return r;
   loops_.push_back({from, to, fa, fb});
   return {};
@@ -167,7 +162,7 @@ Result<void> Backend::add_loop(KeyframeId from, KeyframeId to, const gtsam::Pose
 gtsam::Pose3 Backend::pose_odom(KeyframeId id) const {
   const KeyframeInput& kf = registry_.at(id);
   if (kf.floor < 0) return kf.T_odom_base;
-  const FloorGraph& g = *graphs_.at(graph_key(kf.floor));
+  const FloorGraph& g = *graphs_.at(kf.floor);
   return g.T_odom_floor() * g.pose(id);
 }
 

@@ -27,7 +27,8 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-SCENARIOS = [f"S{i:02d}" for i in range(1, 18)]
+# S04 is retired (it was a debug control); the numbers of the others are kept.
+SCENARIOS = [f"S{i:02d}" for i in range(1, 18) if i != 4]
 
 # Metrics the acceptance criteria use, and whether the worst case is the maximum (True) or minimum.
 METRICS: dict[str, list[tuple[str, bool]]] = {
@@ -35,7 +36,6 @@ METRICS: dict[str, list[tuple[str, bool]]] = {
     "S02": [("ate_rmse_m", True), ("map_coverage", False), ("loops_accepted", False)],
     "S03": [("collapse_rate", True), ("floor_height_err_m", True), ("ate_rmse_m", True), ("map_coverage", False), ("floors", True),
             ("cross_floor_candidates", True)],
-    "S04": [("collapse_rate", False)],
     "S05": [("floor_height_err_m", True), ("collapse_rate", True), ("floors", True)],
     "S06": [("floor_height_err_m", True), ("floors", True)],
     "S07": [("fused_trans_err_m", True), ("fused_rot_err_deg", True), ("without_anchors_trans_err_m", True),

@@ -77,7 +77,7 @@ def cmd_map(args: argparse.Namespace) -> int:
 
 
 def cmd_fuse(args: argparse.Namespace) -> int:
-    cmd = [_find_tool("strataslam_fuse", "strataslam_core"), args.map_dir, "--formulation", args.formulation]
+    cmd = [_find_tool("strataslam_fuse", "strataslam_core"), args.map_dir]
     if args.anchors:
         cmd += ["--anchors", args.anchors]
     if args.floor_height_prior is not None:
@@ -233,7 +233,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     f = sub.add_parser("fuse", help="offline floor fusion of a saved map")
     f.add_argument("map_dir")
-    f.add_argument("--formulation", choices=["lie4", "se3soft", "euler"], default="lie4")
     f.add_argument("--anchors")
     f.add_argument("--floor-height-prior", type=float, default=None)
     f.add_argument("--same-level", help='floors confirmed to be one level, e.g. "2,3" or "2,3;0,4" (docs/user/fusion.md)')

@@ -103,7 +103,7 @@ def test_eval_on_a_tiny_map(tmp_path: Path, capsys: pytest.CaptureFixture[str]) 
 
 def test_parser_covers_every_command() -> None:
     p = cli.build_parser()
-    for argv in (["doctor", "p.yaml", "--bag", "b", "--json"], ["map", "p.yaml"], ["fuse", "m", "--formulation", "euler", "--anchors", "a.yaml"],
+    for argv in (["doctor", "p.yaml", "--bag", "b", "--json"], ["map", "p.yaml"], ["fuse", "m", "--anchors", "a.yaml"],
                  ["export", "m", "--format", "pcd"], ["eval", "m", "--gt", "g"], ["vocab", "train", "imgs", "--out", "v.bin"]):
         assert p.parse_args(argv).command == argv[0]
     assert p.parse_args(["export", "m"]).format == "pcd"  # PCD unless asked otherwise

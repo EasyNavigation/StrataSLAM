@@ -2,11 +2,9 @@
 
 #include <gtsam/inference/Symbol.h>
 #include <gtsam/linear/NoiseModel.h>
-#include <gtsam/navigation/AttitudeFactor.h>
 #include <gtsam/nonlinear/GncOptimizer.h>
 #include <gtsam/nonlinear/LevenbergMarquardtOptimizer.h>
 #include <gtsam/nonlinear/Marginals.h>
-#include <gtsam/slam/BetweenFactor.h>
 #include <gtsam/slam/PriorFactor.h>
 #include <yaml-cpp/yaml.h>
 
@@ -19,32 +17,10 @@
 #include <set>
 #include <sstream>
 
-#include "strataslam/fusion/ablation_factors.hpp"
 #include "strataslam/fusion/factors4.hpp"
 #include "strataslam/fusion/registration4.hpp"
 
 namespace strataslam {
-
-const char* to_string(Formulation f) {
-  switch (f) {
-    case Formulation::Lie4:
-      return "lie4";
-    case Formulation::Se3Soft:
-      return "se3soft";
-    case Formulation::Euler:
-      return "euler";
-  }
-  return "lie4";
-}
-bool parse_formulation(const std::string& n, Formulation* out) {
-  for (Formulation f : {Formulation::Lie4, Formulation::Se3Soft, Formulation::Euler}) {
-    if (n == to_string(f)) {
-      *out = f;
-      return true;
-    }
-  }
-  return false;
-}
 
 Pose4 keyframe_pose4(const KeyframeRecord& k) {
   const Eigen::Matrix3d R = k.q.toRotationMatrix();
@@ -107,21 +83,6 @@ gtsam::SharedNoiseModel model_from_cov(const Eigen::Matrix4d& cov) {
   return gtsam::noiseModel::Gaussian::Covariance(cov);
 }
 
-Eigen::Matrix4d reorder_cov_euler(const Eigen::Matrix4d& c4) {
-  // Pose4 tangent (phi, rho_x, rho_y, rho_z) -> Euler ordering (x, y, z, yaw).
-  Eigen::Matrix4d P = Eigen::Matrix4d::Zero();
-  P(0, 1) = 1;
-  P(1, 2) = 1;
-  P(2, 3) = 1;
-  P(3, 0) = 1;
-  return P * c4 * P.transpose();
-}
-
-Pose4 pose4_from_pose3(const gtsam::Pose3& p) {
-  const auto R = p.rotation().matrix();
-  return Pose4(std::atan2(R(1, 0), R(0, 0)), p.translation());
-}
-
 }  // namespace
 
 bool FusionResult::finite() const {
@@ -147,7 +108,7 @@ struct FusionContext {
   std::map<FloorId, Pose4> init;  ///< initial values propagated from the root
 };
 
-/// The factor graph of the chosen formulation.
+/// The factor graph over the floors' Pose4 nodes.
 struct FusionGraph {
   gtsam::NonlinearFactorGraph graph;
   gtsam::Values values;
@@ -507,9 +468,8 @@ void add_stacking_constraints(FusionContext& c) {
     }
 }
 
-/// 3. The factor graph of `c.opt.formulation` over the constraints.
+/// 3. The factor graph over the constraints.
 FusionGraph build_graph(FusionContext& c) {
-  const FusionOptions& opt = c.opt;
   const std::vector<FloorId>& floors = c.floors;
   std::vector<Constraint>& cons = c.cons;
   std::map<FloorId, Pose4>& init = c.init;
@@ -519,79 +479,30 @@ FusionGraph build_graph(FusionContext& c) {
   gtsam::Values& values = g.values;
   std::vector<size_t>& known_inliers = g.known_inliers;
   std::vector<int>& factor_of_constraint = g.factor_of_constraint;
-  const Formulation form = opt.formulation;
 
-  const auto tight = [](size_t d) { return gtsam::noiseModel::Isotropic::Sigma(d, 1e-6); };
-  if (form == Formulation::Lie4) {
-    for (FloorId f : floors) values.insert(key_of(f), init[f]);
-    known_inliers.push_back(graph.size());
-    graph.add(gtsam::PriorFactor<Pose4>(key_of(root), Pose4(), tight(4)));
-  } else if (form == Formulation::Se3Soft) {
-    for (FloorId f : floors)
-      values.insert(key_of(f),
-                    gtsam::Pose3(gtsam::Rot3::Yaw(init[f].theta()), init[f].translation()));
-    known_inliers.push_back(graph.size());
-    graph.add(gtsam::PriorFactor<gtsam::Pose3>(key_of(root), gtsam::Pose3(), tight(6)));
-    for (FloorId f : floors) {  // soft roll/pitch prior: the body z axis stays vertical
-      known_inliers.push_back(graph.size());
-      graph.add(gtsam::Pose3AttitudeFactor(key_of(f), gtsam::Unit3(0, 0, 1),
-                                           gtsam::noiseModel::Isotropic::Sigma(2, 0.01),
-                                           gtsam::Unit3(0, 0, 1)));
-    }
-  } else {
-    for (FloorId f : floors)
-      values.insert(key_of(f), gtsam::Vector4(init[f].translation().x(), init[f].translation().y(),
-                                              init[f].translation().z(), init[f].theta()));
-    known_inliers.push_back(graph.size());
-    graph.add(gtsam::PriorFactor<gtsam::Vector4>(key_of(root), gtsam::Vector4::Zero(), tight(4)));
-  }
+  for (FloorId f : floors) values.insert(key_of(f), init[f]);
+  known_inliers.push_back(graph.size());
+  graph.add(gtsam::PriorFactor<Pose4>(key_of(root), Pose4(),
+                                      gtsam::noiseModel::Isotropic::Sigma(4, 1e-6)));
 
   for (const auto& c : cons) {
     factor_of_constraint.push_back(static_cast<int>(graph.size()));
     if (c.kind == Constraint::Kind::BaroHeight || c.kind == Constraint::Kind::FloorHeightPrior) {
       const auto m = gtsam::noiseModel::Isotropic::Sigma(1, c.sigma);
-      if (form == Formulation::Lie4) {
-        if (c.kind == Constraint::Kind::BaroHeight)
-          graph.add(BaroHeightFactor(key_of(c.a), key_of(c.b), c.dz, m));
-        else
-          graph.add(FloorHeightPrior(key_of(c.a), key_of(c.b), c.dz, m));
-      } else if (form == Formulation::Se3Soft) {
-        graph.add(ablation::Height3Factor(key_of(c.a), key_of(c.b), c.dz, m));
-      } else {
-        graph.add(ablation::EulerHeight(key_of(c.a), key_of(c.b), c.dz, m));
-      }
+      if (c.kind == Constraint::Kind::BaroHeight)
+        graph.add(BaroHeightFactor(key_of(c.a), key_of(c.b), c.dz, m));
+      else
+        graph.add(FloorHeightPrior(key_of(c.a), key_of(c.b), c.dz, m));
       continue;
     }
-    if (form == Formulation::Lie4) {
-      if (c.kind == Constraint::Kind::Anchor) {
-        // Point correspondences enter directly; the height of a replicated structure is not
-        // compared.
-        graph.add(AnchorFactor(key_of(c.a), key_of(c.b), c.pa, c.pb, c.use_z, c.anchor_sigma));
-      } else if (c.kind == Constraint::Kind::Match) {
-        graph.add(CrossFloorMatchFactor(key_of(c.a), key_of(c.b), c.z, model_from_cov(c.cov)));
-      } else {
-        graph.add(TransitionFactor(key_of(c.a), key_of(c.b), c.z, model_from_cov(c.cov)));
-      }
-    } else if (c.kind == Constraint::Kind::Anchor) {
-      // The anchors' point correspondences, as for Pose4: every formulation gets the same
-      // information (ADR-0049).
-      if (form == Formulation::Se3Soft)
-        graph.add(
-            ablation::Anchor3Factor(key_of(c.a), key_of(c.b), c.pa, c.pb, c.use_z, c.anchor_sigma));
-      else
-        graph.add(ablation::EulerAnchorFactor(key_of(c.a), key_of(c.b), c.pa, c.pb, c.use_z,
-                                              c.anchor_sigma));
-    } else if (form == Formulation::Se3Soft) {
-      gtsam::Vector6 s;
-      s << 0.01, 0.01, std::sqrt(c.cov(0, 0)), std::sqrt(c.cov(1, 1)), std::sqrt(c.cov(2, 2)),
-          std::sqrt(c.cov(3, 3));  // roll, pitch, yaw, x, y, z
-      graph.add(gtsam::BetweenFactor<gtsam::Pose3>(
-          key_of(c.a), key_of(c.b), gtsam::Pose3(gtsam::Rot3::Yaw(c.z.theta()), c.z.translation()),
-          gtsam::noiseModel::Diagonal::Sigmas(s)));
+    if (c.kind == Constraint::Kind::Anchor) {
+      // Point correspondences enter directly; the height of a replicated structure is not
+      // compared.
+      graph.add(AnchorFactor(key_of(c.a), key_of(c.b), c.pa, c.pb, c.use_z, c.anchor_sigma));
+    } else if (c.kind == Constraint::Kind::Match) {
+      graph.add(CrossFloorMatchFactor(key_of(c.a), key_of(c.b), c.z, model_from_cov(c.cov)));
     } else {
-      graph.add(ablation::EulerBetween(
-          key_of(c.a), key_of(c.b), c.z,
-          gtsam::noiseModel::Gaussian::Covariance(reorder_cov_euler(c.cov))));
+      graph.add(TransitionFactor(key_of(c.a), key_of(c.b), c.z, model_from_cov(c.cov)));
     }
   }
 
@@ -646,24 +557,13 @@ Result<std::pair<gtsam::Values, gtsam::Vector>> optimize_graph(FusionContext& c,
 /// 5. Poses, constraint report and marginal covariances into `c.res`.
 void collect_results(FusionContext& c, const FusionGraph& g, const gtsam::Values& result,
                      const gtsam::Vector& weights) {
-  const FusionOptions& opt = c.opt;
   FusionResult& res = c.res;
   const std::vector<FloorId>& floors = c.floors;
   std::vector<Constraint>& cons = c.cons;
   const FloorId root = c.root;
   const gtsam::NonlinearFactorGraph& graph = g.graph;
   const std::vector<int>& factor_of_constraint = g.factor_of_constraint;
-  const Formulation form = opt.formulation;
-  for (FloorId f : floors) {
-    if (form == Formulation::Lie4)
-      res.floor_to_map[f] = result.at<Pose4>(key_of(f));
-    else if (form == Formulation::Se3Soft)
-      res.floor_to_map[f] = pose4_from_pose3(result.at<gtsam::Pose3>(key_of(f)));
-    else {
-      const gtsam::Vector4 v = result.at<gtsam::Vector4>(key_of(f));
-      res.floor_to_map[f] = Pose4(v(3), Eigen::Vector3d(v(0), v(1), v(2)));
-    }
-  }
+  for (FloorId f : floors) res.floor_to_map[f] = result.at<Pose4>(key_of(f));
   for (size_t i = 0; i < cons.size(); ++i) {
     ConstraintReport r;
     r.kind = kind_name(cons[i].kind);
@@ -682,19 +582,7 @@ void collect_results(FusionContext& c, const FusionGraph& g, const gtsam::Values
   try {
     gtsam::Marginals marg(graph, result);
     for (FloorId f : floors) {
-      const gtsam::Matrix C = marg.marginalCovariance(key_of(f));
-      Eigen::Matrix4d c4 = Eigen::Matrix4d::Zero();
-      if (form == Formulation::Lie4)
-        c4 = C;
-      else if (form == Formulation::Se3Soft) {  // (rx, ry, rz, x, y, z) -> (yaw, x, y, z)
-        const int idx[4] = {2, 3, 4, 5};
-        for (int i = 0; i < 4; ++i)
-          for (int j = 0; j < 4; ++j) c4(i, j) = C(idx[i], idx[j]);
-      } else {  // (x, y, z, yaw) -> (yaw, x, y, z)
-        const int idx[4] = {3, 0, 1, 2};
-        for (int i = 0; i < 4; ++i)
-          for (int j = 0; j < 4; ++j) c4(i, j) = C(idx[i], idx[j]);
-      }
+      const Eigen::Matrix4d c4 = marg.marginalCovariance(key_of(f));
       res.covariance[f] = c4;
       if (f != root && std::sqrt(std::max(0.0, c4(0, 0))) > 0.2) {
         res.warnings.push_back("floor " + std::to_string(f) +
@@ -733,7 +621,6 @@ std::optional<LevelCandidate> same_level_candidate(FloorId a, const PointCloud& 
 Result<FusionResult> fuse(const MapData& map, const FusionOptions& opt) {
   const auto t0 = std::chrono::steady_clock::now();
   FusionResult res;
-  res.formulation = opt.formulation;
   if (map.floors.empty()) return Error{"the map has no floors"};
   FusionContext c{map, opt, res, {}, {}, 0, {}, {}, {}, {}};
   for (const auto& f : map.floors) {
@@ -774,8 +661,7 @@ Result<FusionResult> fuse(const MapData& map, const FusionOptions& opt) {
 std::string FusionResult::transforms_yaml() const {
   YAML::Emitter out;
   out.SetDoublePrecision(12);
-  out << YAML::BeginMap << YAML::Key << "formulation" << YAML::Value << to_string(formulation)
-      << YAML::Key << "floors" << YAML::Value << YAML::BeginSeq;
+  out << YAML::BeginMap << YAML::Key << "floors" << YAML::Value << YAML::BeginSeq;
   for (const auto& [f, X] : floor_to_map) {
     out << YAML::BeginMap << YAML::Key << "floor" << YAML::Value << f << YAML::Key << "theta"
         << YAML::Value << X.theta() << YAML::Key << "t" << YAML::Value << YAML::Flow
@@ -789,9 +675,9 @@ std::string FusionResult::transforms_yaml() const {
 std::string FusionResult::report_yaml() const {
   YAML::Emitter out;
   out.SetDoublePrecision(9);
-  out << YAML::BeginMap << YAML::Key << "formulation" << YAML::Value << to_string(formulation)
-      << YAML::Key << "converged" << YAML::Value << converged << YAML::Key << "final_error"
-      << YAML::Value << final_error << YAML::Key << "seconds" << YAML::Value << seconds;
+  out << YAML::BeginMap << YAML::Key << "converged" << YAML::Value << converged << YAML::Key
+      << "final_error" << YAML::Value << final_error << YAML::Key << "seconds" << YAML::Value
+      << seconds;
   out << YAML::Key << "constraints" << YAML::Value << YAML::BeginSeq;
   for (const auto& c : constraints) {
     out << YAML::BeginMap << YAML::Key << "kind" << YAML::Value << c.kind << YAML::Key << "label"

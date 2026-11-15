@@ -1,6 +1,5 @@
 // Offline floor fusion of a saved map: reads <map_dir>, writes <map_dir>/fused/.
-// Usage: fuse_tool <map_dir> [--formulation lie4|se3soft|euler] [--anchors anchors.yaml]
-// [--floor-height-prior m]
+// Usage: fuse_tool <map_dir> [--anchors anchors.yaml] [--floor-height-prior m]
 #include <cstdio>
 #include <sstream>
 #include <string>
@@ -10,8 +9,8 @@
 int main(int argc, char** argv) {
   if (argc < 2) {
     std::fprintf(stderr,
-                 "usage: %s <map_dir> [--formulation lie4|se3soft|euler] [--anchors file.yaml] "
-                 "[--floor-height-prior m] [--stacking on|off] [--same-level A,B;C,D]\n",
+                 "usage: %s <map_dir> [--anchors file.yaml] [--floor-height-prior m] "
+                 "[--stacking on|off] [--same-level A,B;C,D]\n",
                  argv[0]);
     return 2;
   }
@@ -19,12 +18,7 @@ int main(int argc, char** argv) {
   strataslam::FusionOptions opt;
   for (int i = 2; i + 1 < argc; i += 2) {
     const std::string k = argv[i], v = argv[i + 1];
-    if (k == "--formulation") {
-      if (!strataslam::parse_formulation(v, &opt.formulation)) {
-        std::fprintf(stderr, "unknown formulation '%s'\n", v.c_str());
-        return 2;
-      }
-    } else if (k == "--anchors") {
+    if (k == "--anchors") {
       const auto a = strataslam::load_anchors(v);
       if (!a) {
         std::fprintf(stderr, "%s\n", a.error().message.c_str());

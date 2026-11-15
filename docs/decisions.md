@@ -1495,3 +1495,28 @@ passed by stairs are counted (S15), so it is left for later. With 1 px of camera
 collapses, but the floor height error passes in 4 and 3 of 5 runs at 640x480 and in 4 and 1 at 320x240, as S13 does
 on the gentle ramp of S17 (4 and 2): the height of a ramp is the visual odometry's, and its noise adds up along the
 flights. `docs/seeds_baseline.json` holds S16 at 20 of 20 and S17 at 15 of 20.
+
+## ADR-0079 · Code that only evaluated the method leaves the repository
+
+Two parts of the repository served to evaluate the method, never to map with it. The fusion ablation (spec 12.5,
+ADR-0040, ADR-0049) optimized the floors with two other formulations besides `Pose4`: `se3soft` (Pose3 nodes with a
+soft roll/pitch prior) and `euler` (a plain (x, y, z, yaw) vector), selected by `strataslam fuse --formulation`, with
+their own factors (`ablation_factors.hpp`), two simulator tools and a script that tabled them. `lie4` had the lowest
+rotation error where they differed and was the default; a user had no reason to choose the others. The negative
+control S04 ran S03 with `BackendConfig::debug_disable_floor_gating`, one graph for every floor and no gate, to show
+that the scenario detects the collapse the gate prevents; the flag was never in a profile, and its branches ran
+through the backend and the pipeline.
+
+**Decision.** Both leave the repository. The fusion has one formulation, `Pose4`: `--formulation` is gone from
+`strataslam fuse` and from `strataslam_fuse`, and `floor_transforms.yaml` and `fusion_report.yaml` no longer carry a
+`formulation` key. The backend always keeps one graph per floor. S04 is retired and the other scenarios keep their
+numbers; `scripts/run_seeds.py` runs S01-S17 without it, and `scripts/make_results.sh` has six steps (the fourth, the
+ablation, is gone). What they checked stays checked: the fusion by S07 and S11 (every seed of the nightly and of
+`docs/results.md`) and by `fusion_test.cpp`; the gate by its three layers' tests (`BackendGating.*`), by the layer-1
+check of every scenario (no candidate from another floor) and by the scenarios with identical floors (S03, S11, S15,
+S16, S17), which fail on a collapse.
+
+**Result.** The mapping path is unchanged: the scenarios over seeds 1001-1020 and the camera-noise runs give the
+tables of `docs/results.md` line for line (without S04's rows), and the Elevator-VIGS sequences the same levels and
+errors. The core's line coverage goes from 87.4 % to 87.3 % (the ablation's factors were tested); every area stays
+over its threshold (spec 12.9).

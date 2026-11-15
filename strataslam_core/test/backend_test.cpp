@@ -148,22 +148,6 @@ TEST(BackendGating, TransitionKeyframesAreInNoGraphAndCannotCloseLoops) {
   EXPECT_FALSE(be.add_loop(1, 1, gtsam::Pose3()).ok());
 }
 
-TEST(BackendGating, DebugFlagRemovesTheGateForTheNegativeControl) {
-  BackendConfig cfg;
-  cfg.debug_disable_floor_gating = true;
-  Backend be(cfg);
-  const gtsam::Pose3 p0(gtsam::Rot3(), Vector3d(0, 0, 1.2));
-  ASSERT_TRUE(be.add_keyframe(kf(0, 0, p0), std::nullopt, {}, std::nullopt).ok());
-  ASSERT_TRUE(be.add_keyframe(kf(1, 1, p0 * gtsam::Pose3(gtsam::Rot3(), Vector3d(0, 0, 3))), 0,
-                              gtsam::Pose3(gtsam::Rot3(), Vector3d(0, 0, 3)), std::nullopt)
-                  .ok());
-  EXPECT_TRUE(be.add_loop(0, 1, gtsam::Pose3()).ok());  // claims the two floors are the same place
-  ASSERT_EQ(be.loops().size(), 1u);
-  EXPECT_NE(be.loops()[0].from_floor, be.loops()[0].to_floor);  // ground-truth floors still differ
-  // With the gate off both floors live in one graph (the robust kernel may still down-weight it).
-  EXPECT_EQ(be.floors().size(), 1u);
-}
-
 TEST(Backend, NewSessionIsBridgedWithAWeakFactor) {
   Backend be(BackendConfig{});
   const gtsam::Pose3 p(gtsam::Rot3(), Vector3d(0, 0, 1.2));

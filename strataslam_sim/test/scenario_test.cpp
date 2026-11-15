@@ -35,7 +35,6 @@ void check(const std::string& id) {
 TEST(Scenario, S01_OneFloorCameraLoop) { check("S01"); }
 TEST(Scenario, S02_OneFloorLidarLoop) { check("S02"); }
 TEST(Scenario, S03_IdenticalFloorsStairs) { check("S03"); }
-TEST(Scenario, S04_NegativeControlCollapsesWithoutGate) { check("S04"); }
 TEST(Scenario, S05_ElevatorBarometer) { check("S05"); }
 TEST(Scenario, S06_ElevatorImu) { check("S06"); }
 TEST(Scenario, S07_ElevatorWithoutSensorsAnchorsFusion) { check("S07"); }

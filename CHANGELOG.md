@@ -4,6 +4,12 @@
 
 ### Removed
 
+- The fusion's ablation formulations `se3soft` and `euler`: `strataslam fuse` optimizes `Pose4` only, its
+  `--formulation` option is gone, and the fusion's YAML files no longer carry a `formulation` key. With them go
+  `strataslam_fusion_ablation`, `strataslam_fusion_ablation_synthetic`, `strataslam_tools/bench/fusion_ablation.py`
+  and the nightly's ablation step; `scripts/make_results.sh` has six steps (ADR-0079).
+- Scenario S04, the negative control without the floor gate, and `BackendConfig::debug_disable_floor_gating`, which it
+  set: the backend always keeps one graph per floor. The other scenarios keep their numbers (ADR-0079).
 - The profiles of particular robots (`summit_lidar`, `summit_lidar_sim`, `tiago_lidar_camera`, `tiago_camera_only`): the
   templates cover them with their topics and frames (`ground_lidar` or `ground_lidar_camera_imu`), and an
   IMU whose TF is turned about the vertical is learned from the motion (ADR-0058). The ADRs that name them record the

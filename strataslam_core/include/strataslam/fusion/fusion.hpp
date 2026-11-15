@@ -13,14 +13,6 @@
 
 namespace strataslam {
 
-enum class Formulation {
-  Lie4,     ///< one Pose4 = SE(2)xR node per floor (the method of the paper)
-  Se3Soft,  ///< Pose3 nodes with a soft roll/pitch prior (ablation)
-  Euler,    ///< (x, y, z, yaw) with direct addition, no angle-wrap handling (ablation)
-};
-const char* to_string(Formulation f);
-bool parse_formulation(const std::string& name, Formulation* out);
-
 /// The same structural points seen from several floors (elevator door frame, shaft corners) or
 /// points marked by the user. `points[floor]` lists them in that floor's frame; entry i of every
 /// floor is the same physical point.
@@ -59,7 +51,6 @@ struct LevelCandidate {
 };
 
 struct FusionOptions {
-  Formulation formulation = Formulation::Lie4;
   std::optional<double> floor_height_prior;
   /// m. The prior is the user's statement that floors are about this far apart. 0.10 m lets it
   /// correct the height bias of a LiDAR climbing a stairwell (~0.2 m) while a barometer (0.05 m) or
@@ -98,7 +89,6 @@ struct ConstraintReport {
 };
 
 struct FusionResult {
-  Formulation formulation = Formulation::Lie4;
   std::map<FloorId, Pose4> floor_to_map;  ///< T_map_floor, floor 0 = identity
   std::map<FloorId, Eigen::Matrix4d>
       covariance;  ///< marginal covariance in the Pose4 tangent space (phi, rho)
@@ -108,9 +98,8 @@ struct FusionResult {
   bool converged = false;
   int iterations =
       0;  ///< Levenberg-Marquardt iterations; -1 with GNC, whose inner iterations are not exposed
-  double seconds = 0;  ///< the whole of fuse(), structural stacking included
-  double optimize_seconds =
-      0;  ///< graph construction and optimization only: what differs between formulations
+  double seconds = 0;           ///< the whole of fuse(), structural stacking included
+  double optimize_seconds = 0;  ///< graph construction and optimization only
   double final_error = 0;
   bool finite() const;
   std::string report_yaml() const;

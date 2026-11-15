@@ -254,18 +254,16 @@ struct SlamSystem::Impl {
     return OdomMeasurement{t, a->pose.interpolateRt(b->pose, alpha)};
   }
 
-  FloorId key_floor(FloorId f) const { return tuning.backend.debug_disable_floor_gating ? 0 : f; }
   FloorId current_floor() const { return pending.active ? kUnassignedFloor : mgr.floor(); }
 
   ScanContextDatabase& sc_for(FloorId f) {
-    auto it = sc_db.find(key_floor(f));
-    if (it == sc_db.end())
-      it = sc_db.emplace(key_floor(f), ScanContextDatabase(tuning.scan_context)).first;
+    auto it = sc_db.find(f);
+    if (it == sc_db.end()) it = sc_db.emplace(f, ScanContextDatabase(tuning.scan_context)).first;
     return it->second;
   }
   BowDatabase& bow_for(FloorId f) {
-    auto it = bow_db.find(key_floor(f));
-    if (it == bow_db.end()) it = bow_db.emplace(key_floor(f), BowDatabase(tuning.vocabulary)).first;
+    auto it = bow_db.find(f);
+    if (it == bow_db.end()) it = bow_db.emplace(f, BowDatabase(tuning.vocabulary)).first;
     return it->second;
   }
 
@@ -763,8 +761,8 @@ struct SlamSystem::Impl {
     // Every keyframe entering an existing graph must be connected: without an odometry predecessor
     // it is linked to the previous keyframe of that graph with the weak bridge factor.
     std::optional<KeyframeId> link = bridge_from;
-    if (in.floor >= 0 && !odom_from && !link && last_kf_in_graph.count(key_floor(in.floor)))
-      link = last_kf_in_graph[key_floor(in.floor)];
+    if (in.floor >= 0 && !odom_from && !link && last_kf_in_graph.count(in.floor))
+      link = last_kf_in_graph[in.floor];
     auto added = backend.add_keyframe(in, odom_from, rel, link);
     if (!added) log->log(LogLevel::Error, added.error().message);
     kfs.push_back({in.id, stamp, session, in.floor, T_odom_base});
@@ -776,7 +774,7 @@ struct SlamSystem::Impl {
 
     if (in.floor >= 0) {
       last_kf_on_floor[in.floor] = in.id;
-      last_kf_in_graph[key_floor(in.floor)] = in.id;
+      last_kf_in_graph[in.floor] = in.id;
       const bool arrived_continuously = open_tr.active && open_tr.continuous &&
                                         open_tr.to == in.floor && open_tr.from != open_tr.to;
       finish_open_transition(in);
@@ -815,7 +813,7 @@ struct SlamSystem::Impl {
         if (k.id == id) k.floor = floor;
       register_place(id);
       last_kf_on_floor[floor] = id;
-      last_kf_in_graph[key_floor(floor)] = id;
+      last_kf_in_graph[floor] = id;
     }
     transit_kfs.clear();
   }
@@ -825,8 +823,7 @@ struct SlamSystem::Impl {
   /// rest go to the floor it arrived at (`first` is its first keyframe, already in its graph),
   /// chained backwards from it.
   void place_transit_keyframes(const KeyframeInput& first) {
-    if (transit_kfs.empty() || tuning.backend.debug_disable_floor_gating)
-      return;  // the control mode keeps them in its single graph
+    if (transit_kfs.empty()) return;
     const FloorId from = open_tr.from, to = first.floor;
     const double z_from = open_tr.kf_before ? backend.keyframe(*open_tr.kf_before).T_odom_base.z()
                                             : first.T_odom_base.z();
@@ -1064,8 +1061,7 @@ struct SlamSystem::Impl {
       if (!backend.has_keyframe(c.id)) continue;
       if (backend.floor_of(c.id) != cur.floor) {
         ++cross_floor_seen;
-        if (!tuning.backend.debug_disable_floor_gating)
-          continue;  // belt and braces (the control mode removes it)
+        continue;  // belt and braces: the database is the floor's own
       }
       auto rel = verify_visual(vis, c.id);
       if (debug_channel("LOOPS"))
@@ -1211,7 +1207,7 @@ struct SlamSystem::Impl {
       if (!backend.has_keyframe(c.id)) continue;
       if (backend.floor_of(c.id) != cur.floor) {
         ++cross_floor_seen;
-        if (!tuning.backend.debug_disable_floor_gating) continue;
+        continue;
       }
       const auto rel = verify_lidar(cur, c.id, c.match.yaw, &fg);
       if (!rel) continue;
@@ -1408,7 +1404,7 @@ struct SlamSystem::Impl {
         if (k.id == id) k.floor = floor;
       register_place(id);
       last_kf_on_floor[floor] = id;
-      last_kf_in_graph[key_floor(floor)] = id;
+      last_kf_in_graph[floor] = id;
     }
     pending = Pending{};
   }
@@ -1579,21 +1575,19 @@ struct SlamSystem::Impl {
   /// against the structure itself, not through the odometry's stairs: a mezzanine looking down
   /// onto the floor below registers 1-2 m above it. Returns the height difference (ADR-0073).
   std::optional<double> arrival_on_level(FloorId level) {
-    if (sc_db.count(key_floor(level)) == 0 && bow_db.count(key_floor(level)) == 0)
-      return std::nullopt;
+    if (sc_db.count(level) == 0 && bow_db.count(level) == 0) return std::nullopt;
     constexpr size_t kTried = 6;  // the last keyframes, on the level reached
     for (size_t k = 0; k < std::min(kTried, transit_kfs.size()); ++k) {
       const KeyframeInput& cur = backend.keyframe(transit_kfs[transit_kfs.size() - 1 - k]);
       std::vector<std::pair<KeyframeId, gtsam::Pose3>> found;
-      if (lidar_fe && !cur.cloud.empty() && sc_db.count(key_floor(level))) {
+      if (lidar_fe && !cur.cloud.empty() && sc_db.count(level)) {
         const ScanContext sc = make_scan_context(cur.cloud, tuning.scan_context);
         for (const auto& c : sc_for(level).query(sc))
           if (const auto rel = verify_lidar(cur, c.id, c.match.yaw, nullptr))
             found.emplace_back(c.id, *rel);
       }
       const auto vis = visual_kf.find(cur.id);
-      if (found.empty() && vis != visual_kf.end() && tuning.vocabulary &&
-          bow_db.count(key_floor(level))) {
+      if (found.empty() && vis != visual_kf.end() && tuning.vocabulary && bow_db.count(level)) {
         const auto cands = bow_for(level).query(bow_of(vis->second), cur.session, cur.stamp, 0.0,
                                                 tuning.bow_min_score,
                                                 static_cast<size_t>(tuning.bow_max_candidates));
@@ -2106,7 +2100,7 @@ std::optional<gtsam::Pose3> SlamSystem::floor_anchor_from_odom() const {
   const auto& s = *impl_;
   const FloorId f = s.mgr.last_floor();
   const auto fl = s.backend.floors();
-  if (std::find(fl.begin(), fl.end(), s.key_floor(f)) == fl.end()) return std::nullopt;
+  if (std::find(fl.begin(), fl.end(), f) == fl.end()) return std::nullopt;
   return s.backend.floor(f).T_odom_floor().inverse();
 }
 
@@ -2114,7 +2108,7 @@ std::optional<gtsam::Pose3> SlamSystem::floor_from_odom() const {
   const auto& s = *impl_;
   const FloorId f = s.mgr.last_floor();
   const auto fl = s.backend.floors();
-  if (std::find(fl.begin(), fl.end(), s.key_floor(f)) == fl.end()) return std::nullopt;
+  if (std::find(fl.begin(), fl.end(), f) == fl.end()) return std::nullopt;
   const FloorGraph& g = s.backend.floor(f);
   const auto ids = g.keyframe_ids();
   if (ids.empty()) return g.T_odom_floor().inverse();
@@ -2137,7 +2131,7 @@ std::vector<std::pair<Timestamp, gtsam::Pose3>> SlamSystem::floor_path(FloorId f
   const auto& s = *impl_;
   std::vector<std::pair<Timestamp, gtsam::Pose3>> out;
   const auto fl = s.backend.floors();
-  if (std::find(fl.begin(), fl.end(), s.key_floor(floor)) == fl.end()) return out;
+  if (std::find(fl.begin(), fl.end(), floor) == fl.end()) return out;
   const FloorGraph& g = s.backend.floor(floor);
   for (KeyframeId id : g.keyframe_ids()) out.push_back({g.node(id).stamp, g.pose(id)});
   return out;
@@ -2170,7 +2164,7 @@ std::vector<Eigen::Vector3f> SlamSystem::floor_cloud(FloorId floor, double voxel
   const auto& s = *impl_;
   std::vector<Eigen::Vector3f> merged;
   const auto fl = s.backend.floors();
-  if (std::find(fl.begin(), fl.end(), s.key_floor(floor)) == fl.end()) return merged;
+  if (std::find(fl.begin(), fl.end(), floor) == fl.end()) return merged;
   const FloorGraph& g = s.backend.floor(floor);
   const size_t k = s.thinning(g, max_points);
   for (KeyframeId id : g.keyframe_ids()) {
@@ -2194,7 +2188,7 @@ PointCloud SlamSystem::floor_cloud_colored(FloorId floor, double voxel, size_t m
   const auto& s = *impl_;
   PointCloud out;
   const auto fl = s.backend.floors();
-  if (std::find(fl.begin(), fl.end(), s.key_floor(floor)) == fl.end()) return out;
+  if (std::find(fl.begin(), fl.end(), floor) == fl.end()) return out;
   const FloorGraph& g = s.backend.floor(floor);
   const size_t k = s.thinning(g, max_points);
   std::vector<Eigen::Vector3f> merged;

@@ -30,9 +30,6 @@ struct BackendConfig {
   double plane_sigma = 0.01;           ///< m, planar mode: height of the base in the floor frame
   double plane_attitude_sigma = 0.01;  ///< rad, planar mode: roll and pitch of the base
   double mahalanobis_chi2 = 22.46;     ///< chi2(6 dof) at 0.999
-  /// Debug only, never exposed in the user YAML: removes the floor gate and the consistency
-  /// check so that the negative control (scenario S04) can demonstrate the collapse.
-  bool debug_disable_floor_gating = false;
 };
 
 /// Pose graph of one floor (submap): keyframe poses in the floor frame, iSAM2 incremental
