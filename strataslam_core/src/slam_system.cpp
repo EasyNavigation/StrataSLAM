@@ -1386,13 +1386,25 @@ struct SlamSystem::Impl {
     }
   }
 
+  /// `rel` is the pose of `cur` seen from `cand`, a keyframe of `target`. The pending sessions'
+  /// odometry restarted at the pose before the loss, wrong by whatever the body did blind (a turn
+  /// without a gyroscope came back a quarter turn off, and the relocalizing loop, measured against
+  /// that, failed the consistency check: the session stayed where the restart put it, and so did
+  /// every loop after). The relocalization says where `cur` is: the sessions enter the floor from
+  /// there.
   void place_pending_on(FloorId target, KeyframeId cand, KeyframeId cur, const gtsam::Pose3& rel) {
+    const gtsam::Pose3 T_odom_session =
+        backend.pose_odom(cand) * rel * backend.keyframe(cur).T_odom_base.inverse();
+    for (KeyframeId id : pending.kfs)
+      backend.correct_session(backend.keyframe(id).session, T_odom_session);
     mgr.set_floor(target);
     commit_pending(target,
                    last_kf_on_floor.count(target) ? std::optional<KeyframeId>(cand) : std::nullopt);
-    if (backend.add_loop(cand, cur, rel)) {
+    if (const auto added = backend.add_loop(cand, cur, rel)) {
       since_loop = 0;
       log->log(LogLevel::Info, "relocalized: session placed on its floor");
+    } else {
+      log->log(LogLevel::Warn, "relocalization: " + added.error().message);
     }
   }
 

@@ -36,16 +36,20 @@ void Backend::insert_into_graph(const KeyframeInput& kf, std::optional<KeyframeI
                                 const gtsam::Pose3& odom_rel,
                                 std::optional<KeyframeId> bridge_from) {
   const FloorId g = kf.floor;
+  const auto correction = session_correction_.find(kf.session);
+  const gtsam::Pose3 T_odom_base = correction == session_correction_.end()
+                                       ? kf.T_odom_base
+                                       : correction->second * kf.T_odom_base;
   auto it = graphs_.find(g);
   if (it == graphs_.end()) {
     // Floor frame origin: yaw and translation of this keyframe, gravity-aligned (no roll/pitch).
-    const auto R = kf.T_odom_base.rotation().matrix();
+    const auto R = T_odom_base.rotation().matrix();
     const gtsam::Pose3 T_odom_floor(gtsam::Rot3::Yaw(std::atan2(R(1, 0), R(0, 0))),
-                                    kf.T_odom_base.translation());
+                                    T_odom_base.translation());
     it = graphs_.emplace(g, std::make_unique<FloorGraph>(g, T_odom_floor, cfg_)).first;
   }
   FloorGraph& fg = *it->second;
-  const gtsam::Pose3 T_floor_base = fg.T_odom_floor().between(kf.T_odom_base);
+  const gtsam::Pose3 T_floor_base = fg.T_odom_floor().between(T_odom_base);
   const double scale = kf.tracking == TrackingState::Degraded ? cfg_.degraded_scale : 1.0;
   // Only link with a keyframe that lives in this graph.
   std::optional<KeyframeId> from = (odom_from && fg.has(*odom_from)) ? odom_from : std::nullopt;
@@ -137,6 +141,10 @@ void Backend::add_gravity(KeyframeId id, const Eigen::Vector3d& up_body, double 
   const FloorId f = floor_of(id);
   if (f < 0) return;
   graphs_.at(f)->add_gravity(id, up_body, sigma_rad);
+}
+
+void Backend::correct_session(SessionId session, const gtsam::Pose3& T_odom_session) {
+  session_correction_[session] = T_odom_session;
 }
 
 Result<void> Backend::verify_loop_allowed(KeyframeId a, KeyframeId b) const {

@@ -193,6 +193,13 @@
   `STRATASLAM_RESULTS_SCENARIOS`, and `scripts/run_seeds.py --input` summarizes runs already made.
 ### Fixed
 
+- A session relocalized after a tracking loss entered its floor where the restarted odometry put it, not where the
+  relocalization did. The frontend restarts at the pose before the loss, wrong by whatever the body did blind: after
+  a turn with no gyroscope, a quarter turn off. The relocalizing loop, measured against that, failed the consistency
+  check without a word in the log, and the session stayed rotated, with every later loop refused against it. The
+  relocalization now corrects the session's odometry frame (`Backend::correct_session`). Its keyframes, those
+  already recorded and those to come, enter the floor from there. A rejected relocalizing loop is logged. Covered by
+  `RgbdSystem.ASessionAfterABlindTurnIsRelocalizedWhereTheWalkBegan`; the LiDAR relocalization takes the same path.
 - A ground robot's keyframes took the IMU's quasi-static gravity as an attitude prior before the IMU's mounting was
   learned: with a TF that has the IMU turned half around, every tilt was read backwards and the floor those keyframes
   were on tilted (0.6 deg, a 2.5 m drop over 120 m that the odometry did not have). They wait for the mounting, as

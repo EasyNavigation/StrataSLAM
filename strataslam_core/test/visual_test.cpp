@@ -674,3 +674,55 @@ TEST(RgbdSystem, ASessionAfterABlindSecondIsRelocalizedOnItsFloor) {
   }
   EXPECT_GT(placed, 10u);
 }
+
+// The camera goes blind for the last turn, on the spot where the walk began, and the session that
+// follows starts where the turn did, a quarter turn off. Back where the walk began the place is
+// recognized: the relocalization, not the restarted odometry, places the session's keyframes, and
+// they are where the room puts them.
+TEST(RgbdSystem, ASessionAfterABlindTurnIsRelocalizedWhereTheWalkBegan) {
+  const Room room;
+  const auto walk = walk_round_the_room();
+  Extrinsics ext;
+  ext.T_base_camera = Extrinsics::ForwardCamera();
+  Config cfg = rgbd_only();
+  cfg.multifloor.tracking_loss_timeout = 0.5;  // s: the 2 s turn outlasts it
+  SlamSystem slam(cfg, ext, with_vocabulary());
+  std::mt19937 rng(25);
+  bool lost = false;
+  for (size_t i = 0; i < walk.size(); ++i) {
+    const Timestamp stamp = static_cast<Timestamp>(i) * kFrameNs;
+    const bool blind =
+        i > walk.size() / 2 && (walk[i].translation() - walk.front().translation()).norm() < 1e-6;
+    if (blind) {
+      RgbdFrame dark;
+      dark.stamp = stamp;
+      dark.K = intrinsics();
+      dark.depth = flat_depth(0.f);
+      slam.add_rgbd(dark);
+    } else {
+      slam.add_rgbd(room.frame(walk[i] * ext.T_base_camera, stamp, rng));
+    }
+    lost = lost || slam.tracking_quality().state == TrackingState::Lost;
+  }
+  EXPECT_TRUE(lost);
+  EXPECT_GT(slam.current_session(), 0u);
+  const SlamSystem::FloorStatus status = slam.floor_status();
+  EXPECT_FALSE(status.pending);
+  EXPECT_EQ(status.num_floors, 1u);
+  EXPECT_EQ(slam.current_floor(), 0);
+  std::map<KeyframeId, SessionId> session;
+  for (const auto& kf : slam.keyframes()) session[kf.id] = kf.session;
+  size_t between_sessions = 0;
+  for (const auto& l : slam.loops()) between_sessions += session.at(l.from) != session.at(l.to);
+  EXPECT_GE(between_sessions, 1u);
+  size_t placed = 0;
+  for (const auto& [stamp, T_floor_base] : slam.floor_path(0)) {
+    const size_t i = static_cast<size_t>(stamp / kFrameNs);
+    if (i <= walk.size() / 2 || (walk[i].translation() - walk.front().translation()).norm() < 1e-6)
+      continue;
+    const gtsam::Pose3 truth = walk.front().between(walk[i]);
+    EXPECT_LT((T_floor_base.translation() - truth.translation()).norm(), 0.15) << "frame " << i;
+    ++placed;
+  }
+  EXPECT_GT(placed, 3u);
+}

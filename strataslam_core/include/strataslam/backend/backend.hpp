@@ -67,6 +67,13 @@ class Backend {
   Result<void> promote_transit_before(const std::vector<KeyframeId>& ids, FloorId floor,
                                       KeyframeId next);
 
+  /// A session relocalized onto a floor: `T_odom_session` takes the poses of its odometry to the
+  /// odometry frame of the map. Its frontend restarted after a tracking loss at the pose before
+  /// it, which is not where the body was if it moved blind (a turn with no gyroscope): its
+  /// keyframes, those already recorded and those to come, enter their graph from where the
+  /// relocalization puts them. The odometry between them is unchanged.
+  void correct_session(SessionId session, const gtsam::Pose3& T_odom_session);
+
   /// Layer 2: floors must be equal and assigned.
   Result<void> verify_loop_allowed(KeyframeId a, KeyframeId b) const;
   /// Layer 3 + insertion. `T_from_to` is the measured relative pose between the base frames.
@@ -98,6 +105,7 @@ class Backend {
   std::map<KeyframeId, KeyframeInput> registry_;
   std::vector<KeyframeId> order_;
   std::vector<AcceptedLoop> loops_;
+  std::map<SessionId, gtsam::Pose3> session_correction_;  ///< see correct_session
 };
 
 }  // namespace strataslam
