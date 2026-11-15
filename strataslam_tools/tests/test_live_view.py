@@ -165,7 +165,7 @@ def test_an_elevator_ride_the_odometry_did_not_see_is_drawn_between_its_floors(t
 
 
 def test_a_ride_whose_height_came_within_the_transition_is_joined_from_where_its_trail_ends(tmp_path: Path) -> None:
-    """Elevator-VIGS Office4: the odometry took the ride's 14.7 m while the transition was still open, so its last poses
+    """A recorded ride: the odometry took the ride's 14.7 m while the transition was still open, so its last poses
     are already up, and floor 1's path takes them over. The join goes from the trail as drawn (in the cabin) to floor 1:
     from the last pose (up there) it was a join of zero length and the ride was not drawn."""
     require_module("rerun", "pip install rerun-sdk, the optional extra `viewer`")
@@ -209,7 +209,7 @@ def test_where_floors_join_is_marked_and_labelled(tmp_path: Path) -> None:
     view.pose(5.0, (2.0, 0.0, 3.0), 1)
     for i in range(6, 10):
         view.pose(float(i), (2.0 + i - 6, 0.0, 3.0 - 0.75 * (i - 6)), -1)  # stairs down
-    view.pose(10.0, (6.0, 0.0, 0.1), -1)  # Office4: still a transition a moment on floor 0
+    view.pose(10.0, (6.0, 0.0, 0.1), -1)  # still a transition a moment on floor 0
     view.pose(11.0, (6.0, 0.0, 0.1), -1)
     view.pose(12.0, (6.0, 0.0, 0.0), 0)
     view.transition(12.0, "stairs", 1, 0, -3.0)
@@ -222,7 +222,7 @@ def test_where_floors_join_is_marked_and_labelled(tmp_path: Path) -> None:
 
 
 def test_a_trail_cut_by_a_floors_path_is_joined_to_it(tmp_path: Path) -> None:
-    """Office4's stairs down: the lower half joined floor 0, whose loop closures moved it 2 m; the upper half stays the
+    """Stairs down on a recorded walk: the lower half joined floor 0, whose loop closures moved it 2 m; the upper half stays the
     trail the odometry left. They are joined at the cut, so the path goes on and the step shows."""
     require_module("rerun", "pip install rerun-sdk, the optional extra `viewer`")
     view = live_view.LiveView(save=tmp_path / "run.rrd")

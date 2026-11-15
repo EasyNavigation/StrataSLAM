@@ -10,10 +10,10 @@ namespace strataslam {
 
 namespace {
 /// ns of vertical acceleration kept on a floor: a ride whose push stayed under the departure
-/// threshold is found back from its brake (Elevator-VIGS Residential3: 17 s before it).
+/// threshold is found back from its brake (a gentle start: 17 s before it on a recorded ride).
 constexpr Timestamp kAzHistory = 60'000'000'000;
 /// m/s^2, spread of the vertical acceleration over 1 s that a cabin stays under (0.1-0.4 on
-/// Elevator-VIGS; the steps of a walk or a stair jolt it by 0.5-4.4).
+/// recorded rides; the steps of a walk or a stair jolt it by 0.5-4.4).
 constexpr double kCabinSpread = 0.45;
 double rate(const std::deque<std::pair<Timestamp, double>>& h) {
   if (h.size() < 2) return 0.0;
@@ -214,8 +214,8 @@ FloorEvent FloorManager::device_lifted(double dz, Timestamp since) {
   const bool opened_by_lift = state_ == FloorState::InTransition && started_ && acc_.t0 >= since;
   odometry_rebased(dz);
   // Its push and brake are the device's, no cabin's: the IMU opens no ride on them, nor on what of
-  // them stays in its 1 s means (Elevator-VIGS Residential1: the brake of a rig picked up in a
-  // cabin opened a ride, 17 s integrated to -9.2 m and a level).
+  // them stays in its 1 s means (on a recorded ride, the brake of a rig picked up in a cabin opened
+  // a ride, 17 s integrated to -9.2 m and a level).
   az_over_since_ = 0;
   lift_quiet_until_ = last_sample_.stamp + 2'000'000'000;
   altitude_ -= dz;  // now, not at the next sample: the reference is taken from it below
@@ -314,9 +314,9 @@ FloorEvent FloorManager::close_transition(const FloorSample& s, bool plateau) {
   // climb; audit AUD-007).
   const double target = levels_.at(static_cast<size_t>(from)) + dz;
   // A ride the IMU measured double-integrates the accelerometer: within about 5 % of its height on
-  // Elevator-VIGS (Office1-H 0.5 %, Residential2 0.7 %, Mall-E 8 %). Office4 rode 14.75 m up and
-  // walked 15.43 m down the stairs to where it had started: 0.68 m off, over the 0.6 m tolerance,
-  // it opened a third level instead of coming back to the first.
+  // recorded rides (0.5-8 %). A ride of 14.75 m up, then 15.43 m walked down the stairs to where it
+  // had started: 0.68 m off, over the 0.6 m tolerance, it opened a third level instead of coming
+  // back to the first.
   constexpr double kImuRideRelError = 0.05;
   double sigma = level_sigma_.at(static_cast<size_t>(from));
   if (elevator_imu) sigma = std::hypot(sigma, kImuRideRelError * dz);
@@ -374,8 +374,8 @@ void FloorManager::ingest_height_sensors(const FloorSample& s) {
   if (s.imu_vertical_accel) {
     az_hist_.push_back({s.stamp, *s.imu_vertical_accel - az_bias_});
     // 12 s, or from the onset of a ride the IMU is measuring: a ride is decided once the height has
-    // been calm for a while after it, often more than 12 s after it started (Elevator-VIGS Mall-E:
-    // 13 s).
+    // been calm for a while after it, often more than 12 s after it started (13 s on a recorded
+    // ride).
     const Timestamp keep_from = state_ == FloorState::InTransition && acc_.unobserved
                                     ? std::min(acc_.imu_onset, s.stamp - kAzHistory)
                                     : s.stamp - kAzHistory;
@@ -473,7 +473,7 @@ FloorEvent FloorManager::update_on_floor(const FloorSample& s, const Motion& m) 
   // long: the cabin door closing is where tracking breaks, and the ride often starts after
   // tracking_loss_timeout (an earlier `!lost_event` here switched the IMU off from then on: S11
   // lost its third floor that way). The odometry's altitude only counts while it tracks: lost, it
-  // stays where it was, and closing doors often make it jump first (Elevator-VIGS Office2-E: 0.2 m,
+  // stays where it was, and closing doors often make it jump first (on a recorded ride, 0.2 m,
   // under depart_dz, kept the IMU from opening the 3.3 m ride that followed).
   bool imu_departure = false;
   Timestamp imu_onset = 0;
@@ -547,13 +547,13 @@ FloorEvent FloorManager::update_in_transition(const FloorSample& s, const Motion
   push(run_win_, s.stamp, acc_.s_h, 3.0);
   // A ground robot's base vibrates as it drives (the Summit XL's 1 s mean: tenths of m/s^2): its
   // IMU's calm says nothing of a ramp the odometry measures, which never settled with it (two
-  // ramps of prueba_00 read as one of 5.1 m). Only a ride the IMU measures waits for it.
+  // ramps in a row read as one of 5.1 m). Only a ride the IMU measures waits for it.
   const bool imu_calm_counts =
       s.imu_vertical_accel.has_value() && (!cfg_.ground_platform || acc_.unobserved);
   // A hand-held IMU never calms while its bearer walks: the steps jolt it (kCabinSpread over 1 s),
   // which a cabin's smooth push does not, and a person stands in a cabin. Walking on with no climb,
   // no ride's push begun, the odometry's calm is the transition's end: a carried rig otherwise kept
-  // its stairs open until max_transition_s, and the climb up and the one down of the portable rig
+  // its stairs open until max_transition_s, and the climb up and the one down of a recorded walk
   // made one transition, floor 1 lost.
   const bool walking = imu_calm_counts && !acc_.unobserved && acc_.ride_push < 0.3 &&
                        az_spread(s.stamp - 1'000'000'000, s.stamp) >= kCabinSpread;
@@ -563,12 +563,12 @@ FloorEvent FloorManager::update_in_transition(const FloorSample& s, const Motion
   if (climbing_ || climbing_long_) calm = false;
   // Opened by the odometry, but the IMU accelerates vertically as it does to open a ride while the
   // odometry does not follow: an elevator whose closing doors made the odometry jump before it was
-  // lost in the cabin (Elevator-VIGS Mall-E: 0.33 m at the doors, then the 4.5 m ride unseen and
-  // the floor closed as a 1.5 m ramp), or one it tracks, seeing the cabin still (Office1: 14.3 m
-  // left out). The IMU measures it from then on. While the odometry tracks, it must have stayed
-  // still while the IMU gained the speed of a cabin: a hand-held rig lowered and raised again, a
-  // stair or the bob of the gait move both, with 1 s means of up to 1.5 m/s^2 for up to 2.5 s
-  // (Campus1, Office2), as long as a cabin's push (Station1: 1.1 s).
+  // lost in the cabin (a recorded ride: 0.33 m at the doors, then the 4.5 m ride unseen and the
+  // floor closed as a 1.5 m ramp), or one it tracks, seeing the cabin still (another: 14.3 m left
+  // out). The IMU measures it from then on. While the odometry tracks, it must have stayed still
+  // while the IMU gained the speed of a cabin: a hand-held rig lowered and raised again, a stair or
+  // the bob of the gait move both, with 1 s means of up to 1.5 m/s^2 for up to 2.5 s on recorded
+  // rides, as long as a cabin's push (1.1 s on one).
   if (!acc_.unobserved && !acc_.had_baro && s.imu_vertical_accel) {
     if (std::abs(az_mean(s.stamp, 1.0)) > cfg_.imu_depart_accel) {
       if (acc_.az_over_since == 0) acc_.az_over_since = s.stamp;
@@ -576,12 +576,12 @@ FloorEvent FloorManager::update_in_transition(const FloorSample& s, const Motion
         constexpr double kCabinSpeed = 0.3;  // m/s gained: a cabin starting
         // The odometry followed less than half of it (or 0.1 m/s): a vertical move it tracks is
         // followed in full, while a cabin is still to it, or barely followed when degenerate inside
-        // (Elevator-VIGS Factory-H: 0.22 m/s of the cabin's 0.7).
+        // (on a recorded ride: 0.22 m/s of the cabin's 0.7).
         constexpr double kStillVz = 0.1;
         constexpr double kSeenShare = 0.5;
         // And it accelerates smoothly, as a cabin does (kCabinSpread): the steps of a stair the
         // odometry tracks half-way jolt it, and its 1 s mean then looks like a cabin's push
-        // (Office4: a flight of stairs down read as a 2.4 m ride to a level of its own). Checked
+        // (a recorded flight of stairs down read as a 2.4 m ride to a level of its own). Checked
         // again each sample: a ride that starts as the last steps into the cabin are taken is
         // taken once they stop.
         const Timestamp onset = acc_.az_over_since - static_cast<Timestamp>(1.0e9);
@@ -601,7 +601,7 @@ FloorEvent FloorManager::update_in_transition(const FloorSample& s, const Motion
           acc_.imu_onset = onset;
           // The ride starts now: the odometry may have opened the transition long before (its
           // drift while walking), and max_transition_s from then closed rides half-way
-          // (Elevator-VIGS Campus6: 15 s into a 27 s ride).
+          // (a recorded one: 15 s into a 27 s ride).
           acc_.t0 = onset;
           if (debug_channel("FLOORS"))
             log_->log(LogLevel::Debug,
@@ -614,8 +614,8 @@ FloorEvent FloorManager::update_in_transition(const FloorSample& s, const Motion
                                 az_spread(s.stamp - 1'000'000'000, s.stamp),
                                 run_win_.empty() ? 0.0 : acc_.s_h - run_win_.front().second));
           // What the odometry's transition held until the onset happened on the floor it left:
-          // it ends there, no floor change, and the ride goes on (Elevator-VIGS Office4: opened
-          // 50 s before the ride, the walk on floor 0 was mapped on the floor the ride reached).
+          // it ends there, no floor change, and the ride goes on (a recorded one: opened 50 s
+          // before the ride, the walk on floor 0 was mapped on the floor the ride reached).
           ev.kind = FloorEvent::Kind::TransitionEnded;
           ev.type = TransitionType::Unknown;
           ev.from = ev.to = floor_;
@@ -634,17 +634,17 @@ FloorEvent FloorManager::update_in_transition(const FloorSample& s, const Motion
   // the cabin moves the transition is not calm, even when it cruises without accelerating: a cruise
   // longer than the settling time closed the ride half-way (a 14 m ride read 2.7 m). The speed
   // integrated from the onset cannot say it: a bias and the tilt of the gravity estimate make it
-  // drift (Elevator-VIGS Office1-H: 0.03 m/s^2, 0.94 m/s left after a 33 m ride), the pulses can.
+  // drift (a recorded 33 m ride: 0.03 m/s^2, 0.94 m/s left when it stopped), the pulses can.
   const bool imu_ride = acc_.unobserved && !acc_.had_baro && s.imu_vertical_accel.has_value();
   constexpr double kRideMinSpeed = 0.3;  // m/s pushed: slower is not a cabin moving
-  // m/s^2: the 1 s mean of a cabin starting or braking (0.39-0.9 on Elevator-VIGS), over the
-  // vibration of a cruising cabin (Factory-H: +-0.16, which counted as push and brake alike kept
-  // the 50 m ride from ever stopping).
+  // m/s^2: the 1 s mean of a cabin starting or braking (0.39-0.9 on recorded rides), over the
+  // vibration of a cruising cabin (+-0.16 on one, which counted as push and brake alike kept its
+  // 50 m ride from ever stopping).
   constexpr double kPulseAccel = 0.2;
   constexpr double kBrakeShare = 0.6;  // of the push, braked: the cabin has stopped
   // Its accelerations are measured from the one before the onset, what the bias estimate left: it
-  // drifts while the person walks (Elevator-VIGS Mall-M: to -0.13 m/s^2 in 70 s, the cabin then
-  // read +0.12 at rest, never calm, and a -18 m ride was integrated through the walk out, -4.1 m).
+  // drifts while the person walks (a recorded ride: to -0.13 m/s^2 in 70 s, the cabin then read
+  // +0.12 at rest, never calm, and a -18 m ride was integrated through the walk out, -4.1 m).
   // Bounded by the pulses: more than one is no bias.
   constexpr Timestamp kRideRefWindow = 5'000'000'000;
   bool braked = false;
@@ -673,8 +673,8 @@ FloorEvent FloorManager::update_in_transition(const FloorSample& s, const Motion
       acc_.ride_ref = std::clamp(az_mean_between(acc_.imu_onset - kRideRefWindow, acc_.imu_onset),
                                  -kPulseAccel, kPulseAccel);
       // Counted from the onset: a ride taken over from the odometry is 1.5 s into its push, which
-      // then fell short of a cabin's and the brake that followed never counted (Elevator-VIGS
-      // Station2: 0.20 m/s of a 0.9 m/s push, the ride ended by chance as the person walked on).
+      // then fell short of a cabin's and the brake that followed never counted (a recorded ride:
+      // 0.20 m/s of a 0.9 m/s push, the ride ended by chance as the person walked on).
       for (const auto& [t, az] : az_hist_)
         if (t >= acc_.imu_onset && t < s.stamp)
           pulse(t, az_mean_between(t - 1'000'000'000, t) - acc_.ride_ref);
@@ -682,9 +682,9 @@ FloorEvent FloorManager::update_in_transition(const FloorSample& s, const Motion
     const double a1 = az_mean(s.stamp, 1.0) - acc_.ride_ref;
     pulse(s.stamp, a1);
     // Braked: the cabin lost the speed it gained, no less and no more. A brake far stronger than
-    // the push is no cabin stopping (Elevator-VIGS Residential1: 0.66 m/s pushed, 1.36 braked, the
-    // rig handled in a cabin standing: a 2.1 m ride and a level; the rides measured brake within
-    // 0.9-1.3 times their push).
+    // the push is no cabin stopping (a rig handled in a cabin standing: 0.66 m/s pushed, 1.36
+    // braked, a 2.1 m ride and a level; the rides measured brake within 0.9-1.3 times their
+    // push).
     braked = acc_.ride_push >= kRideMinSpeed && acc_.ride_brake >= kBrakeShare * acc_.ride_push &&
              acc_.ride_brake <= acc_.ride_push / kBrakeShare;
     if (debug_channel("FLOORS") && s.stamp - last_ride_dbg_ >= 1'000'000'000) {
@@ -710,13 +710,13 @@ FloorEvent FloorManager::update_in_transition(const FloorSample& s, const Motion
   // A ride the IMU measures ends when the cabin stops: braked and the acceleration calm. Closed
   // there, with the height integrated up to there (the zero-velocity update at that end removes a
   // constant bias exactly): the odometry's calm comes much later on a person who walks out of the
-  // cabin (Elevator-VIGS Mall-E: never in the 22 s left, so the 4.5 m ride was integrated over the
-  // walk too and read 7.1 m).
+  // cabin (a recorded ride: never in the 22 s left, so the 4.5 m ride was integrated over the walk
+  // too and read 7.1 m).
   // A ride has also ended when the odometry has walked out of the cabin, which no cabin is deep
-  // enough to hold: the brake can be lost in what the cabin's bumps added to the push
-  // (Elevator-VIGS Factory-H, 50 m) or a ride opened late keeps adding the walk's pulses
-  // (Residential3: -116 m). The cabin had stopped by the time the walk began (the vertical speed is
-  // zero there) and by the end of its last pulse (a gentle brake may stay under kPulseAccel).
+  // enough to hold: the brake can be lost in what the cabin's bumps added to the push (a recorded
+  // 50 m ride) or a ride opened late keeps adding the walk's pulses (another: -116 m). The cabin
+  // had stopped by the time the walk began (the vertical speed is zero there) and by the end of its
+  // last pulse (a gentle brake may stay under kPulseAccel).
   if (imu_ride) {
     constexpr double kWalkedOutM = 3.0;
     const bool stopped =
@@ -726,18 +726,18 @@ FloorEvent FloorManager::update_in_transition(const FloorSample& s, const Motion
     else if (acc_.ride_calm_since == 0)
       acc_.ride_calm_since = s.stamp;
     // Walking: 3 m, at a walking pace over the last 3 s (half a metre a second). An odometry
-    // degenerate in a closed cabin drifts too, slowly (Factory-H: 3 m in 38 s of a 65 s ride).
+    // degenerate in a closed cabin drifts too, slowly (a recorded ride: 3 m in 38 s of its 65 s).
     constexpr double kWalkingRunM = 1.5;
     const bool walking = !run_win_.empty() && (s.stamp - run_win_.front().first) * 1e-9 >= 2.5 &&
                          acc_.s_h - run_win_.front().second >= kWalkingRunM;
     // Not out of a cabin that still moves: its speed has come down to half its top, as it does
-    // with a brake too gentle to count (Elevator-VIGS Office3: walked in and the cabin left at
-    // once, the boarding walk ended a 7 m ride 3.5 s into its push). Unless it is no cabin: a
-    // pulse taken for a push, a jolt or the brake of a ride unseen, never comes back to rest
-    // (Station3: the walk on, 80 s, read -40 m). The IMU tells: steps jolt it (kCabinSpread) for
-    // 3 s while the odometry walks, which a cabin does not even when the odometry drifts in it
-    // (Office2: 10 m in 14 s); or, failing that, a walk longer than any cabin (30 m). Not sooner:
-    // a jolt held as a ride for 30 m hid the ride that came 43 s after it (Office3).
+    // with a brake too gentle to count (on a recorded ride, walked in and the cabin left at once:
+    // the boarding walk ended a 7 m ride 3.5 s into its push). Unless it is no cabin: a pulse
+    // taken for a push, a jolt or the brake of a ride unseen, never comes back to rest (a walk on
+    // of 80 s read -40 m). The IMU tells: steps jolt it (kCabinSpread) for 3 s while the odometry
+    // walks, which a cabin does not even when the odometry drifts in it (10 m in 14 s on a real
+    // ride); or, failing that, a walk longer than any cabin (30 m). Not sooner: a jolt held as a
+    // ride for 30 m hid a real ride that came 43 s after it.
     constexpr double kSlowedShare = 0.5;
     constexpr double kNoCabinM = 30.0;
     constexpr Timestamp kGaitS = 3'000'000'000;
@@ -749,8 +749,8 @@ FloorEvent FloorManager::update_in_transition(const FloorSample& s, const Motion
     const bool gait = acc_.gait_since != 0 && s.stamp - acc_.gait_since >= kGaitS;
     const bool slowed = std::abs(acc_.ride_v) < kSlowedShare * acc_.ride_v_peak;
     const double walked = acc_.s_h - acc_.ride_s_h0;
-    // Nor out of one still braking: its last pulse is over (Campus6: the odometry moving in the
-    // cabin as it braked ended a 23.4 m ride at 17.9).
+    // Nor out of one still braking: its last pulse is over (the odometry moving in the cabin as it
+    // braked ended a recorded 23.4 m ride at 17.9).
     constexpr Timestamp kPulseOver = 1'000'000'000;
     const bool stopped_moving = slowed && s.stamp - acc_.last_pulse >= kPulseOver;
     const bool walked_out = acc_.ride_push >= kRideMinSpeed && acc_.last_pulse != 0 && walking &&
@@ -760,8 +760,8 @@ FloorEvent FloorManager::update_in_transition(const FloorSample& s, const Motion
         acc_.ride_calm_since != 0 && (s.stamp - acc_.ride_calm_since) * 1e-9 >= cfg_.ride_stop_s;
     // A ground robot is carried standing still: driving further than a cabin is deep before the
     // ride has braked, it was never in one. Its base's vibration, a bump or a ramp's foot read as
-    // a push (or a brake) that never comes back to rest (Summit XL, prueba_03: -0.1 to -0.35
-    // m/s^2 for 27 s while it drove 24 m, a -3.4 m ride).
+    // a push (or a brake) that never comes back to rest (a Summit XL: -0.1 to -0.35 m/s^2 for
+    // 27 s while it drove 24 m, a -3.4 m ride).
     // Out of the cabin: a degenerate registration slides in it while the robot stands (the Summit
     // XL's: 1 m during a 3.7 m ride).
     const double drove = acc_.s_h_open - acc_.ride_open0;
@@ -791,8 +791,8 @@ FloorEvent FloorManager::update_in_transition(const FloorSample& s, const Motion
         if (ev.kind != FloorEvent::Kind::None) return ev;
       } else if (acc_.pulse1_end != 0) {
         // The pulse was the brake of a ride whose push stayed under the departure threshold
-        // (Elevator-VIGS Station3, Residential3: 0.23 m/s^2 at most): found back in the history,
-        // the ride is measured from it to the end of the brake.
+        // (0.23 m/s^2 at most on recorded rides): found back in the history, the ride is measured
+        // from it to the end of the brake.
         if (const auto start = push_before(acc_.imu_onset, acc_.pulse1_v)) {
           acc_.imu_onset = *start;
           acc_.imu_end = acc_.pulse1_end + static_cast<Timestamp>(1.0e9);
@@ -805,8 +805,8 @@ FloorEvent FloorManager::update_in_transition(const FloorSample& s, const Motion
         }
       }
       // Not a floor's height: no ride after all. The transition goes back to the odometry, so that
-      // a ride that follows is taken from its own onset (Elevator-VIGS Factory-H: a jolt while
-      // boarding, then the 50 m ride integrated from it, read -27 m).
+      // a ride that follows is taken from its own onset (a real case: a jolt while boarding, then
+      // the 50 m ride integrated from it, read -27 m).
       drop_ride();
     }
   }

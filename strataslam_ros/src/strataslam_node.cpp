@@ -1378,7 +1378,7 @@ class StrataslamNode : public rclcpp::Node {
       // appears, where the floor the robot came from puts the robot on its optimized map then (that
       // floor's correction at the departure, and the odometry across the transition): the path goes
       // on without a jump (ADR-0075). The floors' anchors would carry the odometry's drift since
-      // the start (1.4 m of height on the Summit's prueba_03). `strataslam fuse` refines it
+      // the start (1.4 m of height on a Summit XL recording). `strataslam fuse` refines it
       // offline.
       if (map_from_floor_.empty()) {
         map_from_floor_[cur] = gtsam::Pose3();

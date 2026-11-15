@@ -519,7 +519,7 @@ TEST(PlanarScan, TheFrontendTracksAPathThroughTheRoom) {
 
 TEST(PlanarScan, ASweepOfAFewCellsIsTrackedNotDropped) {
   // In a corner, a metre from both walls: some 50 cells of 5 cm, which a 3D LiDAR's scan never is
-  // (below its 100 the scan is not tracked; on slam_test the Tiago turned 16 deg unmeasured there).
+  // (below its 100 the scan is not tracked; on a recording a Tiago turned 16 deg unmeasured there).
   std::vector<Vector3f> corner;
   for (double y = -0.5; y <= 1.0; y += 0.02) corner.emplace_back(1.0f, static_cast<float>(y), 0.f);
   for (double x = 0.0; x < 1.0; x += 0.02) corner.emplace_back(static_cast<float>(x), 1.0f, 0.f);

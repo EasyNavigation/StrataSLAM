@@ -49,7 +49,7 @@ RIDE_SHARE = 0.5  # a join that climbs this share of the transition's height is 
 KEYPOINT_RADIUS = 3.0  # UI points
 PATH_PERIOD_S = 0.25  # the paths are re-sent at most this often (wall clock): they grow with the run
 JOIN_WINDOW_S = 10.0  # s: a join meets a floor's path or a transition's trail only at a point this near its time (a floor
-# reached gets its first keyframe once the transition settles, 3 s after on the Summit's elevator bag)
+# reached gets its first keyframe once the transition settles, 3 s after on a Summit XL elevator recording)
 # s: a transition's trail cut by a floor's path (the part of a climb that joined the floor) is joined to it when the
 # floor's path has a point this near the cut in time.
 CUT_WINDOW_S = 2.0
@@ -345,7 +345,7 @@ class LiveView:
         """Where a floor's path took over part of a transition's trail (stairs whose lower half joined the floor
         reached), the trail and the path meet at the cut: the trail as the odometry left it, the path as the floor's
         loop closures corrected it. They are joined there, so that the path goes on and the step between the two
-        shows (Elevator-VIGS Office4, 2.1 m on the stairs back to floor 0)."""
+        shows (on a recorded walk, 2.1 m on the stairs back to floor 0)."""
         joins: list[list[tuple[float, float, float]]] = []
         for piece, times in zip(self._strips.get(-1, []), self._transit_t):
             if not piece or not times:

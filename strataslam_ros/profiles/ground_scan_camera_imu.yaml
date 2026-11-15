@@ -65,8 +65,8 @@ fusion:
   #   scans verify and refine
   colorize_cloud: true
   colorize_views: 0  # the camera's depth carries its own colours: the images around add none to a planar
-  #   scanner's map (slam_test: 97.1 % coloured either way), and with 0 no keyframe image is kept (231 MB instead
-  #   of 343). With a 3D LiDAR they colour what the camera missed: see ground_lidar_camera_imu.yaml
+  #   scanner's map (a Tiago recording: 97.1 % coloured either way), and with 0 no keyframe image is kept (231 MB
+  #   instead of 343). With a 3D LiDAR they colour what the camera missed: see ground_lidar_camera_imu.yaml
   # colorize_image_scale: 1.0  # scale of the keyframes' images kept for that: 0.5 takes a quarter of the memory
   vocabulary: default  # camera loop closures: `default` is the one shipped (TUM RGB-D offices); your own:
   #   `strataslam vocab train`, then its path (relative to this file)

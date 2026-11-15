@@ -66,7 +66,8 @@ fusion:
   # colorize_views: 8  # at save, a LiDAR point its keyframe's image missed is coloured from up to this many images
   #   around (0: its own image only, and no image kept); time at save, never the trajectory
   colorize_image_scale: 0.5  # the keyframes' images kept for that at half size: a quarter of the memory (2 MB a
-  #   keyframe at 640x480 otherwise), the same colours on pasillo_Tiago (1.18 GB -> 0.55 GB, 33.6 % coloured)
+  #   keyframe at 640x480 otherwise), the same colours on a Tiago corridor recording (1.18 GB -> 0.55 GB, 33.6 %
+  #   coloured)
   vocabulary: default  # camera loop closures: `default` is the one shipped (TUM RGB-D offices); your own:
   #   `strataslam vocab train`, then its path (relative to this file)
 

@@ -114,7 +114,7 @@ struct SlamSystem::Impl {
   Timestamp frame_stamp = 0;      // of the frame being processed
   // The body's attitude carried by the gyroscope alone (base frame, bias removed), every 20 ms over
   // the last 5 minutes: a frontend restarts from the last pose turned by what the body turned while
-  // the odometry was blind (a person turning round in an elevator cabin: Elevator-VIGS Office1-E's
+  // the odometry was blind (a person turning round in an elevator cabin: on a recorded ride the
   // second floor was mapped heading back the way the first had come).
   std::deque<std::pair<Timestamp, Eigen::Quaterniond>> gyro_att;
   // Unaligned: a 16-byte aligned member here pads the struct (clang-analyzer Padding).
@@ -635,9 +635,8 @@ struct SlamSystem::Impl {
   /// moving accelerates in a straight line without turning, which the IMU cannot tell from a tilt
   /// (S06 walks off at 0.8 m/s^2: 4.7 deg of pitch, a corridor climbed as a 2.3 m ramp). A ground
   /// robot's IMU is not used for it: until the accelerations have shown its heading, a TF that has
-  /// it turned half around reads every tilt backwards (ADR-0058: the Summit's 0.46 deg became a
-  /// start 0.9 deg off and a fourth floor in `prueba_03`), and a ground robot sees the ground plane
-  /// it stands on.
+  /// it turned half around reads every tilt backwards (ADR-0058: a Summit XL's 0.46 deg became a
+  /// start 0.9 deg off and a fourth floor), and a ground robot sees the ground plane it stands on.
   bool init_gravity(const std::vector<Eigen::Vector3f>& cloud, const gtsam::Pose3& T_base_sensor,
                     Timestamp stamp) {
     constexpr Timestamp kWindow = 500'000'000, kWait = 2'000'000'000;  // ns
@@ -724,8 +723,8 @@ struct SlamSystem::Impl {
     in.session = session;
     in.floor = current_floor();
     // Restarted at this very frame (a floor event): its pose is the restart's, not the one the
-    // frontend measured before it (raised by a ride's height since, Elevator-VIGS Mall-M: the
-    // first keyframe of floor 1 was bridged 17.7 m under the next).
+    // frontend measured before it (raised by a ride's height since; on a recorded ride the first
+    // keyframe of floor 1 was bridged 17.7 m under the next).
     const gtsam::Pose3 T_odom_base =
         restart_stamp == stamp && last_pose ? *last_pose : r.T_odom_base;
     in.T_odom_base = T_odom_base;
@@ -738,17 +737,16 @@ struct SlamSystem::Impl {
     // (0.6 deg, a 2.5 m drop over 120 m that the odometry did not have).
     if (cfg.robot.platform != Platform::Ground || imu_learned) in.up_body = quasi_static_up();
     // In motion, with a calibrated accelerometer, its mean over the last 2 s, looser (ADR-0073).
-    // Uncalibrated, its offset (0.5-1.5 deg on Elevator-VIGS) would tilt every floor by that much,
-    // where the frontend's 1 deg bound leaves the LiDAR room to find the level (Campus1, Station1:
-    // 0.3-0.7 m worse with it). Without it a walk's
-    // keyframes had no attitude in the graph, only relative motions, which bend at almost no cost:
-    // a loop that did not close in height was closed by tilting the floor (the portable rig's
-    // floor 0 sank 2.3 m over 40 m to absorb its two staircases' 0.7 m). Not the gravity tracker's
-    // up: with an accelerometer offset it turns the offset round with the gyroscope at each turn
-    // and brings it back over its time constant, a heading-dependent tilt that bent Elevator-VIGS
-    // floors (Station1 0.3 m, Factory-M 0.2 m). The mean has the offset the start was levelled
-    // with. Not in a ride the IMU measures (the cabin accelerates), nor on a ground robot whose IMU
-    // heading is not learned yet.
+    // Uncalibrated, its offset (0.5-1.5 deg on recorded hand-held rides) would tilt every floor by
+    // that much, where the frontend's 1 deg bound leaves the LiDAR room to find the level (two
+    // recorded walks came out 0.3-0.7 m worse with it). Without it a walk's keyframes had no
+    // attitude in the graph, only relative motions, which bend at almost no cost: a loop that did
+    // not close in height was closed by tilting the floor (a hand-held rig's floor 0 sank 2.3 m
+    // over 40 m to absorb its two staircases' 0.7 m). Not the gravity tracker's up: with an
+    // accelerometer offset it turns the offset round with the gyroscope at each turn and brings it
+    // back over its time constant, a heading-dependent tilt that bent recorded floors by 0.2-0.3 m.
+    // The mean has the offset the start was levelled with. Not in a ride the IMU measures (the
+    // cabin accelerates), nor on a ground robot whose IMU heading is not learned yet.
     if (!in.up_body && imu_trusted && accel_bias && !mgr.in_unobserved_transition() &&
         (cfg.robot.platform != Platform::Ground || imu_learned))
       if (const auto up = mean_up(2'000'000'000)) {
@@ -1244,7 +1242,7 @@ struct SlamSystem::Impl {
   }
 
   /// A height sensor of the profile (barometer, IMU measuring floor changes) is still sending: a
-  /// floor change could not go unnoticed. One that fell silent sees none (the portable rig's camera
+  /// floor change could not go unnoticed. One that fell silent sees none (a hand-held rig's camera
   /// and IMU stopped 20 s before an elevator ride three floors down: the loss in the cabin was
   /// taken for no floor change, as if the IMU had seen the cabin stand still).
   bool height_cues_live() const {
@@ -1290,7 +1288,7 @@ struct SlamSystem::Impl {
     // Relocalizing here would snap a half-way keyframe onto the floor it looks like. So would it in
     // a ride the IMU or the barometer is measuring, which an odometry-opened transition becomes
     // when the odometry is lost in the cabin: a glass cabin looks onto the floor it left
-    // (Elevator-VIGS Mall-E: relocalized on floor 0 half-way up, the ride was dropped).
+    // (a recorded ride: relocalized on floor 0 half-way up, the ride was dropped).
     if (mgr.state() == FloorState::InTransition) return;
     // With a barometer or an IMU sending a floor change cannot go unnoticed, so a tracking loss is
     // not one: the session stays on its floor; with `multifloor.enabled: false` there is no other
@@ -1678,7 +1676,7 @@ struct SlamSystem::Impl {
     }
     // A ramp or stairs tracked continuously keeps its keyframes for the floor it arrives at. Not a
     // ride the odometry did not see, even tracked: the keyframes in the cabin have the height it
-    // left (Elevator-VIGS Mall-M: one was placed on the floor reached, 17.7 m under the next).
+    // left (a recorded ride: one was placed on the floor reached, 17.7 m under the next).
     if (!(ev.continuous_tracking && ev.from != ev.to) || ev.needs_frontend_reset)
       transit_kfs.clear();
     if (odom_fe)
@@ -1700,7 +1698,7 @@ struct SlamSystem::Impl {
       // same pose (clearing the old floor's map), raised by the height the manager measured and
       // told it is no motion (it is not counted twice). Left at the height before the ride, the
       // odometry's z linked a floor reached again by the stairs to its keyframes 15 m off
-      // (Elevator-VIGS Office4: back on floor 0, its loop closures with the start were rejected).
+      // (a recorded walk: back on floor 0, its loop closures with the start were rejected).
       restart_frontend(0.0, true, ev.reset_dz);
       last_kf.reset();
       last_kf_pose.reset();
@@ -1765,16 +1763,16 @@ struct SlamSystem::Impl {
   /// A hand-held sensor picked up or put down (a table, the floor), told from a floor change by the
   /// floor the LiDAR sees under it staying. Triggered strictly: within 0.8 s the sensor moved 0.3 m
   /// or more up or down, at least twice as much as across, the floor under it within 0.10 m. A lift
-  /// goes at 1-1.5 m/s straight up (Elevator-VIGS Office4: 0.94 m in 0.6 s off the ground); stairs
+  /// goes at 1-1.5 m/s straight up (a recorded one: 0.94 m in 0.6 s off the ground); stairs
   /// and ramps take the floor with the sensor, go at 0.2-0.3 m/s and mostly across, and an elevator
   /// takes its cabin. Then the whole lift is measured, from the rest before it (the lowest or
   /// highest height in the 2 s before the trigger) to where the sensor settles (0.4 s within 6 cm),
   /// less what the floor under it moved between the two (up to 0.4 m: a sensor put on the floor
-  /// sees it at a grazing angle, and the floor around may slope; Elevator-VIGS Residential3, 0.34
-  /// m, which left a pick-up without its put-down and a false level): the floor manager holds its
-  /// altitude by that, and a transition the lift opened ends on its floor. A hand-held rig's walk
-  /// is then on its floor, in the map and its loop closures, instead of in a transition that only
-  /// the next stairs close (the portable rig, 120 s; Office4, picked up and put down six times).
+  /// sees it at a grazing angle, and the floor around may slope; 0.34 m on a recorded walk, which
+  /// left a pick-up without its put-down and a false level): the floor manager holds its altitude
+  /// by that, and a transition the lift opened ends on its floor. A hand-held rig's walk is then on
+  /// its floor, in the map and its loop closures, instead of in a transition that only the next
+  /// stairs close (120 s on one recorded walk; another was picked up and put down six times).
   void detect_lift(const LidarScan& scan, const FrontendResult& r) {
     if (cfg.robot.platform != Platform::Handheld || !cfg.multifloor.enabled) return;
     constexpr Timestamp kKeep = 4'000'000'000, kTrigger = 800'000'000, kBefore = 2'000'000'000,
@@ -1831,7 +1829,7 @@ struct SlamSystem::Impl {
     if (std::abs(floor_moved) > kFloorKept || lift_sign * dz < kMinLift) return;
     const double lift = dz - floor_moved;
     // A transition the lift opened began after its start, or up to 3 s before by the IMU: its
-    // vertical-acceleration window opens on the lift's push (Elevator-VIGS Residential3).
+    // vertical-acceleration window opens on the lift's push (as on a recorded hand-held walk).
     const FloorEvent ev = mgr.device_lifted(lift, lift_hist[start].stamp - 3'000'000'000);
     lift_hist.clear();
     log->log(LogLevel::Info, strprintf("the sensor was %s %.2f m over the same floor: not a floor "
@@ -2042,8 +2040,8 @@ void SlamSystem::add_lidar(const LidarScan& scan) {
   if (r.quality.state == TrackingState::Good) s.last_good = {scan.stamp, r.T_odom_base};
   s.learn_imu_mounting(r, scan.stamp);
   s.feed_manager(r, scan.stamp);
-  // Also in a confined scan: a sensor put on the floor sees only what is near (Elevator-VIGS
-  // Residential3: 17 s unseen, the put-down closed as a ramp and a level). In a cabin the odometry
+  // Also in a confined scan: a sensor put on the floor sees only what is near (a recorded walk:
+  // 17 s unseen, the put-down closed as a ramp and a level). In a cabin the odometry
   // sees no vertical motion, so it cannot look like a lift.
   s.detect_lift(scan, r);
   if (r.is_keyframe) {
@@ -2123,7 +2121,7 @@ std::optional<gtsam::Pose3> SlamSystem::floor_from_odom() const {
   // The optimized pose of the latest keyframe against the odometry's when it was taken: the
   // drift the graph has corrected so far (zero until a loop closes). Heading and position only:
   // both frames are levelled by gravity, and the keyframe's own roll and pitch (a robot on a
-  // ramp, 3.5 deg on the Summit's prueba_03) would tilt the whole odometry frame about the
+  // ramp, 3.5 deg on a Summit XL recording) would tilt the whole odometry frame about the
   // keyframe and lift points tens of metres away by metres.
   const gtsam::Pose3 X = g.pose(ids.back());
   const gtsam::Pose3& O = s.backend.keyframe(ids.back()).T_odom_base;

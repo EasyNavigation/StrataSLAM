@@ -115,7 +115,7 @@ def cloud(frame: str, points: list[tuple[float, float, float]]):
 
 
 def test_the_floors_keep_their_anchors_and_the_robot_takes_the_correction(viewer) -> None:
-    # The Summit's elevator bag (ADR-0075): back on floor 0 the loop closures corrected the odometry by 11 deg and
+    # A Summit XL elevator recording (ADR-0075): back on floor 0 the loop closures corrected the odometry by 11 deg and
     # 4.6 m. Floor 1 must stay where it was against floor 0, and the robot must stand on floor 0's optimized map.
     v = viewer
     v.on_floor_state(state(0))
@@ -151,7 +151,7 @@ def test_without_map_the_first_transform_of_each_floor_is_its_anchor(viewer) -> 
 
 
 def test_a_new_floor_continues_the_robot_where_the_floor_it_left_had_it(viewer) -> None:
-    # The Summit's prueba_03: floor 0's loop closures had lifted the robot 1.4 m above its odometry when it took the
+    # A Summit XL recording: floor 0's loop closures had lifted the robot 1.4 m above its odometry when it took the
     # ramp down; the floor it reached is placed by that correction (as the node places map -> floor_<k>), so the robot
     # drawn through the new floor stands where it was drawn through the old one: no jump.
     v = viewer

@@ -13,7 +13,7 @@ constexpr Timestamp kKeep = 10'000'000'000;  // ns of IMU kept for the gyro inte
 constexpr double kAccelTolerance =
     0.1;  // relative: specific force this close to gravity is "at rest"
 /// Sum over the intervals of the base's horizontal acceleration squared, (m/s^2)^2, before the
-/// heading is decided: on the Summit of `prueba_03` (LiDAR odometry) the heading is within about
+/// heading is decided: on a Summit XL recording (LiDAR odometry) the heading is within about
 /// 10 deg of its final value from 4, and 20 deg at 2. Its error tilts the IMU's slope by only
 /// tilt * sin(error): 10 deg on a 3 deg ramp is 0.5 deg of roll.
 constexpr double kMinMotionEnergy = 4.0;
@@ -24,8 +24,8 @@ constexpr double kMinExplained = 0.5;
 /// from kMinMotionEnergy, above): it confirms the TF rather than contradicting it, and the TF's
 /// heading stays. Applied, it replaced an exact TF: a hand-held rig whose IMU is its base frame
 /// learned -11.7 deg, over the 10 deg that makes a mounting wrong, and the gravity tracker was
-/// restarted for the 20 s of an elevator ride (Elevator-VIGS Mall-E: the 4.5 m ride became a
-/// 1.5 m ramp).
+/// restarted for the 20 s of an elevator ride (on a recorded one, the 4.5 m ride became a 1.5 m
+/// ramp).
 constexpr double kHeadingResolutionDeg = 20.0;
 }  // namespace
 

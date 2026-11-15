@@ -85,8 +85,8 @@ void room_with_ramp_foot(std::vector<Vector3d>& w, std::mt19937& rng, double ram
 /// Room A at the origin, ramp A up 3 m to a corridor, ramp B down 3 + kDrop m from it to room B:
 /// room B and the foot of ramp B are room A and the foot of ramp A turned round, kDrop lower. The
 /// odometry measures both flights right; the building is what a staircase the odometry reads kDrop
-/// too long (ADR-0073: Campus4, prueba_00) makes of a real one: the place is floor 0, the stairs
-/// say a level below it.
+/// too long (ADR-0073: seen hand-held and on a Summit XL) makes of a real one: the place is floor
+/// 0, the stairs say a level below it.
 std::vector<Vector3d> building(bool same_room) {
   std::vector<Vector3d> w;
   std::mt19937 rng(7);
@@ -149,7 +149,7 @@ struct Walk {
     imu_sends = imu;
     baro_sends = baro;
     cfg.fusion.odometry_from = OdometryFrom::Lidar;
-    cfg.multifloor.floor_height_prior.reset();  // as Elevator-VIGS is mapped: storeys differ
+    cfg.multifloor.floor_height_prior.reset();  // as in a real building: storeys differ
     slam = std::make_unique<SlamSystem>(cfg, Extrinsics(), SystemTuning(), messages);
     // A hall at kFar, 14 x 7 m, its pillars where no room of the route has them.
     std::mt19937 rng(13);
@@ -284,10 +284,10 @@ TEST(FloorRevisit, ANewLevelNearAFloorStaysWhenItsPlaceIsAnother) {
 // The TF floor_<k> -> odom carries the graph's correction: the robot drawn from its odometry stands
 // on its latest optimized keyframe. The floor's anchor (the odometry when the floor was opened)
 // leaves it off by the drift the loop closures corrected; with a 3 cm range noise the scans drift,
-// and walking up and down room A closes loops. The Summit's elevator bag was 4.5 m off with the
-// anchor, in the live view as in RViz. The correction is level: the keyframe's own roll and pitch
-// (a robot on a ramp) would tilt the whole odometry frame about it, metres of height tens of metres
-// away (the Summit's prueba_03).
+// and walking up and down room A closes loops. A Summit XL elevator recording was 4.5 m off with
+// the anchor, in the live view as in RViz. The correction is level: the keyframe's own roll and
+// pitch (a robot on a ramp) would tilt the whole odometry frame about it, metres of height tens of
+// metres away (on a Summit XL recording).
 TEST(FloorRevisit, TheFloorToOdometryTransformCarriesTheCorrectionOfTheGraph) {
   Walk w;
   w.noise = 0.03;
@@ -323,7 +323,7 @@ TEST(FloorRevisit, TheFloorToOdometryTransformCarriesTheCorrectionOfTheGraph) {
 // A hand-held sensor picked up from the floor (0.3 m to 1.3 m above it in 0.7 s) opens a
 // transition by its height; the LiDAR sees the same floor under it before and after, so it is
 // told for what it is and the transition ends on floor 0 at once, not when the walk calms down
-// (a carried IMU never does: the portable rig spent 120 s of its floor 0 in a transition).
+// (a carried IMU never does: a hand-held rig spent 120 s of its floor 0 in a transition).
 TEST(FloorRevisit, ASensorPickedUpFromTheFloorIsNoFloorChange) {
   Walk w;
   w.carry = 0.3;
@@ -368,7 +368,7 @@ TEST(FloorRevisit, AViewsFloorCloudIsBuiltFromFewerPointsAndCoversTheSameFloor) 
   EXPECT_LT((hi_f - hi_v).norm(), 1.0f);
 }
 
-// The portable rig (2026-11-13): its camera and IMU stopped 20 s before an elevator ride, and the
+// A hand-held rig: its camera and IMU stopped 20 s before an elevator ride, and the
 // session lost in the cabin was kept on the floor it left, as a height sensor that saw no change
 // keeps it. A sensor that fell silent sees none, and says so: the loss is an unobservable change,
 // and a place relocalization does not find is a new floor, even if the sensor comes back after the

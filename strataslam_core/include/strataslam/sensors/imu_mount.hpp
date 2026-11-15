@@ -131,7 +131,7 @@ class GravityTracker {
   }
   /// The base frame's samples turned by `dR` from now on (a mounting learned): its state is turned
   /// with them, so that it stays ready. A reset would leave a body that moves without `up` for
-  /// three time constants (Elevator-VIGS Factory-M: a 20 m ride unmeasured).
+  /// three time constants (on a recorded ride, 20 m went unmeasured).
   void rotate(const Eigen::Matrix3d& dR) {
     if (up_) up_ = (dR * *up_).normalized();
     bias_ = dR * bias_;

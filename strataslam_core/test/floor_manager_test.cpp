@@ -203,7 +203,7 @@ TEST(FloorManager, GentleRampSlowerThanTheCalmSpeedStillMeasuresTheWholeClimb) {
 }
 
 TEST(FloorManager, RampWhoseSlopeFlickersAroundTheThresholdIsOneTransition) {
-  // Summit prueba_00: a ramp of about 3 degrees whose odometry z alternates 1.5 and 3.5 degrees
+  // On a Summit XL: a ramp of about 3 degrees whose odometry z alternates 1.5 and 3.5 degrees
   // every 3 m. The short slope window drops below calm_slope on the flat parts; the long one keeps
   // it open.
   Rig r;
@@ -250,7 +250,7 @@ TEST(FloorManager, ForcedCloseOfAnInvalidHeightStaysOnTheFloor) {
 }
 
 TEST(FloorManager, ASlowSustainedClimbIsNotFollowedByTheFloorReference) {
-  // Summit prueba_00: right after a ramp, a second one rises 0.03 m per metre travelled (1.9 m in
+  // On a Summit XL: right after a ramp, a second one rises 0.03 m per metre travelled (1.9 m in
   // 63 m): under the 0.04 of the short slope window. A reference that tracks the altitude with a 5
   // s time constant lags only 0.15 m behind it, under the 0.30 m that opens a transition, so the
   // climb would pass for drift.
@@ -269,8 +269,8 @@ TEST(FloorManager, ASlowSustainedClimbIsNotFollowedByTheFloorReference) {
 
 // A hand-held rig carried up the stairs: the IMU jolts with every step (+-1 m/s^2 at 2 Hz) and
 // never calms while its bearer walks on. Walking on the level reached, with no climb and no cabin's
-// push, the odometry's calm ends the transition there, not max_transition_s later (the portable
-// rig: its climb up and the one down made one transition, floor 1 lost).
+// push, the odometry's calm ends the transition there, not max_transition_s later (on a recorded
+// walk, its climb up and the one down made one transition, floor 1 lost).
 TEST(FloorManager, ACarriedRigsStairsEndWhileItsBearerWalksOn) {
   FloorManagerConfig c;
   c.floor_height_prior.reset();
@@ -564,11 +564,11 @@ void ride(Rig& r, const Vector3d& p, double a, double t_acc, double t_cruise, bo
 
 }  // namespace
 
-// Elevator-VIGS Mall-E: the closing doors made the LiDAR odometry jump 0.33 m before it was lost in
-// the cabin, which opened the transition as one the odometry measures; the 4.5 m ride was then
-// left to the odometry, which came back 1.5 m up. The IMU, accelerating as for an elevator while
-// the odometry is lost, takes the transition, and the ride ends when the cabin stops, although the
-// person walks out at once (a hand-held odometry is never calm for long).
+// A recorded hand-held ride: the closing doors made the LiDAR odometry jump 0.33 m before it was
+// lost in the cabin, which opened the transition as one the odometry measures; the 4.5 m ride was
+// then left to the odometry, which came back 1.5 m up. The IMU, accelerating as for an elevator
+// while the odometry is lost, takes the transition, and the ride ends when the cabin stops,
+// although the person walks out at once (a hand-held odometry is never calm for long).
 TEST(FloorManager, AnElevatorWhoseDoorsMadeTheOdometryJumpIsMeasuredByTheImu) {
   FloorManagerConfig c;
   c.floor_height_prior.reset();
@@ -582,8 +582,8 @@ TEST(FloorManager, AnElevatorWhoseDoorsMadeTheOdometryJumpIsMeasuredByTheImu) {
   ride(r, doors, 0.5, 2.0, 2.5, false);                                  // 4.5 m up
   for (int i = 0; i < 10; ++i) r.step(doors, std::nullopt, 0.0, false);  // the doors open
   // Back with a jump of its own, walking out: the height and the IMU bob, at rates that one second
-  // does not average out (Mall-E: the odometry's speed up to 0.14 m/s, the IMU's 1 s mean up to
-  // 0.19 m/s^2), so the odometry is never calm for long.
+  // does not average out (on that ride: the odometry's speed up to 0.14 m/s, the IMU's 1 s mean up
+  // to 0.19 m/s^2), so the odometry is never calm for long.
   const Vector3d out = doors + Vector3d(0, 0, 1.2);
   for (int i = 0; i < 200; ++i) {
     const double t = i * kDt;
@@ -601,8 +601,8 @@ TEST(FloorManager, AnElevatorWhoseDoorsMadeTheOdometryJumpIsMeasuredByTheImu) {
   EXPECT_EQ(r.mgr.floor(), 1);
 }
 
-// A ride longer than the 12 s of vertical acceleration kept on a floor (15 floors in Elevator-VIGS
-// Residential2): it is decided after it has stopped, and integrated from its start.
+// A ride longer than the 12 s of vertical acceleration kept on a floor (15 floors on a recorded
+// ride): it is decided after it has stopped, and integrated from its start.
 TEST(FloorManager, ALongElevatorRideIsIntegratedFromItsStart) {
   FloorManagerConfig c;
   c.floor_height_prior.reset();
@@ -616,8 +616,8 @@ TEST(FloorManager, ALongElevatorRideIsIntegratedFromItsStart) {
   EXPECT_NEAR(e->delta_z, 14.0, 0.3);
 }
 
-// Elevator-VIGS Office2-E: the closing doors made the odometry jump 0.2 m, under depart_dz, before
-// it was lost; its altitude, frozen there, kept the IMU from opening the 3.3 m ride.
+// A recorded ride: the closing doors made the odometry jump 0.2 m, under depart_dz, before it was
+// lost; its altitude, frozen there, kept the IMU from opening the 3.3 m ride.
 TEST(FloorManager, AnOdometryLostAfterAJumpUnderTheThresholdStillLetsTheImuOpenTheRide) {
   FloorManagerConfig c;
   c.floor_height_prior.reset();
@@ -637,9 +637,9 @@ TEST(FloorManager, AnOdometryLostAfterAJumpUnderTheThresholdStillLetsTheImuOpenT
 
 // While the odometry tracks, a vertical move it sees too (a rig lowered and raised again, a step,
 // the bob of the gait) gives 1 s means of vertical acceleration over the departure threshold for
-// as long as a cabin's push (Elevator-VIGS Office2: 2.5 s; Station1's cabin pushes for 1.1 s). It
+// as long as a cabin's push (up to 2.5 s on recorded rides; a cabin can push for just 1.1 s). It
 // is not handed to the IMU: integrated from there, the tilt of the gravity estimate made a 93 m
-// "ride" of Campus1, back where the odometry had started.
+// "ride" on a recording, back where the odometry had started.
 TEST(FloorManager, AVerticalMoveTheOdometryTracksIsNotARide) {
   FloorManagerConfig c;
   c.floor_height_prior.reset();
@@ -660,8 +660,8 @@ TEST(FloorManager, AVerticalMoveTheOdometryTracksIsNotARide) {
   for (const auto& e : r.events) EXPECT_NE(e.type, TransitionType::Elevator);
 }
 
-// Elevator-VIGS Office4: down a flight of stairs the odometry tracks at less than half the speed
-// that the IMU's 1 s means give. The steps jolt the IMU as no cabin does: not a ride.
+// Down a flight of stairs the odometry tracks at less than half the speed that the IMU's 1 s means
+// give. The steps jolt the IMU as no cabin does: not a ride.
 TEST(FloorManager, AStairTheOdometryTracksHalfWayIsNotARideForTheImu) {
   FloorManagerConfig c;
   c.floor_height_prior.reset();
@@ -682,9 +682,9 @@ TEST(FloorManager, AStairTheOdometryTracksHalfWayIsNotARideForTheImu) {
   for (const auto& e : r.events) EXPECT_NE(e.type, TransitionType::Elevator);
 }
 
-// Elevator-VIGS Office4: the odometry opened a transition 50 s before the ride (the rig lifted)
-// and was lost on the way to the cabin. When the IMU takes it over, what came before ends on the
-// floor it left, and the ride goes on to its own end.
+// On a recorded walk to an elevator, the odometry opened a transition 50 s before the ride (the
+// rig lifted) and was lost on the way to the cabin. When the IMU takes it over, what came before
+// ends on the floor it left, and the ride goes on to its own end.
 TEST(FloorManager, ARideTheImuTakesOverEndsTheOdometrysTransitionOnTheFloorItLeft) {
   FloorManagerConfig c;
   c.floor_height_prior.reset();
@@ -709,7 +709,7 @@ TEST(FloorManager, ARideTheImuTakesOverEndsTheOdometrysTransitionOnTheFloorItLef
   EXPECT_NEAR(ends[1]->delta_z, 15.0, 0.5);
 }
 
-// Elevator-VIGS Station2: a short push, mostly over before the IMU took the ride from the odometry.
+// A short push, mostly over before the IMU took the ride from the odometry.
 // Counted from the onset it is a cabin's, and the brake that matches it ends the ride at rest.
 TEST(FloorManager, AShortPushIsCountedFromTheOnsetAndTheRideEndsWhereTheCabinBrakes) {
   FloorManagerConfig c;
@@ -730,8 +730,8 @@ TEST(FloorManager, AShortPushIsCountedFromTheOnsetAndTheRideEndsWhereTheCabinBra
   EXPECT_NEAR(e->delta_z, -0.64 * (1.6 + 4.0), 0.4);
 }
 
-// Elevator-VIGS Office3: walked into the cabin and it left at once. The boarding walk, still in the
-// odometry's last seconds, is no walk out of a cabin that is moving: the ride goes on to its brake.
+// A person walks into the cabin and it leaves at once. The boarding walk, still in the odometry's
+// last seconds, is no walk out of a cabin that is moving: the ride goes on to its brake.
 TEST(FloorManager, TheWalkIntoACabinThatLeavesAtOnceDoesNotEndTheRide) {
   FloorManagerConfig c;
   c.floor_height_prior.reset();
@@ -755,7 +755,7 @@ TEST(FloorManager, TheWalkIntoACabinThatLeavesAtOnceDoesNotEndTheRide) {
   EXPECT_NEAR(e->delta_z, -1.2 * (1.5 + 5.0), 0.5);
 }
 
-// Elevator-VIGS Station3: the brake of a ride whose push the IMU did not see, taken for a push.
+// The brake of a ride whose push the IMU did not see, taken for a push.
 // Its speed never comes back to rest, and the walk that follows, longer than any cabin, ends it:
 // no ride integrated through the walk.
 TEST(FloorManager, ALoneBrakeTakenForAPushIsEndedByAWalkLongerThanACabin) {
@@ -775,9 +775,9 @@ TEST(FloorManager, ALoneBrakeTakenForAPushIsEndedByAWalkLongerThanACabin) {
   EXPECT_FALSE(r.mgr.in_unobserved_transition()) << "the transition is the odometry's again";
 }
 
-// Elevator-VIGS Residential3: a cabin that starts gently (under the departure threshold) and brakes
-// hard. The IMU takes the brake for a push; when it never comes back to rest, the push is found
-// back in the history, before the cabin's calm, and the ride measured from it.
+// A cabin that starts gently (under the departure threshold) and brakes hard. The IMU takes the
+// brake for a push; when it never comes back to rest, the push is found back in the history,
+// before the cabin's calm, and the ride measured from it.
 TEST(FloorManager, ARideWhosePushWasUnderTheThresholdIsFoundBackFromItsBrake) {
   FloorManagerConfig c;
   c.floor_height_prior.reset();
@@ -800,8 +800,8 @@ TEST(FloorManager, ARideWhosePushWasUnderTheThresholdIsFoundBackFromItsBrake) {
   EXPECT_NEAR(e->delta_z, 0.5 * 0.72 * 4.0 + 0.72 * 8.0 + 0.5 * 0.72 * 1.6, 0.6);
 }
 
-// Elevator-VIGS Campus6: the odometry moves in the cabin as it brakes. The ride does not end there
-// as a walk out of it: it ends when the cabin has stopped.
+// The odometry moves in the cabin as it brakes. The ride does not end there as a walk out of it:
+// it ends when the cabin has stopped.
 TEST(FloorManager, ARideIsNotWalkedOutOfWhileTheCabinBrakes) {
   FloorManagerConfig c;
   c.floor_height_prior.reset();
@@ -824,8 +824,8 @@ TEST(FloorManager, ARideIsNotWalkedOutOfWhileTheCabinBrakes) {
   EXPECT_NEAR(e->delta_z, 1.2 * 2.0 + 1.2 * 8.0, 0.5);
 }
 
-// Elevator-VIGS Office3: a jolt taken for a cabin's push, then a walk whose steps jolt the IMU. It
-// is no ride once the steps are clear, so the ride that follows is taken from its own start.
+// A jolt taken for a cabin's push, then a walk whose steps jolt the IMU. It is no ride once the
+// steps are clear, so the ride that follows is taken from its own start.
 TEST(FloorManager, AJoltFollowedBySteppingIsDroppedInTimeForTheRideThatFollows) {
   FloorManagerConfig c;
   c.floor_height_prior.reset();
@@ -847,8 +847,8 @@ TEST(FloorManager, AJoltFollowedBySteppingIsDroppedInTimeForTheRideThatFollows) 
   EXPECT_NEAR(e->delta_z, 15.0, 0.6);
 }
 
-// Elevator-VIGS Office1: the odometry opened the transition before the ride and tracked the cabin
-// through it, still. The IMU's 15 m are its own.
+// The odometry opened the transition before the ride and tracked the cabin through it, still. The
+// IMU's 15 m are its own.
 TEST(FloorManager, ARideTheOdometryTracksAsAStillCabinIsMeasuredByTheImu) {
   FloorManagerConfig c;
   c.floor_height_prior.reset();
@@ -865,10 +865,10 @@ TEST(FloorManager, ARideTheOdometryTracksAsAStillCabinIsMeasuredByTheImu) {
   EXPECT_NEAR(e->delta_z, 15.0, 0.5);
 }
 
-// Elevator-VIGS Office1-H: a bias and the tilt of the gravity estimate add 0.03 m/s^2 through a
-// 33 m ride, and the speed integrated from the onset was still 0.94 m/s when the cabin had
-// stopped. The stop is the brake that answers the push; the zero-velocity update at that end
-// removes a constant bias from the height.
+// A bias and the tilt of the gravity estimate add 0.03 m/s^2 through a recorded 33 m ride, and the
+// speed integrated from the onset was still 0.94 m/s when the cabin had stopped. The stop is the
+// brake that answers the push; the zero-velocity update at that end removes a constant bias from
+// the height.
 TEST(FloorManager, ALongRideWithABiasedAccelerometerStopsWhereTheCabinBrakes) {
   FloorManagerConfig c;
   c.floor_height_prior.reset();
@@ -886,7 +886,7 @@ TEST(FloorManager, ALongRideWithABiasedAccelerometerStopsWhereTheCabinBrakes) {
   EXPECT_NEAR(e->delta_z, 1.2 * 22.0, 0.5);  // 1.2 m/s for 22 s
 }
 
-// What the bias estimate has left is larger than the calm threshold (Elevator-VIGS Mall-M: the
+// What the bias estimate has left is larger than the calm threshold (on a recorded ride the
 // estimate drifted while walking and the cabin at rest read +0.12 m/s^2): the ride still stops
 // where the cabin brakes, its accelerations measured from the one before it started.
 TEST(FloorManager, ARideStopsWhereTheCabinBrakesWithABiasTheEstimateLeft) {
@@ -907,7 +907,7 @@ TEST(FloorManager, ARideStopsWhereTheCabinBrakesWithABiasTheEstimateLeft) {
   EXPECT_NEAR(e->delta_z, -1.2 * 17.0, 0.5);  // 1.2 m/s for 17 s
 }
 
-// Elevator-VIGS Office4: up by elevator, measured by the IMU (14.75 m), and back down the stairs,
+// Up by elevator, measured by the IMU (14.75 m on a recorded walk), and back down the stairs,
 // measured by the odometry (15.43 m), to where the walk had started. The level reached by the ride
 // is only known to a few percent of it: the stairs end on the first level, not 0.68 m under it.
 TEST(FloorManager, BackDownTheStairsFromALevelTheImuMeasuredIsTheLevelItLeft) {
@@ -927,8 +927,8 @@ TEST(FloorManager, BackDownTheStairsFromALevelTheImuMeasuredIsTheLevelItLeft) {
 }
 
 // A cabin that brakes gently, under the pulse threshold, is never seen braking; the ride ends when
-// the odometry walks out of it, at a walking pace (Elevator-VIGS Factory-H, where the cabin's
-// bumps hid the brake).
+// the odometry walks out of it, at a walking pace (as on a recorded ride, where the cabin's bumps
+// hid the brake).
 TEST(FloorManager, ARideWhoseBrakeIsNotSeenEndsWhenTheOdometryWalksOut) {
   FloorManagerConfig c;
   c.floor_height_prior.reset();
@@ -945,9 +945,9 @@ TEST(FloorManager, ARideWhoseBrakeIsNotSeenEndsWhenTheOdometryWalksOut) {
   EXPECT_NEAR(e->delta_z, 0.5 * 1.5 * 3.0 + 0.5 * 1.5 * 10.0, 0.5);
 }
 
-// A jolt the IMU took for a cabin starting (Elevator-VIGS Factory-H, boarding) is no ride once the
-// odometry walks on; the transition goes back to the odometry, and the ride that follows is
-// measured from its own start.
+// A jolt the IMU took for a cabin starting (while boarding) is no ride once the odometry walks on;
+// the transition goes back to the odometry, and the ride that follows is measured from its own
+// start.
 TEST(FloorManager, AJoltThatWasNoRideLeavesTheNextRideToItsOwnStart) {
   FloorManagerConfig c;
   c.floor_height_prior.reset();
@@ -1010,10 +1010,10 @@ TEST(FloorManager, OutOfAConfinedSpaceTheHeightGoesOnFromWhereItWasHeld) {
   EXPECT_EQ(r.mgr.floor(), 0);
 }
 
-// A ground robot's base vibrates as it drives: on the Summit XL (prueba_03) the 1 s mean of the
-// vertical acceleration stayed at -0.1 to -0.35 m/s^2 for 27 s of driving, which opened a ride
-// and closed it as a 3.4 m elevator. A cabin carries a ground robot standing still: while it
-// drives, the IMU opens no ride.
+// A ground robot's base vibrates as it drives: on a Summit XL the 1 s mean of the vertical
+// acceleration stayed at -0.1 to -0.35 m/s^2 for 27 s of driving, which opened a ride and closed it
+// as a 3.4 m elevator. A cabin carries a ground robot standing still: while it drives, the IMU
+// opens no ride.
 TEST(FloorManager, AGroundRobotDrivingWithASustainedVerticalAccelerationOpensNoRide) {
   FloorManagerConfig c;
   c.floor_height_prior.reset();
@@ -1028,8 +1028,8 @@ TEST(FloorManager, AGroundRobotDrivingWithASustainedVerticalAccelerationOpensNoR
   EXPECT_EQ(r.mgr.floor(), 0);
 }
 
-// The Summit XL in an elevator (summit_20261110_150200_ascensor): it drives in and stops, the
-// LiDAR odometry is lost in the cabin, and the IMU measures the ride; the robot drives out.
+// A Summit XL in an elevator: it drives in and stops, the LiDAR odometry is lost in the cabin, and
+// the IMU measures the ride; the robot drives out.
 TEST(FloorManager, AGroundRobotStandingInACabinIsCarriedByTheImu) {
   FloorManagerConfig c;
   c.floor_height_prior.reset();
@@ -1069,9 +1069,9 @@ TEST(FloorManager, AGroundRobotThatDrivesOffBeforeARideBrakesWasNeverInACabin) {
 }
 
 // The Summit XL's base vibrates as it drives: the 1 s mean of its vertical acceleration stays over
-// the IMU's calm threshold, and a ramp the odometry measured never settled (prueba_00: its two
-// ramps, +2.5 and +1.7 m, read as one of 5.1 m). The IMU's calm is a ride's, not a ramp's: the
-// ramp ends as it does without the IMU.
+// the IMU's calm threshold, and a ramp the odometry measured never settled (two ramps in a row,
+// +2.5 and +1.7 m, read as one of 5.1 m). The IMU's calm is a ride's, not a ramp's: the ramp ends
+// as it does without the IMU.
 TEST(FloorManager, AGroundRobotsVibrationDoesNotKeepARampFromEnding) {
   const auto run = [](std::optional<double> az) {
     FloorManagerConfig c;

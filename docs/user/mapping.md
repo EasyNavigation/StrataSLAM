@@ -98,7 +98,7 @@ With `bag:=` the node reads the rosbag2 and feeds the pipeline every message in 
 map to the profile's `output.map_dir` and exits. Ctrl+C stops it early and saves the map of what was processed so
 far. Playing a bag with `ros2 bag play` instead goes through the
 subscriptions' queues: when processing is slower than the sensor, scans are dropped and the result changes from run to
-run (on `prueba_00` a single-thread run received 2179 and 2376 of 5038 scans, and the climbs came out different).
+run (on one recording two single-thread runs received 2179 and 2376 of 5038 scans, and the climbs came out different).
 If you must play the bag (to watch it in another tool), `ros2 bag play -r 0.5` halves the rate and gives the node
 time for every scan; the node logs how many scans it received when it saves the map.
 Offline there is no loss, and the result is identical run after run whatever `runtime.threads` is: the LiDAR

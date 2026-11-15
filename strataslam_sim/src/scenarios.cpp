@@ -807,7 +807,7 @@ void apply_acceptance_criteria(const ScenarioSpec& spec, const Simulator& sim, c
   } else if (spec.id == "S15") {
     // ADR-0059: the odometry restarted after the ride at the height it measured, so the floor
     // reached again by the stairs links to its keyframes at their height, and closes a loop with
-    // them (Elevator-VIGS Office4: left at the height before the ride, they were a floor off and
+    // them (a recorded walk: left at the height before the ride, they were a floor off and
     // every loop with the start was rejected).
     expect_transition(strataslam::TransitionType::Elevator);
     expect_transition(strataslam::TransitionType::Stairs);

@@ -10,7 +10,7 @@ namespace strataslam {
 namespace {
 /// ORB, the strongest corners. A mask restricts detection, e.g. to the pixels that have a depth:
 /// the strongest corners gather where the contrast is, which in a corridor is its far end, out of
-/// the range of an RGB-D sensor (Tiago, pasillo_Tiago: 24-99 of 1000 keypoints had a depth without
+/// the range of an RGB-D sensor (a Tiago in a corridor: 24-99 of 1000 keypoints had a depth without
 /// it).
 class OrbExtractor final : public FeatureExtractor {
  public:

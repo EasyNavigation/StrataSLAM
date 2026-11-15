@@ -131,7 +131,7 @@ ImuMount::Estimate drive(const gtsam::Rot3& R_base_imu_true, const gtsam::Rot3& 
 
 }  // namespace
 
-// The Robotnik Summit of the `prueba_03` bags: the TF gives the IMU the base's axes, the IMU reads
+// A Summit XL recording: the TF gives the IMU the base's axes, the IMU reads
 // x and y backwards. The turns about the vertical cannot show it; braking and the centripetal
 // acceleration do, and with the TF's heading every slope read with the wrong sign (ADR-0058).
 TEST(ImuMount, AnImuTurnedHalfAroundTheVerticalIsLearnedFromTheAccelerations) {
@@ -150,7 +150,7 @@ TEST(ImuMount, ACorrectHeadingIsConfirmedByTheAccelerations) {
 }
 
 // The heading from the accelerations is resolved to about 10 deg: a correction below 20 deg
-// confirms the TF rather than contradicting it (Elevator-VIGS Mall-E: an exact TF read -11.7 deg
+// confirms the TF rather than contradicting it (on a recorded ride an exact TF read -11.7 deg
 // off and was replaced, and the gravity tracker restarted for the whole elevator ride). A larger
 // one is applied.
 TEST(ImuMount, AHeadingWithinTheResolutionKeepsTheTfAndALargerOneIsLearned) {
@@ -186,7 +186,7 @@ TEST(ImuMount, NothingIsLearnedWithoutTurning) {
 }
 
 // A mounting learned while the body moves: the tracker's state is turned with the samples, so it
-// stays ready and right (a reset left Elevator-VIGS Factory-M without `up` for its 20 m ride).
+// stays ready and right (on a recorded ride a reset left the body without `up` for 20 m).
 TEST(GravityTracker, TurnedWithALearnedMountingItStaysReadyAndRight) {
   GravityTracker g;
   const gtsam::Rot3 R_true = gtsam::Rot3::Roll(0.4);  // the IMU in the (level) base
@@ -313,7 +313,7 @@ void box(std::vector<Vector3d>& pts, std::mt19937& rng, const Vector3d& lo, cons
 }
 
 /// A ground robot with LiDAR (at the base) and an IMU mounted turned half around the vertical,
-/// while the TF gives it the base's axes: the Summit of `prueba_03`.
+/// while the TF gives it the base's axes, as on a Summit XL recording.
 struct SummitRig {
   static constexpr double kBaseHeight = 0.4;
   gtsam::Rot3 R_base_imu;  ///< the real mounting; the TF says the IMU is on the base's axes
@@ -617,7 +617,7 @@ TEST(ImuMount, AStartAtRestIsLevelledByTheImuEvenIfTheScansCameFirst) {
 }
 
 // An accelerometer's offset tilts the gravity it gives: 0.3 m/s^2 is 1.75 deg, and the odometry
-// starts that far from level (every metre walked then climbs 3 cm: the portable rig's floors rose a
+// starts that far from level (every metre walked then climbs 3 cm: a hand-held rig's floors rose a
 // metre each). Its calibration in the profile (`imu.accel_bias`, the IMU's frame) levels it.
 TEST(ImuMount, AnAccelerometerOffsetTiltsTheStartAndItsCalibrationLevelsIt) {
   const gtsam::Pose3 T(gtsam::Rot3::Yaw(0.3), gtsam::Point3(0, 0, 1.2));
@@ -741,7 +741,7 @@ TEST(ImuMount, ATiltedOdometryFrameDoesNotMakeTheImuSeeALift) {
 
 // A ground robot at rest on a level floor, its IMU turned half around and pitched 1 deg on its
 // mount while the TF has it on the base's axes: read through the TF, its gravity tilts the start
-// by 1 deg (the Summit's 0.46 deg read backwards gave `prueba_03` a fourth floor). Until the
+// by 1 deg (a Summit XL's 0.46 deg read backwards gave a recording a fourth floor). Until the
 // accelerations have shown the heading the IMU does not level a ground robot (ADR-0058): the
 // ground plane does.
 TEST(ImuMount, AGroundRobotIsLevelledByItsFloorWhileItsImuHeadingIsUnknown) {
