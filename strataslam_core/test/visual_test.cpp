@@ -2,10 +2,14 @@
 
 #include <algorithm>
 #include <bitset>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <functional>
+#include <limits>
+#include <map>
 #include <random>
 
 #include "strataslam/frontend/depth_utils.hpp"
@@ -447,4 +451,226 @@ TEST(Tracker, SystemReportsKeypointUseOnlyWithCameraOdometry) {
   EXPECT_EQ(with_camera.floor_altitude(0), 0.0);
   EXPECT_FALSE(with_camera.floor_altitude(1).has_value());
   EXPECT_FALSE(with_camera.floor_altitude(-1).has_value());
+}
+
+// ---------------- The RGB-D pipeline, end to end ----------------
+
+namespace {
+
+/// A closed room as an RGB-D camera sees it at the feature level, as the simulator models one:
+/// landmarks with fixed descriptors on its walls, floor and ceiling, each observed with pixel noise
+/// and a few flipped descriptor bits, strongest first up to a cap; the depth image is cast against
+/// the room's box (convex, so every landmark in front of the camera is visible).
+class Room {
+ public:
+  Room() {
+    std::mt19937 rng(21);
+    std::uniform_real_distribution<double> unit(0.0, 1.0);
+    for (int axis = 0; axis < 3; ++axis)
+      for (const double side : {lo_[axis], hi_[axis]}) {
+        const int a = (axis + 1) % 3, b = (axis + 2) % 3;
+        const double area = (hi_[a] - lo_[a]) * (hi_[b] - lo_[b]);
+        for (int i = 0; i < static_cast<int>(kPerSquareMetre * area); ++i) {
+          Vector3d p;
+          p[axis] = side;
+          p[a] = lo_[a] + unit(rng) * (hi_[a] - lo_[a]);
+          p[b] = lo_[b] + unit(rng) * (hi_[b] - lo_[b]);
+          points_.push_back(p);
+          strength_.push_back(static_cast<float>(unit(rng)));
+        }
+      }
+    descriptors_ = random_descriptors(points_.size(), 22);
+  }
+
+  RgbdFrame frame(const gtsam::Pose3& T_room_cam, Timestamp stamp, std::mt19937& rng) const {
+    RgbdFrame f;
+    f.stamp = stamp;
+    f.K = intrinsics();
+    const CameraIntrinsics& K = f.K;
+    f.depth.width = K.width;
+    f.depth.height = K.height;
+    f.depth.meters.assign(static_cast<size_t>(K.width) * K.height, 0.f);
+    const Eigen::Matrix3d R = T_room_cam.rotation().matrix();
+    const Vector3d& o = T_room_cam.translation();
+    for (int v = 0; v < K.height; ++v)
+      for (int u = 0; u < K.width; ++u) {
+        // The ray (x, y, 1) in the camera: its parameter at the wall is the depth itself.
+        const Vector3d d = R * Vector3d((u - K.cx) / K.fx, (v - K.cy) / K.fy, 1.0);
+        double z = std::numeric_limits<double>::infinity();
+        for (int i = 0; i < 3; ++i) {
+          if (d[i] > 1e-12) z = std::min(z, (hi_[i] - o[i]) / d[i]);
+          if (d[i] < -1e-12) z = std::min(z, (lo_[i] - o[i]) / d[i]);
+        }
+        f.depth.meters[static_cast<size_t>(v) * K.width + u] = static_cast<float>(z);
+      }
+    std::vector<std::pair<float, size_t>> seen;
+    for (size_t i = 0; i < points_.size(); ++i) {
+      const Vector3d c = T_room_cam.transformTo(points_[i]);
+      if (c.z() < 0.3) continue;
+      const double u = K.fx * c.x() / c.z() + K.cx, v = K.fy * c.y() / c.z() + K.cy;
+      if (u < 4 || v < 4 || u > K.width - 5 || v > K.height - 5) continue;
+      seen.emplace_back(strength_[i], i);
+    }
+    std::sort(seen.begin(), seen.end(), std::greater<>());
+    if (seen.size() > 500) seen.resize(500);
+    std::normal_distribution<double> pixel(0.0, 0.5);
+    for (const auto& [strength, i] : seen) {
+      const Vector3d c = T_room_cam.transformTo(points_[i]);
+      RgbKeypoint k;
+      k.u = static_cast<float>(K.fx * c.x() / c.z() + K.cx + pixel(rng));
+      k.v = static_cast<float>(K.fy * c.y() / c.z() + K.cy + pixel(rng));
+      k.response = strength;
+      k.descriptor = descriptors_[i];
+      for (int flip = 0; flip < 6; ++flip) {
+        const unsigned bit = rng() % 256;
+        k.descriptor[bit / 8] ^= static_cast<uint8_t>(1u << (bit % 8));
+      }
+      f.keypoints.push_back(k);
+    }
+    return f;
+  }
+
+ private:
+  static constexpr double kPerSquareMetre = 25.0;
+  Vector3d lo_{0.0, 0.0, 0.0}, hi_{8.0, 6.0, 3.0};
+  std::vector<Vector3d> points_;
+  std::vector<float> strength_;
+  std::vector<Descriptor> descriptors_;
+};
+
+/// A hand-held walk round the room at 1.3 m, 1.5 m from its walls: straight at 0.8 m/s, turning
+/// left on the spot at each corner, and on past the start, where it began 25 s before. 10 Hz.
+std::vector<gtsam::Pose3> walk_round_the_room() {
+  std::vector<gtsam::Pose3> out;
+  Eigen::Vector2d at(1.5, 1.5);
+  double yaw = 0.0;
+  const auto here = [&] {
+    return gtsam::Pose3(gtsam::Rot3::Yaw(yaw), gtsam::Point3(at.x(), at.y(), 1.3));
+  };
+  const auto go_to = [&](const Eigen::Vector2d& to) {
+    const Eigen::Vector2d from = at;
+    const int n = static_cast<int>(std::round((to - from).norm() / 0.08));
+    for (int i = 1; i <= n; ++i) {
+      at = from + (to - from) * (static_cast<double>(i) / n);
+      out.push_back(here());
+    }
+  };
+  const auto turn_left = [&] {
+    for (int i = 0; i < 20; ++i) {
+      yaw += M_PI / 40;
+      out.push_back(here());
+    }
+  };
+  out.push_back(here());
+  go_to({6.5, 1.5});
+  turn_left();
+  go_to({6.5, 4.5});
+  turn_left();
+  go_to({1.5, 4.5});
+  turn_left();
+  go_to({1.5, 1.5});
+  turn_left();
+  go_to({4.5, 1.5});
+  return out;
+}
+
+Config rgbd_only() {
+  Config c;
+  c.sensors.camera.enabled = true;
+  c.fusion.odometry_from = OdometryFrom::Camera;
+  return c;
+}
+
+SystemTuning with_vocabulary() {
+  SystemTuning t;
+  BowConfig cfg;
+  cfg.branching = 10;
+  cfg.levels = 4;
+  t.vocabulary = std::make_shared<const BowVocabulary>(
+      BowVocabulary::train(random_descriptors(30000, 23), cfg));
+  return t;
+}
+
+constexpr Timestamp kFrameNs = 100'000'000;  // 10 Hz
+
+}  // namespace
+
+// The camera alone tracks the walk round the room, and back at the start the place is recognized
+// and a loop closed against the keyframes of 25 s before.
+TEST(RgbdSystem, AWalkRoundARoomIsTrackedAndClosedByItsVisualLoop) {
+  const Room room;
+  const auto walk = walk_round_the_room();
+  Extrinsics ext;
+  ext.T_base_camera = Extrinsics::ForwardCamera();
+  SlamSystem slam(rgbd_only(), ext, with_vocabulary());
+  std::mt19937 rng(24);
+  for (size_t i = 0; i < walk.size(); ++i) {
+    slam.add_rgbd(
+        room.frame(walk[i] * ext.T_base_camera, static_cast<Timestamp>(i) * kFrameNs, rng));
+    ASSERT_NE(slam.tracking_quality().state, TrackingState::Lost) << "frame " << i;
+  }
+  EXPECT_GT(slam.keyframes().size(), 10u);
+  ASSERT_FALSE(slam.loops().empty());
+  for (const auto& l : slam.loops()) {
+    EXPECT_EQ(l.from_floor, 0);
+    EXPECT_EQ(l.to_floor, 0);
+  }
+  EXPECT_EQ(slam.current_floor(), 0);
+  // The odometry starts at the first pose, so the walk is compared relative to it.
+  const gtsam::Pose3 truth = walk.front().between(walk.back());
+  const std::optional<gtsam::Pose3> odom = slam.current_pose_odom();
+  if (!odom) FAIL() << "no odometry pose";
+  EXPECT_LT((odom->translation() - truth.translation()).norm(), 0.1);
+  const MapData map = slam.finalize();
+  ASSERT_EQ(map.floors.size(), 1u);
+}
+
+// The camera goes blind for 1 s mid-way along the far wall (empty frames, as a covered lens gives):
+// tracking is lost and the frontend starts a new session that knows nothing of the room. Its first
+// keyframes are relocalized on floor 0 against the keyframes seen before the loss, where the room
+// puts them, and back at the start a loop joins the two sessions.
+TEST(RgbdSystem, ASessionAfterABlindSecondIsRelocalizedOnItsFloor) {
+  const Room room;
+  const auto walk = walk_round_the_room();
+  Extrinsics ext;
+  ext.T_base_camera = Extrinsics::ForwardCamera();
+  Config cfg = rgbd_only();
+  cfg.multifloor.tracking_loss_timeout = 0.5;  // s: the blind second outlasts it
+  SlamSystem slam(cfg, ext, with_vocabulary());
+  std::mt19937 rng(25);
+  bool lost = false;
+  for (size_t i = 0; i < walk.size(); ++i) {
+    const Timestamp stamp = static_cast<Timestamp>(i) * kFrameNs;
+    if (i >= walk.size() / 2 && i < walk.size() / 2 + 10) {
+      RgbdFrame dark;
+      dark.stamp = stamp;
+      dark.K = intrinsics();
+      dark.depth = flat_depth(0.f);
+      slam.add_rgbd(dark);
+    } else {
+      slam.add_rgbd(room.frame(walk[i] * ext.T_base_camera, stamp, rng));
+    }
+    lost = lost || slam.tracking_quality().state == TrackingState::Lost;
+  }
+  EXPECT_TRUE(lost);
+  EXPECT_EQ(slam.current_session(), 1u);
+  const SlamSystem::FloorStatus status = slam.floor_status();
+  EXPECT_FALSE(status.pending);
+  EXPECT_EQ(status.num_floors, 1u);
+  EXPECT_EQ(slam.current_floor(), 0);
+  std::map<KeyframeId, SessionId> session;
+  for (const auto& kf : slam.keyframes()) session[kf.id] = kf.session;
+  size_t between_sessions = 0;
+  for (const auto& l : slam.loops()) between_sessions += session.at(l.from) != session.at(l.to);
+  EXPECT_GE(between_sessions, 1u);
+  // Every keyframe of the new session joined floor 0, where the room puts it.
+  size_t placed = 0;
+  for (const auto& [stamp, T_floor_base] : slam.floor_path(0)) {
+    const size_t i = static_cast<size_t>(stamp / kFrameNs);
+    if (i < walk.size() / 2) continue;
+    const gtsam::Pose3 truth = walk.front().between(walk[i]);
+    EXPECT_LT((T_floor_base.translation() - truth.translation()).norm(), 0.15) << "frame " << i;
+    ++placed;
+  }
+  EXPECT_GT(placed, 10u);
 }

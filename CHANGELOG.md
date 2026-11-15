@@ -25,6 +25,10 @@
 
 ### Added
 
+- Core tests of the RGB-D pipeline (`RgbdSystem.*`): a walk round a room seen at the feature level, tracked by the
+  camera alone and closed by a visual loop, and a session after a blind second relocalized on its floor. The visual
+  frontend, visual loop closure and relocalization were exercised only by the simulator's scenarios, which the coverage
+  job does not run; the core's line coverage goes from 87.3 % to 90.5 %.
 - Two scenarios with a ramp between identical floors, S16 (11.3 degrees) and S17 (2.9 degrees) (ADR-0078).
   `scripts/run_seeds.py` runs S01-S17 by default (it stopped at S15), and `docs/seeds_baseline.json` holds the rates
   of S16 (20 of 20) and S17 (15 of 20).
