@@ -326,23 +326,47 @@ TEST(LidarFrontend, InAConfinedSpaceTheRotationIsTheGyroscopesAndTheTranslationI
   EXPECT_LT((r.T_odom_base.translation() - Vector3d(0.10, 0, 0)).norm(), 0.05);
 }
 
-TEST(LidarFrontend, OutOfConfinedSpacesTheGyroscopeIsNotUsed) {
-  LidarFrontend a{LidarFrontendConfig()}, b{LidarFrontendConfig()};
+namespace {
+
+/// Where a frontend puts the sensor after a turn of 0.1 rad and a step of 0.22 m in a room, the
+/// gyroscope reporting `gyro_yaw` (rad) for it, or nothing.
+gtsam::Pose3 after_a_turn_in_a_room(std::optional<double> gyro_yaw) {
+  LidarFrontend fe{LidarFrontendConfig()};
   LidarScan scan;
   scan.points = room();
   SensorFrame f;
   f.lidar = &scan;
   scan.stamp = f.stamp = 1'000'000'000LL;
-  ASSERT_TRUE(a.process(f).valid);
-  ASSERT_TRUE(b.process(f).valid);
+  EXPECT_TRUE(fe.process(f).valid);
   const gtsam::Pose3 moved(gtsam::Rot3::Yaw(0.1), Vector3d(0.2, 0.1, 0.0));
   scan.points = transform_points(room(), moved.inverse().matrix());
   scan.stamp = f.stamp = 1'100'000'000LL;
-  const FrontendResult ra = a.process(f);
-  f.gyro_delta = gtsam::Rot3::Yaw(0.3);  // wrong on purpose: not used in the open
-  const FrontendResult rb = b.process(f);
-  EXPECT_FALSE(rb.confined);
-  EXPECT_TRUE(ra.T_odom_base.equals(rb.T_odom_base, 1e-12));
+  if (gyro_yaw) f.gyro_delta = gtsam::Rot3::Yaw(*gyro_yaw);
+  const FrontendResult r = fe.process(f);
+  EXPECT_TRUE(r.valid);
+  EXPECT_FALSE(r.confined);
+  return r.T_odom_base;
+}
+
+}  // namespace
+
+// In the open the registration's turn stands when the gyroscope differs from it by a few degrees:
+// mostly the registration correcting itself against its local map.
+TEST(LidarFrontend, OutOfConfinedSpacesATurnAFewDegreesOffTheGyroscopeIsTheRegistrations) {
+  const gtsam::Pose3 alone = after_a_turn_in_a_room(std::nullopt);
+  EXPECT_NEAR(alone.rotation().yaw(), 0.1, 0.005);
+  EXPECT_TRUE(alone.equals(after_a_turn_in_a_room(0.1 + 1.0 * M_PI / 180), 1e-12));
+  EXPECT_TRUE(alone.equals(after_a_turn_in_a_room(0.1 + 5.0 * M_PI / 180), 1e-12));
+}
+
+// A registration that turns by many degrees the gyroscope did not see snapped to a wrong match (at
+// the door of an elevator cabin): the scan takes the gyroscope's rotation, and the registration
+// solves the translation only.
+TEST(LidarFrontend, OutOfConfinedSpacesASnapTheGyroscopeDidNotSeeIsTheGyroscopes) {
+  const double gyro = 0.1 - 15.0 * M_PI / 180;
+  const gtsam::Pose3 r = after_a_turn_in_a_room(gyro);
+  EXPECT_NEAR(r.rotation().yaw(), gyro, 1e-3);  // not the registration's 0.1
+  EXPECT_TRUE(r.translation().allFinite());
 }
 
 // ---------------- Degenerate registration: bounded by a physical acceleration ----------------

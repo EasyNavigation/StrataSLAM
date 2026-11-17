@@ -503,18 +503,31 @@ FrontendResult LidarFrontend::process(const SensorFrame& frame) {
                                         s.cfg.threads, planar)
                : align_gicp(*s.map_cloud, *sp.first, *s.map_tree, to_iso(pred_lidar),
                             s.cfg.max_correspondence, s.cfg.max_iterations, s.cfg.threads, planar);
-  // Just out of a confined space the local map is still mostly the cabin, and a registration can
-  // turn by tens of degrees in one scan at the door. Turned away from the gyroscope by far more
-  // than the registration's noise (10 deg and half the turn), the scan takes the gyroscope's
-  // rotation.
+  // The scan's turn about the vertical against the gyroscope's, which errs by hundredths of a
+  // degree in a scan. A registration that turns by many degrees the gyroscope did not see snapped
+  // to a wrong match: a ground robot backing into an elevator cabin turned 21 deg in one scan,
+  // which turned the floor reached by as much. The scan takes the gyroscope's rotation and
+  // registers the translation only. Smaller differences are mostly the registration correcting
+  // itself against its local map, and stand, except just out of a confined space, where that map is
+  // still mostly the cabin (a robot leaving one turned 3-4 deg a scan at the door): there the bound
+  // is tight, and the whole rotation is checked too (10 deg and half the turn: its tilt).
   bool rotation_from_gyro = gyro_led;
   constexpr Timestamp kAfterConfined = 10'000'000'000;  // ns
-  if (!gyro_led && frame.gyro_delta && s.left_confined > 0 &&
-      frame.stamp - s.left_confined < kAfterConfined) {
+  if (!gyro_led && frame.gyro_delta) {
+    const bool after_confined =
+        s.left_confined > 0 && frame.stamp - s.left_confined < kAfterConfined;
     const gtsam::Rot3 turn = s.T_odom_base.rotation().between(
         (from_iso(r.T_target_source) * s.T_base_lidar.inverse()).rotation());
-    const double off = gtsam::Rot3::Logmap(frame.gyro_delta->between(turn)).norm();
-    if (off > 10.0 * M_PI / 180.0 + 0.5 * gtsam::Rot3::Logmap(*frame.gyro_delta).norm()) {
+    const double gyro_yaw = frame.gyro_delta->yaw();
+    const double yaw_off = std::abs(std::remainder(turn.yaw() - gyro_yaw, 2.0 * M_PI));
+    const double bound_deg = after_confined ? s.cfg.gyro_gate_deg : s.cfg.gyro_snap_deg;
+    const double fraction = after_confined ? s.cfg.gyro_gate_fraction : s.cfg.gyro_snap_fraction;
+    bool off =
+        bound_deg > 0.0 && yaw_off > bound_deg * M_PI / 180.0 + fraction * std::abs(gyro_yaw);
+    if (!off && after_confined)
+      off = gtsam::Rot3::Logmap(frame.gyro_delta->between(turn)).norm() >
+            10.0 * M_PI / 180.0 + 0.5 * gtsam::Rot3::Logmap(*frame.gyro_delta).norm();
+    if (off) {
       r = align_gicp_translation(*s.map_cloud, *sp.first, *s.map_tree, to_iso(gyro_pred()),
                                  s.cfg.max_correspondence, s.cfg.max_iterations, s.cfg.threads,
                                  planar);

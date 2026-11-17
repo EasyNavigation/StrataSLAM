@@ -1520,3 +1520,60 @@ S16, S17), which fail on a collapse.
 tables of `docs/results.md` line for line (without S04's rows), and the Elevator-VIGS sequences the same levels and
 errors. The core's line coverage goes from 87.4 % to 87.3 % (the ablation's factors were tested); every area stays
 over its threshold (spec 12.9).
+
+## ADR-0080 · Out of confined spaces the gyroscope vetoes the turns it did not see
+
+ADR-0060 gave a confined space's scans the gyroscope's rotation and, for 10 s after one, gave it also to a scan turned
+away from the gyroscope by more than 10 deg and half the turn. Elsewhere the gyroscope was not used. Three cases
+escaped it.
+
+- *A ground robot backing into an elevator cabin.* Its registration turned 21 deg in one scan at the door, before the
+  scans were confined, and the floor reached was mapped turned by as much against the one left. Its IMU's heading was
+  not learned yet (ADR-0058), so there was no gyroscope turn at all: `gyro_turn` waits for it, since a TF turned half
+  round reverses the roll and pitch rates.
+- *A hand-held rig walking out of a cabin.* Just out of it the local map is still mostly the cabin, and the
+  registration turned 3-4 deg a scan at the door with the gyroscope still: under the 10 deg bound, scan after scan.
+- *The heading drift.* The gyroscope's turn in a cabin is corrected by its drift about the vertical, measured against
+  the odometry over the minute before (ADR-0060). A frontend restart cleared that record, and so did an IMU mounting
+  learned or confirmed from the motion (the gyroscope's record was cleared with it): for up to a minute the drift was
+  0, or measured over the few seconds after, where one scan's heading error of 3 deg is 0.1 deg/s. In a simulated
+  sequence a 0.2 deg/s bias, well measured before, turned a 28 s cabin ride by 5.5 deg.
+
+**Decision.**
+- *Everywhere, with a gyroscope.* A scan whose turn about the vertical differs from the gyroscope's by more than
+  `gyro_snap_deg` (10) plus `gyro_snap_fraction` (0.5) of the gyroscope's turn snapped to a wrong match: it takes the
+  gyroscope's rotation and the registration solves the translation only, as in a confined space. The gyroscope errs by
+  hundredths of a degree in a scan; smaller differences are mostly the registration correcting itself against its
+  local map (2-4 deg after a fast turn of a hand-held rig) and stand. Where it does not act the result is the same bit
+  for bit.
+- *For 10 s after a confined space* the bound is `gyro_gate_deg` (2) plus `gyro_gate_fraction` (0.2) of the turn, and
+  the whole rotation is still checked as before (10 deg and half the turn: its tilt).
+- *A ground robot whose IMU heading is not learned yet* gives the LiDAR the gyroscope's turn about the vertical alone,
+  which that heading does not change.
+- *The heading drift survives.* A frontend restart keeps the drift measured before until the new frame has 20 s of it:
+  the drift is the gyroscope's, not the odometry's. A mounting learned turns the gyroscope's record into it instead of
+  clearing it: through a mounting turned by dR the rates are dR times the old ones, so each recorded turn R becomes
+  dR R dR^T, as the gravity tracker is turned (ADR-0044).
+- Tried and dropped: the tight bound everywhere (after a fast turn of a hand-held rig it locked in the registration's
+  error, which the local map corrects over the next scans); an allowance for the turn made in the cabin (10 % of it)
+  on top of the tight bound, which won back the simulated sequences but lost most of what the tight bound gained on
+  real ones; holding the drift across a mounting learned instead of turning the record (it kept a drift measured over
+  a few seconds).
+
+**Evidence** (offline, one thread, against `6658ff6`).
+- *A ground robot's elevator recordings* (two): the floors reached now lie square with the ones left, their walls
+  within a few degrees where they were 13-21 deg off, and one closes many more loops. Its other recordings (outdoor
+  and indoor, without a cabin) give the same maps. A hand-held rig with a camera: see ADR-0081, which its maps share.
+- *Elevator-VIGS.* The simulated sequences: the same levels, the ATE lower in sum (four sequences by 5-12 cm, two
+  higher by 3-8 cm, the rest about the same). The real ones: three fewer round trips left open on a third level,
+  the height error a little lower in sum; single sequences move both ways, by up to a metre and a half, as the floors
+  open at other times (ADR-0061).
+- *Scenarios*, seeds 1001-1020: only S11 and S15 change, every seed passing as before; S15's worst ATE goes from 0.089
+  to 0.062 m. With 1 px of camera noise at 640x480 every run passes; at 320x240 one run of S15 (of five) fails. It is
+  the slide of ADR-0061's Limits: going down the stairwell, degraded scans climb by less than the bound, scan after
+  scan, and the first good one registers the flight above; a heading drift of 0.01 deg/s now held through the cabin is
+  all that differs. Keeping degraded scans from speeding up the velocity along their weak direction cured it, but left
+  a seed of S11 over its threshold (a cabin entered 0.3 m lower): not done.
+
+**Tests.** `lidar_test.cpp`: out of confined spaces a turn a few degrees off the gyroscope is the registration's, and
+one many degrees off is the gyroscope's.

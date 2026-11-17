@@ -145,6 +145,14 @@
 - `scripts/install_deps.sh` and `scripts/check_install.sh` (install guide tested in clean containers), `.clang-tidy` with a CI job (ADR-0037), the `ldd` check of linked libraries in `license_audit.py` (ADR-0036).
 
 ### Changed
+- Out of confined spaces the gyroscope vetoes the LiDAR's turns it did not see: a scan turned about the vertical 10 deg
+  and half the turn away from it takes the gyroscope's rotation and registers the translation only (2 deg and a fifth
+  of the turn for 10 s after a confined space). A ground robot's IMU gives its turn about the vertical before its
+  heading is learned. The gyroscope's heading drift survives a frontend restart, and a learned IMU mounting turns the
+  gyroscope's record instead of clearing it. A ground robot backing into an elevator cabin had turned the floor it
+  reached by 21 deg; the floors of its elevator recordings now lie square with each other. The Elevator-VIGS
+  sequences leave fewer round trips open, and S15's worst ATE goes from 0.089 to 0.062 m; one run of S15 with camera
+  noise at 320x240 (of five) now fails, by the stairwell slide of ADR-0061's Limits (ADR-0080).
 - Closing the live view's window while the SLAM runs offers to reopen it, to stop the SLAM and save the map, or to
   stop it without saving (asked again, with the floors and keyframes that would be lost). "Close only the viewer"
   is gone: launch without `viewer:=true` to map without a window. The node has `~/discard_map` for it: no save when

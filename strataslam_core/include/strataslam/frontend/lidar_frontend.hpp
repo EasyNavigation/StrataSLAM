@@ -44,8 +44,20 @@ struct LidarFrontendConfig {
   /// space, an elevator cabin: a box of 1-2 m, often reflective, whose turns the registration
   /// gets wrong by tens of degrees. There, with the gyroscope (`SensorFrame::gyro_delta`), the
   /// rotation is the gyroscope's and the registration solves the translation only. Elsewhere the
-  /// gyroscope is not used. Out of it once the scan sees twice as far. 0: never.
+  /// gyroscope vetoes the turns it did not see (`gyro_snap_deg`, `gyro_gate_deg`). Out of it once
+  /// the scan sees twice as far. 0: never.
   double confined_range = 3.0;
+  /// deg. A scan whose turn about the vertical differs from the gyroscope's by more than this plus
+  /// `gyro_snap_fraction` of the gyroscope's turn snapped to a wrong match: it takes the
+  /// gyroscope's rotation and the registration solves the translation only. Well above what the
+  /// registration corrects against its local map from one scan to the next (2-4 deg after a fast
+  /// turn of a hand-held rig, which a smaller bound locked in). 0: never.
+  double gyro_snap_deg = 10.0;
+  double gyro_snap_fraction = 0.5;
+  /// The same, in the 10 s after a confined space, whose local map is still mostly the cabin: a
+  /// registration turned 3-4 deg a scan at the door, with the gyroscope still.
+  double gyro_gate_deg = 2.0;
+  double gyro_gate_fraction = 0.2;
   /// The scans come from a planar scanner (`lidar.type: 2d`, ADR-0066): the registration solves the
   /// sensor's x, y and heading only (the motion in its plane), its height, roll and pitch kept at
   /// the prediction. A sweep is one line of points in that plane, whose covariances cannot tell the
