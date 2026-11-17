@@ -69,6 +69,22 @@ namespace sm = sensor_msgs::msg;
 
 namespace {
 
+/// Where the colour of a pixel is in an image of one of the colour encodings the camera takes:
+/// bytes per pixel and the offsets of red, green and blue in them. A ZED publishes bgra8.
+struct ColorLayout {
+  int channels;
+  int r, g, b;
+};
+
+std::optional<ColorLayout> color_layout(const std::string& encoding) {
+  if (encoding == "mono8") return ColorLayout{1, 0, 0, 0};
+  if (encoding == "rgb8") return ColorLayout{3, 0, 1, 2};
+  if (encoding == "bgr8") return ColorLayout{3, 2, 1, 0};
+  if (encoding == "rgba8") return ColorLayout{4, 0, 1, 2};
+  if (encoding == "bgra8") return ColorLayout{4, 2, 1, 0};
+  return std::nullopt;
+}
+
 /// Core logging interface wired to rclcpp.
 class RclcppLogger final : public strataslam::Logger {
  public:
@@ -1080,21 +1096,24 @@ class StrataslamNode : public rclcpp::Node {
     g.width = static_cast<int>(rgb->width);
     g.height = static_cast<int>(rgb->height);
     g.data.resize(static_cast<size_t>(g.width) * g.height);
-    const bool mono = rgb->encoding == "mono8";
-    const bool bgr = rgb->encoding == "bgr8", rgb8 = rgb->encoding == "rgb8";
-    if (!mono && !bgr && !rgb8) {
+    const auto layout = color_layout(rgb->encoding);
+    if (!layout || rgb->step < rgb->width * static_cast<uint32_t>(layout->channels) ||
+        rgb->data.size() < static_cast<size_t>(rgb->step) * rgb->height) {
       RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
-                           "unsupported color encoding '%s' (mono8, rgb8, bgr8)",
+                           "unsupported color image '%s' (mono8, rgb8, bgr8, rgba8, bgra8)",
                            rgb->encoding.c_str());
       return;
     }
+    const bool mono = layout->channels == 1;
+    // The pixel at (row, column): rows are `step` bytes apart (a driver may pad them).
+    const auto px = [&](size_t i) {
+      return &rgb->data[(i / g.width) * rgb->step + (i % g.width) * layout->channels];
+    };
     for (size_t i = 0; i < g.data.size(); ++i) {
-      if (mono)
-        g.data[i] = rgb->data[i];
-      else
-        g.data[i] = static_cast<uint8_t>(0.299 * rgb->data[3 * i + (bgr ? 2 : 0)] +
-                                         0.587 * rgb->data[3 * i + 1] +
-                                         0.114 * rgb->data[3 * i + (bgr ? 0 : 2)]);
+      const uint8_t* p = px(i);
+      g.data[i] = mono ? p[0]
+                       : static_cast<uint8_t>(0.299 * p[layout->r] + 0.587 * p[layout->g] +
+                                              0.114 * p[layout->b]);
     }
     // Only keypoints with a depth can become landmarks of the RGB-D tracker: detect them there.
     const auto with_depth = strataslam::valid_depth_mask(f.depth, cfg_.sensors.camera.depth_min,
@@ -1104,8 +1123,12 @@ class StrataslamNode : public rclcpp::Node {
       f.rgb.width = g.width;
       f.rgb.height = g.height;
       f.rgb.data.resize(g.data.size() * 3);
-      for (size_t i = 0; i < g.data.size(); ++i)
-        for (int c = 0; c < 3; ++c) f.rgb.data[3 * i + c] = rgb->data[3 * i + (bgr ? 2 - c : c)];
+      for (size_t i = 0; i < g.data.size(); ++i) {
+        const uint8_t* p = px(i);
+        f.rgb.data[3 * i] = p[layout->r];
+        f.rgb.data[3 * i + 1] = p[layout->g];
+        f.rgb.data[3 * i + 2] = p[layout->b];
+      }
     }
     process_rgbd(f, rgb.get());
   }
@@ -1153,21 +1176,22 @@ class StrataslamNode : public rclcpp::Node {
         std::memcpy(&v.depth.data[(static_cast<size_t>(r) * v.depth.width + c) * 4], &z, 4);
       }
     }
-    const bool bgr = rgb && rgb->encoding == "bgr8";
-    if (rgb && static_cast<int>(rgb->width) == f.depth.width &&
-        static_cast<int>(rgb->height) == f.depth.height &&
-        (bgr || rgb->encoding == "rgb8" || rgb->encoding == "mono8")) {
-      const int ch = rgb->encoding == "mono8" ? 1 : 3;
+    const auto layout = rgb ? color_layout(rgb->encoding) : std::nullopt;
+    if (layout && static_cast<int>(rgb->width) == f.depth.width &&
+        static_cast<int>(rgb->height) == f.depth.height) {
+      const int ch = layout->channels == 1 ? 1 : 3;
       v.image.width = v.depth.width;
       v.image.height = v.depth.height;
       v.image.encoding = ch == 1 ? "mono8" : "rgb8";
       v.image.step = v.image.width * ch;
       v.image.data.resize(static_cast<size_t>(v.image.step) * v.image.height);
+      const int rgb_offsets[3] = {layout->r, layout->g, layout->b};
       for (uint32_t r = 0; r < v.image.height; ++r) {
         const uint8_t* src = &rgb->data[static_cast<size_t>(r * step) * rgb->step];
         uint8_t* dst = &v.image.data[static_cast<size_t>(r) * v.image.step];
         for (uint32_t c = 0; c < v.image.width; ++c)
-          for (int k = 0; k < ch; ++k) dst[c * ch + k] = src[c * step * ch + (bgr ? 2 - k : k)];
+          for (int k = 0; k < ch; ++k)
+            dst[c * ch + k] = src[c * step * layout->channels + rgb_offsets[k]];
       }
     }
     // Without camera tracking (LiDAR odometry) the keypoints only serve loop closures.
