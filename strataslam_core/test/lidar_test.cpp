@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <deque>
 #include <optional>
 #include <random>
 
@@ -625,8 +626,10 @@ RgbdFrame camera_view(double x, double y, double heading, Timestamp stamp) {
 }
 
 /// A run along x then turning, a sweep and an image every 100 ms; the camera's stamps 40 ms ahead
-/// of the sweeps (they come first, as on the TIAGo). Returns the saved map.
-MapData planar_run(int views, double image_scale, PointCloud* live = nullptr) {
+/// of the sweeps (they come first, as on the TIAGo), or with `lag_steps` > 0 that many sweeps
+/// behind, each image arriving with the sweep it lags (a ZED's 130-150 ms of latency). Returns the
+/// saved map.
+MapData planar_run(int views, double image_scale, PointCloud* live = nullptr, int lag_steps = 0) {
   Config cfg;
   cfg.robot.platform = Platform::Ground;
   cfg.sensors.lidar.enabled = true;
@@ -646,6 +649,7 @@ MapData planar_run(int views, double image_scale, PointCloud* live = nullptr) {
                    gtsam::Point3(0, 0, kCameraHeight));
   SlamSystem slam(cfg, ext);
   double x = -1.5, y = 0.0, th = 0.0;
+  std::deque<RgbdFrame> late;
   for (int k = 0; k <= 50; ++k) {
     if (k > 0) {
       if (k <= 25) {
@@ -657,7 +661,15 @@ MapData planar_run(int views, double image_scale, PointCloud* live = nullptr) {
       }
     }
     const Timestamp t = 1'000'000'000LL + k * 100'000'000LL;
-    slam.add_rgbd(camera_view(x, y, th, t + 40'000'000LL));
+    if (lag_steps == 0) {
+      slam.add_rgbd(camera_view(x, y, th, t + 40'000'000LL));
+    } else {
+      late.push_back(camera_view(x, y, th, t));
+      if (late.size() > static_cast<size_t>(lag_steps)) {
+        slam.add_rgbd(late.front());
+        late.pop_front();
+      }
+    }
     LidarScan scan;
     scan.points = sweep(x, y, th);
     scan.stamp = t;
@@ -676,17 +688,8 @@ double coloured_share(const std::map<KeyframeId, PointCloud>& clouds) {
   return n ? static_cast<double>(c) / n : 0.0;
 }
 
-}  // namespace
-
-TEST(PlanarScanWithCamera, TheMapIsTheCamerasDepthInColourPlacedByTheScan) {
-  PointCloud live;
-  const MapData m = planar_run(8, 1.0, &live);
-  ASSERT_EQ(m.floors.size(), 1u);
-  const FloorData& f = m.floors[0];
-  ASSERT_GT(f.keyframes.size(), 5u);
-  // Every keyframe has its depth cloud (an image 40 ms from each sweep), in its base frame and
-  // coloured.
-  EXPECT_EQ(f.depth_clouds.size(), f.keyframes.size());
+/// The floor cloud of a planar run is 3D, in the walls' colours, each wall where the plan has it.
+void expect_walls_in_place(const FloorData& f) {
   ASSERT_TRUE(f.metadata.depth_origin && f.metadata.cloud_origin);
   EXPECT_NEAR(f.metadata.depth_origin->z(), kCameraHeight, 1e-9);
   EXPECT_NEAR(f.metadata.cloud_origin->z(), kScannerHeight, 1e-9);
@@ -709,9 +712,38 @@ TEST(PlanarScanWithCamera, TheMapIsTheCamerasDepthInColourPlacedByTheScan) {
   EXPECT_GT(high, 100u);
   ASSERT_GT(right_wall, 20u);
   EXPECT_GT(static_cast<double>(right_wall_ok) / right_wall, 0.9);
+}
+
+}  // namespace
+
+TEST(PlanarScanWithCamera, TheMapIsTheCamerasDepthInColourPlacedByTheScan) {
+  PointCloud live;
+  const MapData m = planar_run(8, 1.0, &live);
+  ASSERT_EQ(m.floors.size(), 1u);
+  const FloorData& f = m.floors[0];
+  ASSERT_GT(f.keyframes.size(), 5u);
+  // Every keyframe has its depth cloud (an image 40 ms from each sweep), in its base frame and
+  // coloured.
+  EXPECT_EQ(f.depth_clouds.size(), f.keyframes.size());
+  EXPECT_EQ(f.visual.size(), f.keyframes.size());
+  expect_walls_in_place(f);
   // The live view's cloud: the same, coloured.
   ASSERT_FALSE(live.points.empty());
   EXPECT_EQ(live.colors.size(), live.points.size());
+}
+
+TEST(PlanarScanWithCamera, ACameraFarBehindTheScanGivesEachKeyframeAnImagePlacedByTheMotion) {
+  // The images 200 ms older than the sweeps, arriving with them: until ADR-0081 a keyframe took an
+  // image only within 60 ms (150 ms for the depth), and with a ZED none had any. Each keyframe
+  // after the first has the image nearest to it, the camera where it was 200 ms before (10 cm
+  // behind on the straight: unplaced, the right wall would be 10 cm off).
+  const MapData m = planar_run(8, 1.0, nullptr, 2);
+  ASSERT_EQ(m.floors.size(), 1u);
+  const FloorData& f = m.floors[0];
+  ASSERT_GT(f.keyframes.size(), 5u);
+  EXPECT_GE(f.depth_clouds.size() + 1, f.keyframes.size());
+  EXPECT_GE(f.visual.size() + 1, f.keyframes.size());
+  expect_walls_in_place(f);
 }
 
 TEST(PlanarScanWithCamera, TheImagesAroundColourWhatAKeyframesOwnImageMissed) {

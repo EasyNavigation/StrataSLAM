@@ -153,6 +153,10 @@
   reached by 21 deg; the floors of its elevator recordings now lie square with each other. The Elevator-VIGS
   sequences leave fewer round trips open, and S15's worst ATE goes from 0.089 to 0.062 m; one run of S15 with camera
   noise at 320x240 (of five) now fails, by the stairwell slide of ADR-0061's Limits (ADR-0080).
+- A LiDAR keyframe's image is the one nearest in time that the LiDAR's motion places (older, between the poses of the
+  scans around it; up to 150 ms newer), with the camera where it was then: a camera whose images arrive late (a ZED's, 130-150 ms) left most
+  keyframes of a 3D LiDAR without an image, and the map without colour. Relocalization tries the LiDAR first and then
+  the camera, as `loop_closure_from` says, a camera's candidate verified by the LiDAR (ADR-0081).
 - Closing the live view's window while the SLAM runs offers to reopen it, to stop the SLAM and save the map, or to
   stop it without saving (asked again, with the floors and keyframes that would be lost). "Close only the viewer"
   is gone: launch without `viewer:=true` to map without a window. The node has `~/discard_map` for it: no save when

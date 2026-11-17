@@ -56,13 +56,15 @@ struct SlamSystem::Impl {
   std::deque<Eigen::Vector3d> recent_v;  // the last per-frame velocities: their mean is last_v
   Eigen::Vector3d win_w_x_v = Eigen::Vector3d::Zero(), win_up = Eigen::Vector3d::Zero();
   std::vector<ImuSample> imu_since_update;
-  std::optional<RgbdFrame>
-      last_cam;  // newest camera frame (when the odometry comes from the LiDAR)
-  // A planar scanner with a camera: the frames of the last half second, for the depth of each
-  // keyframe from the image nearest to it in time (ADR-0068). The newest frame is not it: a
-  // camera's stamps may run ahead of the scanner's (100 ms on the Tiago), and frames come every
-  // 30-70 ms.
+  // A LiDAR with a camera: the frames of the last half second, for each keyframe's image (its
+  // keypoints, the colours of its scan, a planar scanner's depth: ADR-0068), the one nearest to it
+  // in time (ADR-0081). The newest frame is not it: a camera's stamps may run ahead of the
+  // scanner's (100 ms on the Tiago) or behind (a ZED's frames come 130-150 ms after their stamps,
+  // the newest one 100-240 ms older than the sweep), and frames come every 30-70 ms.
   std::deque<std::shared_ptr<const RgbdFrame>> recent_cams;
+  // The LiDAR's poses of the last second, in one odometry frame (cleared when the frontend
+  // restarts or is lost): where the base was when a keyframe's image was taken.
+  std::deque<std::pair<Timestamp, gtsam::Pose3>> scan_poses;
   std::map<KeyframeId, std::shared_ptr<const RgbdFrame>> keyframe_images;  // only when colorizing
   // The colours of each keyframe's cloud from its own image, and which points it saw (only when
   // colorizing): a camera's from the pixels its points came from (ADR-0068), a LiDAR's from the
@@ -89,6 +91,7 @@ struct SlamSystem::Impl {
     std::vector<RgbKeypoint> keypoints;
     std::vector<std::optional<Eigen::Vector3d>> p_cam;
     CameraIntrinsics K;
+    gtsam::Pose3 T_base_cam;  // the camera when the image was taken, in the keyframe's base frame
   };
   std::map<KeyframeId, VisualKf> visual_kf;
 
@@ -736,6 +739,50 @@ struct SlamSystem::Impl {
 
   // ---------------- keyframes ----------------
 
+  /// The image for the LiDAR keyframe at `stamp` (the newest of `scan_poses`): of the frames
+  /// received, the one nearest to it in time that the LiDAR's motion places, and the camera when it
+  /// was taken in the keyframe's base frame (ADR-0081). Older, between the poses of the scans
+  /// around it, as far back as they go; up to 150 ms newer, along the motion of the last scan
+  /// interval (an extrapolation, ADR-0068). Without a scan before it (the start, a restart), within
+  /// 150 ms, taken as at the scan.
+  std::optional<std::pair<std::shared_ptr<const RgbdFrame>, gtsam::Pose3>> keyframe_image(
+      Timestamp stamp) const {
+    constexpr Timestamp kNewer = 150'000'000;  // ns
+    if (scan_poses.empty() || scan_poses.back().first != stamp) return std::nullopt;
+    const gtsam::Pose3& X = scan_poses.back().second;
+    const auto interpolate = [](const gtsam::Pose3& A, const gtsam::Pose3& B, double frac) {
+      return A * gtsam::Pose3::Expmap(gtsam::Pose3::Logmap(A.between(B)) * frac);
+    };
+    // The base at `t` relative to the keyframe's.
+    const auto base_at = [&](Timestamp t) -> std::optional<gtsam::Pose3> {
+      const size_t n = scan_poses.size();
+      if (n < 2) {
+        if (std::llabs(t - stamp) <= kNewer) return gtsam::Pose3();
+        return std::nullopt;
+      }
+      if (t > stamp + kNewer || t < scan_poses.front().first) return std::nullopt;
+      const auto& [ta, A] = scan_poses[n - 2];
+      if (t >= ta) {  // the last interval, or beyond it
+        const double frac = static_cast<double>(t - ta) / static_cast<double>(stamp - ta);
+        return X.between(interpolate(A, X, frac));
+      }
+      for (size_t i = n - 2; i > 0; --i) {
+        const auto& [t0, P0] = scan_poses[i - 1];
+        const auto& [t1, P1] = scan_poses[i];
+        if (t >= t0 && t <= t1)
+          return X.between(
+              interpolate(P0, P1, static_cast<double>(t - t0) / static_cast<double>(t1 - t0)));
+      }
+      return std::nullopt;
+    };
+    std::optional<std::pair<std::shared_ptr<const RgbdFrame>, gtsam::Pose3>> best;
+    for (const auto& c : recent_cams) {
+      if (best && std::llabs(c->stamp - stamp) >= std::llabs(best->first->stamp - stamp)) continue;
+      if (const auto O = base_at(c->stamp)) best.emplace(c, *O * ext.T_base_camera);
+    }
+    return best;
+  }
+
   void insert_keyframe(const FrontendResult& r, std::vector<Eigen::Vector3f> cloud,
                        const gtsam::Pose3& T_base_sensor, Timestamp stamp,
                        std::optional<VisualKf> vis) {
@@ -1018,9 +1065,12 @@ struct SlamSystem::Impl {
       if (near.size() > kViews) near.resize(kViews);
       std::vector<ColorView> views;
       views.reserve(near.size());
-      for (const auto& [d, j] : near)
-        views.push_back(
-            {(g.pose(j) * ext.T_base_camera).inverse() * Xi, keyframe_images.at(j).get()});
+      for (const auto& [d, j] : near) {
+        const auto v = visual_kf.find(j);
+        const gtsam::Pose3& T_base_cam =
+            v != visual_kf.end() ? v->second.T_base_cam : ext.T_base_camera;
+        views.push_back({(g.pose(j) * T_base_cam).inverse() * Xi, keyframe_images.at(j).get()});
+      }
       colorize_from_views(cloud, views, cfg.sensors.camera.depth_max, 0.3, &k.rgb, &k.seen);
     }
     if (std::find(k.seen.begin(), k.seen.end(), true) == k.seen.end()) return {};
@@ -1059,9 +1109,10 @@ struct SlamSystem::Impl {
         verify_loop_pnp(corr, vis.K, tuning.visual_loop_min_inliers,
                         tuning.visual.tracker.ransac_reprojection_px * pixel_scale(vis.K), 300);
     if (!T_cam_obj) return std::nullopt;
-    // T_cam_obj maps candidate-camera points to the current camera: T_curcam_candcam.
+    // T_cam_obj maps candidate-camera points to the current camera: T_curcam_candcam. Each camera
+    // where it was when its image was taken (ADR-0081).
     const gtsam::Pose3 T_candcam_curcam = T_cam_obj->inverse();
-    return ext.T_base_camera * T_candcam_curcam * ext.T_base_camera.inverse();
+    return cand.T_base_cam * T_candcam_curcam * vis.T_base_cam.inverse();
   }
 
   BowVector bow_of(const VisualKf& vis) const {
@@ -1317,31 +1368,38 @@ struct SlamSystem::Impl {
     pending.height_cues = pending.height_cues && height_cues_live();
     const bool height_sensors = pending.height_cues || !cfg.multifloor.enabled;
     // Relocalization may legitimately look at every floor: it decides which floor this session is
-    // on.
-    if (vis && tuning.vocabulary) {
+    // on. As the loop closures: the LiDAR first, then the camera, each as `loop_closure_from` says;
+    // a camera's candidate verified (and refined) by the LiDAR. Until ADR-0081 a keyframe with an
+    // image was relocalized by the camera alone, unverified: a LiDAR's keyframes seldom had one.
+    // The camera's odometry relocalizes by the camera, as before (its keyframes' clouds are the
+    // camera's).
+    const bool lidar_kf = lidar_fe && modes.odometry == OdometrySource::Lidar && !cur.cloud.empty();
+    const bool lidar_reloc = lidar_kf && modes.loop_closure != LoopSource::Camera;
+    const bool camera_reloc =
+        vis && tuning.vocabulary && (modes.loop_closure != LoopSource::Lidar || !lidar_kf);
+    const auto place = [&](KeyframeId cand, const gtsam::Pose3& rel) {
+      const FloorId target = backend.floor_of(cand);
+      if (target < 0 || (height_sensors && target != pending.from_floor)) return false;
+      place_pending_on(target, cand, cur.id, rel);
+      return true;
+    };
+    if (lidar_reloc) {
+      const ScanContext sc = make_scan_context(cur.cloud, tuning.scan_context);
+      for (auto& [floor_key, db] : sc_db)
+        for (const auto& c : db.query(sc))
+          if (const auto rel = verify_lidar(cur, c.id, c.match.yaw, nullptr))
+            if (place(c.id, *rel)) return;
+    }
+    if (camera_reloc) {
       const BowVector q = bow_of(*vis);
       for (auto& [floor_key, db] : bow_db) {
         const auto cands = db.query(q, cur.session, cur.stamp, 0.0, tuning.bow_min_score,
                                     static_cast<size_t>(tuning.bow_max_candidates));
         for (const auto& c : cands) {
-          const auto rel = verify_visual(*vis, c.id);
-          if (!rel) continue;
-          const FloorId target = backend.floor_of(c.id);
-          if (target < 0 || (height_sensors && target != pending.from_floor)) continue;
-          place_pending_on(target, c.id, cur.id, *rel);
-          return;
-        }
-      }
-    } else if (lidar_fe && !cur.cloud.empty()) {
-      const ScanContext sc = make_scan_context(cur.cloud, tuning.scan_context);
-      for (auto& [floor_key, db] : sc_db) {
-        for (const auto& c : db.query(sc)) {
-          const auto rel = verify_lidar(cur, c.id, c.match.yaw, nullptr);
-          if (!rel) continue;
-          const FloorId target = backend.floor_of(c.id);
-          if (target < 0 || (height_sensors && target != pending.from_floor)) continue;
-          place_pending_on(target, c.id, cur.id, *rel);
-          return;
+          auto rel = verify_visual(*vis, c.id);
+          if (rel && modes.verify_loop_with_lidar && lidar_kf)
+            rel = verify_lidar(cur, c.id, 0.0, nullptr, &*rel);
+          if (rel && place(c.id, *rel)) return;
         }
       }
     }
@@ -1537,6 +1595,7 @@ struct SlamSystem::Impl {
     odom_fe->reset(restart);
     held_drift = heading_drift();
     heading_obs.clear();  // another frame
+    scan_poses.clear();
     last_pose = restart;
     last_pose_stamp = frame_stamp;
     restart_stamp = frame_stamp;
@@ -1564,7 +1623,8 @@ struct SlamSystem::Impl {
   }
 
   void handle_lost(Timestamp stamp) {
-    last_fe_stamp = 0;  // the next rotation for the IMU mounting starts at the next valid pose
+    last_fe_stamp = 0;   // the next rotation for the IMU mounting starts at the next valid pose
+    scan_poses.clear();  // the motion while lost is not known
     if (lost_since == 0) lost_since = stamp;
     const double lost_s = (stamp - lost_since) * 1e-9;
     if (mgr.in_unobserved_transition()) {
@@ -1932,12 +1992,11 @@ void SlamSystem::add_odom(const OdomMeasurement& m) {
 void SlamSystem::add_rgbd(const RgbdFrame& f) {
   auto& s = *impl_;
   if (s.visual_fe && s.modes.odometry != OdometrySource::Camera) {
-    s.last_cam = f;  // keypoints for the next LiDAR keyframe (loop closure candidates, colors)
-    if (s.tuning.lidar.planar_scan) {
-      constexpr Timestamp kKeepCams = 500'000'000;  // ns
-      s.recent_cams.push_back(std::make_shared<const RgbdFrame>(f));
-      while (s.recent_cams.front()->stamp < f.stamp - kKeepCams) s.recent_cams.pop_front();
-    }
+    // For the LiDAR's keyframes: their keypoints (loop closure candidates), colours and, with a
+    // planar scanner, depth. Half a second of them (a bound on memory: colour and depth each).
+    constexpr Timestamp kKeepCams = 500'000'000;  // ns
+    s.recent_cams.push_back(std::make_shared<const RgbdFrame>(f));
+    while (s.recent_cams.front()->stamp < f.stamp - kKeepCams) s.recent_cams.pop_front();
     return;
   }
   if (!s.visual_fe || s.modes.odometry != OdometrySource::Camera) return;
@@ -1989,7 +2048,7 @@ void SlamSystem::add_rgbd(const RgbdFrame& f) {
                                {128, 128, 128}, &kc.seen);
     }
     s.insert_keyframe(r, kd.cloud, s.ext.T_base_camera, f.stamp,
-                      Impl::VisualKf{kd.keypoints, kd.p_cam, kd.K});
+                      Impl::VisualKf{kd.keypoints, kd.p_cam, kd.K, s.ext.T_base_camera});
   }
 }
 
@@ -2067,7 +2126,6 @@ void SlamSystem::add_lidar(const LidarScan& scan) {
   }
   s.lost_since = 0;
   s.last_pose = r.T_odom_base;
-  const Timestamp prev_pose_stamp = s.last_pose_stamp;
   s.last_pose_stamp = scan.stamp;
   if (r.quality.state == TrackingState::Good) s.last_good = {scan.stamp, r.T_odom_base};
   s.learn_imu_mounting(r, scan.stamp);
@@ -2076,21 +2134,31 @@ void SlamSystem::add_lidar(const LidarScan& scan) {
   // 17 s unseen, the put-down closed as a ramp and a level). In a cabin the odometry
   // sees no vertical motion, so it cannot look like a lift.
   s.detect_lift(scan, r);
+  // The pose the keyframe takes: the restart's when the frontend restarted at this scan.
+  s.scan_poses.emplace_back(scan.stamp, *s.last_pose);
+  constexpr Timestamp kKeepPoses = 1'000'000'000;  // ns
+  while (s.scan_poses.front().first < scan.stamp - kKeepPoses) s.scan_poses.pop_front();
   if (r.is_keyframe) {
+    // The image nearest to the sweep in time, the camera where it was when it was taken
+    // (ADR-0081): a ZED's newest frame is 100-240 ms older than the sweep, and until this none
+    // within 60 ms of it had arrived: no keypoints, no colours. At 0.5 m/s, 200 ms is 10 cm.
+    const auto image = s.visual_fe ? s.keyframe_image(scan.stamp) : std::nullopt;
     std::optional<Impl::VisualKf> vis;
-    if (s.visual_fe && s.last_cam && std::llabs(s.last_cam->stamp - scan.stamp) < 60'000'000LL) {
-      const VisualObservation obs = make_observation(*s.last_cam, s.tuning.visual.tracker.depth);
-      vis = Impl::VisualKf{obs.keypoints, obs.p_cam, s.last_cam->K};
+    if (image) {
+      const VisualObservation obs = make_observation(*image->first, s.tuning.visual.tracker.depth);
+      vis = Impl::VisualKf{obs.keypoints, obs.p_cam, image->first->K, image->second};
     }
     const KeyframeId id = s.next_kf;
     s.insert_keyframe(r, s.lidar_fe->last_keyframe_cloud(), s.ext.T_base_lidar, scan.stamp, vis);
-    if (vis && s.cfg.fusion.colorize_cloud && s.last_cam && !s.last_cam->rgb.empty()) {
-      const RgbdFrame& img = *s.last_cam;
+    if (!image) return;
+    const RgbdFrame& img = *image->first;
+    const gtsam::Pose3& T_base_cam = image->second;
+    if (s.cfg.fusion.colorize_cloud && !img.rgb.empty()) {
       // The scan's colours from this image, as the map had them at save time (now also live).
       if (const auto* cloud = s.backend.cloud(id)) {
         Impl::KfColors& kc = s.keyframe_colors[id];
-        kc.rgb = colorize_points(*cloud, s.ext.T_base_camera.inverse() * s.ext.T_base_lidar, img.K,
-                                 img.rgb, &img.depth, 0.3, 20.0, {128, 128, 128}, &kc.seen);
+        kc.rgb = colorize_points(*cloud, T_base_cam.inverse() * s.ext.T_base_lidar, img.K, img.rgb,
+                                 &img.depth, 0.3, 20.0, {128, 128, 128}, &kc.seen);
       }
       // Kept for the other keyframes' points at save time, at the profile's scale (ADR-0069).
       if (s.cfg.fusion.colorize_views > 0)
@@ -2098,26 +2166,10 @@ void SlamSystem::add_lidar(const LidarScan& scan) {
             img, static_cast<int>(std::lround(1.0 / s.cfg.fusion.colorize_image_scale))));
     }
     // A planar scanner sees one line of the room: the 3D of the map is the camera's depth, placed
-    // by the scan's pose (ADR-0068), from the image nearest to the sweep in time (within 150 ms).
-    // The base is moved to the image's time along the motion of the last scan interval: at
-    // 0.5 rad/s, 50 ms is 1.4 deg, 12 cm on a wall 5 m away.
-    std::shared_ptr<const RgbdFrame> near;
-    for (const auto& c : s.recent_cams)
-      if (!near || std::llabs(c->stamp - scan.stamp) < std::llabs(near->stamp - scan.stamp))
-        near = c;
-    constexpr Timestamp kDepthWindow = 150'000'000;  // ns
-    if (near && std::llabs(near->stamp - scan.stamp) <= kDepthWindow &&
-        !near->depth.meters.empty()) {
-      gtsam::Pose3 T_kf_cam_base;
-      if (prev_pose_stamp > 0 && scan.stamp > prev_pose_stamp) {
-        const double frac = static_cast<double>(near->stamp - scan.stamp) /
-                            static_cast<double>(scan.stamp - prev_pose_stamp);
-        T_kf_cam_base = gtsam::Pose3::Expmap(gtsam::Pose3::Logmap(r.delta) * frac);
-      }
-      s.depth_clouds[id] =
-          depth_map_cloud(*near, s.tuning.visual.cloud_stride, s.tuning.visual.tracker.depth,
-                          T_kf_cam_base * s.ext.T_base_camera);
-    }
+    // by the scan's pose (ADR-0068).
+    if (s.tuning.lidar.planar_scan && !img.depth.meters.empty())
+      s.depth_clouds[id] = depth_map_cloud(img, s.tuning.visual.cloud_stride,
+                                           s.tuning.visual.tracker.depth, T_base_cam);
   }
 }
 

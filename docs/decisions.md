@@ -1577,3 +1577,38 @@ escaped it.
 
 **Tests.** `lidar_test.cpp`: out of confined spaces a turn a few degrees off the gyroscope is the registration's, and
 one many degrees off is the gyroscope's.
+
+## ADR-0081 · A LiDAR keyframe's image is the one its motion places
+
+With LiDAR odometry and a camera, a keyframe took the newest image received: its keypoints for the visual loop
+closures and relocalization, its pixels for the colours of the scan (ADR-0068, ADR-0069). On a ground robot with a ZED
+camera the images arrive 130-150 ms after their stamps, and the newest one received was 100-240 ms older than the
+sweep: only a planar scanner's depth looked for the image nearest in time (within 150 ms), and a 3D LiDAR's keyframes
+mostly had no image, or one taken from somewhere else. The map had almost no colour, and relocalization rarely had an
+image to try. It tried the camera alone when there was one, unverified, and never the LiDAR.
+
+**Decision.**
+- *For every LiDAR*, the frames of the last half second (a bound on memory) are kept with the poses of the last
+  second of scans. A keyframe takes the image nearest to it in time that the LiDAR's motion places: older, between the
+  poses of the scans around it, as far back as they go (an interpolation holds at any age); up to 150 ms newer, along
+  the motion of the last scan interval (an extrapolation, ADR-0068's bound); without a motion yet, one within 150 ms. The camera when the image was taken, in the keyframe's base frame, is kept with it (`T_base_cam`) and
+  used wherever that image is: the colours, the depth of a planar scanner, the visual loop's relative pose. This
+  replaces both ADR-0068 pairings: the newest image within 60 ms for the loop candidates, and the nearest within
+  150 ms moved along the last scan interval for a planar scanner's depth.
+- *Relocalization as the loop closures*: the LiDAR first, then the camera, each as `loop_closure_from` says, and a
+  camera's candidate verified and refined by the LiDAR's registration (`verify_loop_with_lidar`). The camera's odometry
+  relocalizes by the camera, as before.
+
+**Evidence** (offline, one thread, against `6658ff6`).
+- *A ground robot with a 3D LiDAR and a ZED*, through an elevator: every keyframe but the first has an image, and the
+  floors' clouds are in colour, where few keyframes had one and the map was grey. The keyframes and the graph are as
+  without the camera.
+- *A TIAGo* (a 3D LiDAR or a planar scanner, with a camera): the same maps.
+- *A hand-held rig with an RGB-D camera* (with ADR-0080): of three recordings, one gives the same map, two straighter
+  walls on a floor, and one of them no longer has a spurious floor of six keyframes.
+- *Scenarios*, seeds 1001-1020 and camera noise: S10 (a LiDAR with a camera) moves in the sixth digit; the others are
+  the same.
+- A fixed limit on how much older the image may be (300 ms) gave the same results: the poses kept are the limit.
+
+**Tests.** `lidar_test.cpp`: a planar scanner's camera two sweeps behind gives each keyframe an image, its depth placed
+by the motion (walls in place); without the motion it fails.
