@@ -1248,7 +1248,7 @@ class StrataslamNode : public rclcpp::Node {
         fy = &f;
       else if (f.name == "z")
         fz = &f;
-      else if (f.name == "t" || f.name == "time")
+      else if (f.name == "t" || f.name == "time" || f.name == "timestamp")
         ft = &f;
     }
     if (!fx || !fy || !fz) return;

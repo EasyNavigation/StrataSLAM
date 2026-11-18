@@ -29,6 +29,8 @@
   the top view, from the odometry's orientation.
 - The node takes colour images in `rgba8` and `bgra8` (a ZED publishes `bgra8`), besides `mono8`, `rgb8` and `bgr8`,
   and rows padded past their width (`step`). An image it cannot read is said in the log with the encodings it takes.
+- The node reads the per-point time of a LiDAR cloud (for its deskewing) from a field named `timestamp` too, besides
+  `t` and `time`.
 - Core tests of the RGB-D pipeline (`RgbdSystem.*`): a walk round a room seen at the feature level, tracked by the
   camera alone and closed by a visual loop, and a session after a blind second relocalized on its floor. The visual
   frontend, visual loop closure and relocalization were exercised only by the simulator's scenarios, which the coverage
