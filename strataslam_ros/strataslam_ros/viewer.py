@@ -68,6 +68,19 @@ def matrix(transform) -> np.ndarray:
     return m
 
 
+def heading_of(q, R_map_odom: np.ndarray) -> tuple[float, float] | None:
+    """Where a body with orientation `q` (geometry_msgs/Quaternion, odometry frame) faces in the map: its x axis in
+    the horizontal (x, y). None for no orientation (all zero) or a body facing nearly straight up or down."""
+    v = np.array([q.x, q.y, q.z, q.w], dtype=float)
+    n = np.linalg.norm(v)
+    if n < 1e-9:
+        return None
+    x, y, z, w = v / n
+    f = R_map_odom @ np.array([1 - 2 * (y * y + z * z), 2 * (x * y + z * w), 2 * (x * z - y * w)])
+    h = float(np.hypot(f[0], f[1]))
+    return (float(f[0]) / h, float(f[1]) / h) if h > 0.2 else None
+
+
 def image_array(img) -> np.ndarray | None:
     """H x W x 3 (rgb8) or H x W (mono8) array of a sensor_msgs/Image; None if empty or another encoding."""
     channels = {"rgb8": 3, "mono8": 1}.get(img.encoding)
@@ -201,7 +214,7 @@ class Viewer(Node):
         x, y, z = (T[:3, :3] @ np.array([q.x, q.y, q.z]) + T[:3, 3]).tolist()
         # -1: a transition; LOST: lost tracking or a session whose floor is not known yet (pending).
         floor = self.floor if self.floor >= 0 else (LOST if self.state in ("lost", "pending") else -1)
-        self.view.pose(t, (x, y, z), floor)
+        self.view.pose(t, (x, y, z), floor, heading_of(m.pose.pose.orientation, T[:3, :3]))
         self.z = z
         if self.transit_z0 is not None and not self.direction_told and abs(z - self.transit_z0) >= DIRECTION_M:
             dz = z - self.transit_z0

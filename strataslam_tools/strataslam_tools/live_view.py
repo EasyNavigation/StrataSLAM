@@ -41,6 +41,15 @@ SENSOR_MARGIN_M = 1.0
 # The robot's pole in 3D crosses every level mapped so far: from below the lowest point to above the highest.
 POLE_BELOW_M, POLE_ABOVE_M = 1.0, 3.0
 ROBOT_RADIUS, POLE_RADIUS = 14.0, 3.0  # UI points: the ball stands out around the pole
+# Where the robot faces: an arrow from the ball along its x axis in the horizontal, this thick (UI points). In 3D it is
+# HEADING_M long, an object of the scene that the camera's distance scales like the rest (Rerun sizes a length in
+# the scene's units only). In the top view, which frames the whole map, it is a share of what the view draws, so it
+# keeps its size on screen (a fixed length vanished under the ball, whose size is in UI points, once a building's
+# map made the view zoom out), at least HEADING_M; and an invisible frame round the map, as far out as the arrow
+# reaches, keeps the arrow from moving the framing: one pointing out of the map at its edge zoomed the view out and
+# in as the robot turned, and the arrow seemed to grow and shrink.
+HEADING_M, HEADING_RADIUS = 1.5, 5.0
+TOPDOWN_HEADING_SHARE = 0.12
 # Top view layering (Rerun draws 2D points above lines by default): clouds, live scan, path, transitions, robot.
 DRAW_SENSOR, DRAW_PATH, DRAW_TRANSITION, DRAW_ROBOT = 35.0, 40.0, 45.0, 50.0
 # Where floors join: a transition's arrival (labelled with its type and height) and its departure, in UI points.
@@ -107,6 +116,8 @@ class LiveView:
             rr.spawn()
         self._camera = False
         self._floor_clouds: dict[int, NDArray[np.float32]] = {}  # latest cloud of each floor (sent again on reopen)
+        # What the top view draws of each floor: its box (top-view coordinates, every point), what the view frames.
+        self._topdown_boxes: dict[int, tuple[NDArray[np.float32], NDArray[np.float32]]] = {}
         self._floor_colours: dict[int, NDArray[np.uint8]] = {}  # the camera's colours of those clouds, when they have
         self._colour = False  # some cloud came with colours: the tab "3D: colour" is in the layout
         self._send_static()
@@ -225,8 +236,10 @@ class LiveView:
 
     # ---- data ----
 
-    def pose(self, t: float, xyz: tuple[float, float, float], floor: int) -> None:
-        """A robot position in the map frame; `floor` -1 while in a transition or lost."""
+    def pose(self, t: float, xyz: tuple[float, float, float], floor: int,
+             heading: tuple[float, float] | None = None) -> None:
+        """A robot position in the map frame; `floor` -1 while in a transition or lost. `heading`: where it faces, a
+        horizontal direction in the map frame (x, y), drawn as an arrow from the ball; none, no arrow."""
         rr = self.rr
         self._time(t)
         colour = floor_colour(floor)
@@ -238,6 +251,17 @@ class LiveView:
                                                    radii=self._radius(POLE_RADIUS)))
         rr.log("topdown/robot", rr.Points2D([(x, -y)], colors=[ROBOT_COLOUR], radii=self._radius(8.0),
                                             draw_order=DRAW_ROBOT))
+        if heading is not None:
+            n = float(np.hypot(*heading))
+            if n > 1e-6:
+                ux, uy = heading[0] / n, heading[1] / n
+                d3, d2 = HEADING_M, self._topdown_heading_m()
+                rr.log("world/robot/heading", rr.Arrows3D(origins=[xyz], vectors=[(d3 * ux, d3 * uy, 0.0)],
+                                                          colors=[ROBOT_COLOUR], radii=self._radius(HEADING_RADIUS)))
+                rr.log("topdown/robot/heading", rr.Arrows2D(origins=[(x, -y)], vectors=[(d2 * ux, -d2 * uy)],
+                                                            colors=[ROBOT_COLOUR],
+                                                            radii=self._radius(HEADING_RADIUS),
+                                                            draw_order=DRAW_ROBOT))
         if floor != self._last_floor:  # a new piece of path, joined to the last one as a transition
             if self._last_floor is not None:  # and a gap in the level line of the floor just left
                 rr.log(self._series_path(self._last_floor), rr.Clear(recursive=False))
@@ -444,6 +468,27 @@ class LiveView:
         if floor in self._floor_colours:
             self._log_colour_layer()
 
+    def _topdown_box(self) -> tuple[NDArray[np.float32], NDArray[np.float32]] | None:
+        """The box of every floor the top view draws (its coordinates), stray points included: what it frames."""
+        if not self._topdown_boxes:
+            return None
+        los, his = zip(*self._topdown_boxes.values())
+        return np.min(los, axis=0), np.max(his, axis=0)
+
+    def _topdown_heading_m(self) -> float:
+        box = self._topdown_box()
+        return max(HEADING_M, TOPDOWN_HEADING_SHARE * float(np.max(box[1] - box[0]))) if box else HEADING_M
+
+    def _log_topdown_frame(self) -> None:
+        """The top view's invisible frame: what it draws of the map and the arrow's reach round it (see HEADING_M)."""
+        box = self._topdown_box()
+        if box is None:
+            return
+        m = self._topdown_heading_m()
+        corners = np.stack([box[0] - m, box[1] + m])
+        self.rr.log("topdown/frame", self.rr.Points2D(corners, colors=[(0, 0, 0, 0)], radii=self._radius(0.5)),
+                    static=True)
+
     def _recolour_heights(self) -> bool:
         """Whether the range of the map's heights moved enough to colour every floor again (and takes it)."""
         if self._z_bottom is None or self._z_top is None:
@@ -463,6 +508,9 @@ class LiveView:
         step = max(1, len(p) // TOPDOWN_MAX_POINTS)
         q = p[::step, :2] * np.array([1.0, -1.0], dtype=np.float32)
         rr.log(f"topdown/floors/floor_{floor}", rr.Points2D(q, colors=[colour], radii=self._radius(1.0)), static=True)
+        if len(q):
+            self._topdown_boxes[floor] = (q.min(axis=0), q.max(axis=0))
+            self._log_topdown_frame()
 
     # The layers `height` and `colour` are one entity each, every floor in it: Rerun 0.22 hides an entity from the
     # layout (they start hidden) but not the floors under a parent, and a layout sent again would reset the camera.

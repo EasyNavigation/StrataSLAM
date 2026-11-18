@@ -125,7 +125,8 @@ ros2 launch strataslam_ros strataslam.launch.py profile:=profile.yaml viewer:=tr
   with its type and height (`elevator 0→1 +3.67 m`), where it arrived (`transitions` in the panel, also in the top
   view), and
   the robot in yellow, with a
-  vertical pole through every level mapped so far that shows where it is from any angle; in magenta, what the
+  vertical pole through every level mapped so far that shows where it is from any angle and an arrow along where it
+  faces (its x axis, in the horizontal; none while it faces nearly straight up or down); in magenta, what the
   sensors see right now (the LiDAR scan, the camera's depth) within the extent of the map, so that far returns do
   not move the framing, under `sensor` in the entity tree. One 3D view, so that switching what it shows keeps the camera, with
   the map in layers that the eye of each in the panel shows or hides: `floors`, each floor in its colour (shown; one

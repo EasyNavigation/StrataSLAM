@@ -25,6 +25,8 @@
 
 ### Added
 
+- The live view shows where the robot faces: an arrow from its ball along its x axis in the horizontal, in 3D and in
+  the top view, from the odometry's orientation.
 - The node takes colour images in `rgba8` and `bgra8` (a ZED publishes `bgra8`), besides `mono8`, `rgb8` and `bgr8`,
   and rows padded past their width (`step`). An image it cannot read is said in the log with the encodings it takes.
 - Core tests of the RGB-D pipeline (`RgbdSystem.*`): a walk round a room seen at the feature level, tracked by the

@@ -15,7 +15,7 @@ import numpy as np
 import pytest
 import rclpy
 import strataslam_ros.viewer as viewer_mod
-from geometry_msgs.msg import Transform
+from geometry_msgs.msg import Quaternion, Transform
 from nav_msgs.msg import Odometry
 from rcl_interfaces.msg import Log
 from sensor_msgs.msg import Image
@@ -23,6 +23,7 @@ from strataslam_ros.viewer import (
     Viewer,
     depth_array,
     floor_of_frame,
+    heading_of,
     image_array,
     matrix,
 )
@@ -34,13 +35,15 @@ class FakeView:
     def __init__(self) -> None:
         self.events: list[tuple[str, str]] = []
         self.poses: list[tuple[float, tuple[float, float, float], int]] = []
+        self.headings: list[tuple[float, float] | None] = []
         self.baros: list[tuple[float, float]] = []
         self.frames: list[tuple] = []
         self.clouds: dict[int, np.ndarray] = {}
         self.transitions: list[tuple] = []
 
-    def pose(self, t, xyz, floor) -> None:
+    def pose(self, t, xyz, floor, heading=None) -> None:
         self.poses.append((t, xyz, floor))
+        self.headings.append(heading)
 
     def event(self, t, text, level="INFO") -> None:
         self.events.append((text, level))
@@ -137,6 +140,22 @@ def test_the_floors_keep_their_anchors_and_the_robot_takes_the_correction(viewer
     v.on_odometry(m)
     expected = (5.0 * math.cos(yaw) - 1.9, 5.0 * math.sin(yaw) + 4.2, 0.0)
     np.testing.assert_allclose(v.view.poses[-1][1], expected, atol=1e-6)
+    # Facing along the odometry's x: in the map, turned by the same correction.
+    np.testing.assert_allclose(v.view.headings[-1], (math.cos(yaw), math.sin(yaw)), atol=1e-6)
+
+
+def test_the_heading_is_the_bodys_x_axis_in_the_horizontal() -> None:
+    def quat(yaw: float = 0.0, pitch: float = 0.0) -> Quaternion:
+        cy, sy, cp, sp = math.cos(yaw / 2), math.sin(yaw / 2), math.cos(pitch / 2), math.sin(pitch / 2)
+        return Quaternion(x=-sy * sp, y=cy * sp, z=sy * cp, w=cy * cp)  # yaw about z, then pitch about y
+
+    eye = np.eye(3)
+    np.testing.assert_allclose(heading_of(quat(math.pi / 2), eye), (0.0, 1.0), atol=1e-9)
+    np.testing.assert_allclose(heading_of(quat(pitch=math.radians(40)), eye), (1.0, 0.0), atol=1e-9)  # nose down
+    turned = np.array([[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])  # the map 90 deg from the odometry
+    np.testing.assert_allclose(heading_of(quat(), turned), (0.0, 1.0), atol=1e-9)
+    assert heading_of(quat(pitch=math.radians(85)), eye) is None  # facing the floor: no direction
+    assert heading_of(Quaternion(x=0.0, y=0.0, z=0.0, w=0.0), eye) is None  # no orientation
 
 
 def test_without_map_the_first_transform_of_each_floor_is_its_anchor(viewer) -> None:

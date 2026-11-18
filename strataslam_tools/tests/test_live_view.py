@@ -2,6 +2,7 @@
 
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
@@ -89,6 +90,39 @@ def test_a_run_across_two_floors_is_recorded(tmp_path: Path) -> None:
     if hasattr(rr, "disconnect"):
         rr.disconnect()  # flushes the file before it is read
     assert out.stat().st_size > 0
+
+
+def test_the_robot_shows_where_it_faces(tmp_path: Path) -> None:
+    require_module("rerun", "pip install rerun-sdk, the optional extra `viewer`")
+    view = live_view.LiveView(save=tmp_path / "run.rrd")
+    sent: list[tuple[str, Any]] = []
+    real = view.rr.log
+    view.rr.log = lambda path, *a, **kw: (sent.append((path, a[0])), real(path, *a, **kw))[1]  # type: ignore[method-assign]
+    view.pose(0.0, (1.0, 2.0, 0.0), 0)  # no orientation: no arrow
+    assert not [p for p, _ in sent if p.endswith("/heading")]
+    view.pose(1.0, (1.0, 2.0, 0.0), 0, (0.0, 2.0))  # facing +y (any length)
+    arrows = {p: a for p, a in sent if p.endswith("/heading")}
+    assert set(arrows) == {"world/robot/heading", "topdown/robot/heading"}
+    v3 = arrows["world/robot/heading"].vectors.as_arrow_array().to_pylist()[0]
+    np.testing.assert_allclose(v3, (0.0, live_view.HEADING_M, 0.0), atol=1e-6)
+    v2 = arrows["topdown/robot/heading"].vectors.as_arrow_array().to_pylist()[0]
+    np.testing.assert_allclose(v2, (0.0, -live_view.HEADING_M), atol=1e-6)  # the top view draws y downwards
+    # A building's map, 100 m across. In 3D the arrow stays an object of the scene, its length its own.
+    view.floor_cloud(2.0, 0, np.array([[0.0, 0.0, 0.0], [100.0, 40.0, 0.0]]))
+    sent.clear()
+    view.pose(3.0, (1.0, 2.0, 0.0), 0, (1.0, 0.0))
+    v3 = next(a for p, a in sent if p == "world/robot/heading").vectors.as_arrow_array().to_pylist()[0]
+    np.testing.assert_allclose(v3, (live_view.HEADING_M, 0.0, 0.0), atol=1e-6)
+    # The top view's arrow and its invisible frame go by every point the view draws (the view frames them all): the
+    # arrow keeps its size on screen, and one from inside the map never moves the framing.
+    reach = live_view.TOPDOWN_HEADING_SHARE * 100.0
+    v2 = next(a for p, a in sent if p == "topdown/robot/heading").vectors.as_arrow_array().to_pylist()[0]
+    np.testing.assert_allclose(v2, (reach, 0.0), atol=1e-3)
+    view.floor_cloud(4.0, 0, np.array([[0.0, 0.0, 0.0], [100.0, 40.0, 0.0]]))
+    frame = [a for p, a in sent if p == "topdown/frame"]
+    corners = np.array(frame[-1].positions.as_arrow_array().to_pylist())
+    np.testing.assert_allclose(corners.min(axis=0), (-reach, -40.0 - reach), atol=1e-3)
+    np.testing.assert_allclose(corners.max(axis=0), (100.0 + reach, reach), atol=1e-3)
 
 
 def test_the_optimized_path_replaces_the_drifted_one_and_the_live_tail_continues_it(tmp_path: Path) -> None:
