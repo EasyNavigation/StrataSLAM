@@ -159,6 +159,14 @@
   scans around it; up to 150 ms newer), with the camera where it was then: a camera whose images arrive late (a ZED's, 130-150 ms) left most
   keyframes of a 3D LiDAR without an image, and the map without colour. Relocalization tries the LiDAR first and then
   the camera, as `loop_closure_from` says, a camera's candidate verified by the LiDAR (ADR-0081).
+- The IMU's gravity is no longer tilted by a person's gait. The gravity tracker corrects the gyroscope with the specific
+  force low-passed over 1 s in the turning body, where it took single samples near 1 g, only some phases of each step:
+  walking, its up went 5-8 deg off the floor and the LiDAR's attitude, bounded within 1 deg of it, followed. The
+  keyframes' gravity in motion (ADR-0073) is corrected by what the accelerometer has differed from the floors the
+  LiDAR sees in motion over the last minutes, at headings all round (`TiltOffset`), also when the profile sets
+  `accel_bias`. A hand-held rig's corridors, which went down 2-3 cm a metre and opened false ramps and floors, are
+  level; the simulated Elevator-VIGS walks without a ride lose their false floor. Over seeds 1001-1020 S11 and S15
+  pass on 19 of 20 (fragile seeds: both pass all of 1021-1040, with the tracker as before and as now) (ADR-0083).
 - Closing the live view's window while the SLAM runs offers to reopen it, to stop the SLAM and save the map, or to
   stop it without saving (asked again, with the floors and keyframes that would be lost). "Close only the viewer"
   is gone: launch without `viewer:=true` to map without a window. The node has `~/discard_map` for it: no save when
@@ -207,6 +215,14 @@
   `STRATASLAM_RESULTS_SCENARIOS`, and `scripts/run_seeds.py --input` summarizes runs already made.
 ### Fixed
 
+- A hand-held rig picked up slowly while its bearer walked off, which the lift detection does not trigger on, kept
+  its transition open for the walk and the stairs that followed, which closed minutes later as one ramp. A plateau is
+  now the height kept, not uninterrupted calm (a carried rig's odometry bobs with each step), and one lived on decides:
+  under `plateau_min_change`, on a hand-held rig, the device's height (the floor seen under it unchanged, or a rise
+  steeper than any ramp), else a landing on the way (ADR-0082).
+- A ride the IMU opened late (a robot still rolling into the cabin, a person still settling) was counted from a second
+  before its acceleration crossed the threshold, half its push lost: the brake never matched it and a 19 m ride read
+  3 m. The push is now found back where the acceleration left its rest level (ADR-0084).
 - A session relocalized after a tracking loss entered its floor where the restarted odometry put it, not where the
   relocalization did. The frontend restarts at the pose before the loss, wrong by whatever the body did blind: after
   a turn with no gyroscope, a quarter turn off. The relocalizing loop, measured against that, failed the consistency

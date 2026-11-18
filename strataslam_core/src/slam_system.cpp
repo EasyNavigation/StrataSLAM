@@ -138,6 +138,10 @@ struct SlamSystem::Impl {
   std::vector<TiltSample> tilt_samples;
   Timestamp last_tilt_check = 0;
   bool tilt_reported = false;
+  // The accelerometer's 2 s mean against the same floors, over the last minutes
+  // (learn_moving_offset): what the keyframes' gravity in motion is corrected by.
+  TiltOffset moving_tilt;
+  Timestamp last_moving_check = 0;
   // m/s^2, IMU frame: subtracted from every accelerometer sample. The profile's calibration, or
   // the offset measured against the floors with `accel_bias: auto` (ADR-0072, ADR-0074).
   std::optional<Eigen::Vector3d> accel_bias;
@@ -181,6 +185,7 @@ struct SlamSystem::Impl {
     base.tracking_loss_timeout = c.multifloor.tracking_loss_timeout;
     base.aerial_platform = c.robot.platform == Platform::Aerial;
     base.ground_platform = c.robot.platform == Platform::Ground;
+    base.handheld_platform = c.robot.platform == Platform::Handheld;
     return base;
   }
 
@@ -410,6 +415,31 @@ struct SlamSystem::Impl {
     return std::abs(d) < M_PI / 180.0 ? d : 0.0;
   }
 
+  /// The accelerometer's mean over 2 s against the floors the LiDAR sees, over the last minutes
+  /// and at headings all round (a sloping floor reads at each heading the other way and cancels;
+  /// an offset of the IMU's turns with the body and stays): what the keyframes' gravity in motion
+  /// (ADR-0073) is corrected by. The calibration (accel_bias, or measured once by
+  /// check_accel_bias) holds the accelerometer at rest; a hand-held IMU, within 0.2 deg of the
+  /// floors on a table, read 1.5 deg off them in its bearer's hand, and that prior tilted every
+  /// keyframe walked by as much: each corridor went down 2.5 cm a metre in the map (ADR-0083).
+  void learn_moving_offset(const LidarScan& scan, const FrontendResult& r) {
+    if (!cfg.sensors.imu.enabled || !imu_trusted || mgr.in_unobserved_transition()) return;
+    if (cfg.robot.platform == Platform::Ground && !imu_learned) return;  // its tilt's direction
+    if (scan.stamp - last_moving_check < 1'000'000'000 || quasi_static_up()) return;  // in motion
+    last_moving_check = scan.stamp;
+    const auto up = mean_up(2'000'000'000);
+    if (!up) return;
+    const Eigen::Matrix3d R_bl = ext.T_base_lidar.rotation().matrix();
+    const auto n =
+        estimate_up_from_ground_plane(scan.points, R_bl.transpose() * *up, cfg.runtime.seed, 10.0);
+    if (!n) return;
+    if (moving_tilt.add(up->normalized() - R_bl * *n, r.T_odom_base.rotation().yaw()) &&
+        debug_channel("IMU"))
+      log->log(LogLevel::Debug,
+               strprintf("IMU: in motion %.2f deg off the floors",
+                         std::asin(std::min(1.0, moving_tilt.offset().norm())) * 180.0 / M_PI));
+  }
+
   /// The accelerometer's offset, measured against the floors (ADR-0072): once a second, up by the
   /// IMU against the normal of the floor below the LiDAR, both in the base frame (not in a cabin
   /// the IMU measures a ride in: its accelerations are the ride's). An
@@ -479,6 +509,7 @@ struct SlamSystem::Impl {
       const Eigen::Vector3d step = imu_sign * imu_scale * add;
       for (auto& m : imu_buf) m.accel -= step;
       gravity.shift_up(-d_med);
+      moving_tilt.reset();  // measured against the accelerometer before the shift
       log->log(LogLevel::Warn,
                strprintf("IMU: its gravity is %.1f deg from the floors the LiDAR sees (median of "
                          "%zu scans at all headings): its accelerometer's offset, applied from now "
@@ -615,6 +646,7 @@ struct SlamSystem::Impl {
     imu_scale = e->accel_scale;
     imu_buf.clear();
     imu_since_update.clear();
+    moving_tilt.reset();  // in the mounting before
     // The gyroscope's record, turned into the new mounting: through it the rates are dR times the
     // old ones, so each turn R becomes dR R dR^T. Cleared, the heading drift went unmeasured for a
     // minute, or was taken from the few seconds after (ADR-0080).
@@ -819,7 +851,7 @@ struct SlamSystem::Impl {
     if (!in.up_body && imu_trusted && accel_bias && !mgr.in_unobserved_transition() &&
         (cfg.robot.platform != Platform::Ground || imu_learned))
       if (const auto up = mean_up(2'000'000'000)) {
-        in.up_body = *up;
+        in.up_body = (up->normalized() - moving_tilt.offset()).normalized();  // learn_moving_offset
         in.up_sigma = tuning.moving_gravity_sigma;
       }
     if (planar()) in.plane_up = plane_up();
@@ -1944,6 +1976,11 @@ struct SlamSystem::Impl {
     }
     fs.baro_height = baro_h;
     fs.imu_vertical_accel = take_vertical_accel();
+    // The floor the last scan saw under a hand-held rig (detect_lift): it tells the device's height
+    // from the floor's.
+    if (r.valid && !r.confined && !lift_hist.empty() &&
+        stamp - lift_hist.back().stamp < 200'000'000)
+      fs.ground_z = lift_hist.back().ground;
     on_floor_event(mgr.update(fs));
   }
 };
@@ -2100,6 +2137,7 @@ void SlamSystem::add_lidar(const LidarScan& scan) {
   if (r.valid && !r.confined) {
     s.observe_heading(scan.stamp, r.T_odom_base.rotation());
     s.check_accel_bias(scan, r);
+    s.learn_moving_offset(scan, r);
   }
   if (debug_channel("GYRO") && r.valid && f.gyro_delta && R_prev)
     s.log->log(LogLevel::Debug,

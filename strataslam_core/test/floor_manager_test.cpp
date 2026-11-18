@@ -19,7 +19,8 @@ struct Rig {
   double baro = 0.0;
   bool use_baro = false;
   std::vector<FloorEvent> events;
-  std::vector<FloorId> floors;  // floor() after each sample
+  std::vector<FloorId> floors;   // floor() after each sample
+  std::optional<double> ground;  // the floor seen under a hand-held rig (FloorSample::ground_z)
 
   explicit Rig(FloorManagerConfig c = {}) : mgr(c) {}
 
@@ -33,6 +34,7 @@ struct Rig {
     s.position = p;
     s.baro_height = baro_h;
     s.imu_vertical_accel = az;
+    s.ground_z = ground;
     const FloorEvent e = mgr.update(s);
     if (e.kind != FloorEvent::Kind::None) events.push_back(e);
     floors.push_back(mgr.floor());
@@ -315,6 +317,137 @@ TEST(FloorManager, ATransitionAPickUpOpenedEndsOnItsFloor) {
   ASSERT_EQ(stairs.mgr.state(), FloorState::InTransition);
   EXPECT_EQ(stairs.mgr.device_lifted(0.5, stairs.t - 1'000'000'000).kind, FloorEvent::Kind::None);
   EXPECT_EQ(stairs.mgr.state(), FloorState::InTransition);
+}
+
+// A hand-held rig picked up slowly (0.5 m in 2 s) as its bearer walks off, which no lift detection
+// sees, then carried 25 m on its floor, bobbing with each step, and up the stairs: the transition
+// the pick-up opened ends on its floor once its plateau has been walked on, and the stairs open
+// their own, measured from there. Its odometry's height bobs over calm_vz in single samples, and
+// the per-sample calm kept the pick-up's transition open through the stairs, which closed as one
+// ramp.
+TEST(FloorManager, ACarriedRigPickedUpSlowlyStaysOnItsFloorAndItsStairsAreTheirOwn) {
+  FloorManagerConfig c;
+  c.floor_height_prior.reset();
+  c.handheld_platform =
+      true;  // no floor seen under it: the plateau is taken as the device's height
+  Rig r(c);
+  double phase = 0.0;
+  auto gait = [&](const Vector3d& to, double seconds) {
+    const Vector3d from = r.pos;
+    const double bob0 = 0.04 * std::sin(phase);
+    const int n = static_cast<int>(seconds / kDt);
+    for (int i = 1; i <= n; ++i) {
+      phase += 2.0 * M_PI * 2.0 * kDt;  // two steps a second
+      const Vector3d p = from + (to - from) * (static_cast<double>(i) / n);
+      r.step(p + Vector3d(0, 0, 0.04 * std::sin(phase) - bob0), std::nullopt, std::sin(phase));
+    }
+    r.pos = to;
+  };
+  r.stand(3);
+  gait(r.pos + Vector3d(1.0, 0, 0.5), 2);  // picked up while walking off
+  ASSERT_EQ(r.count(FloorEvent::Kind::TransitionStarted), 1);
+  gait(r.pos + Vector3d(25, 0, 0), 25);  // carried along floor 0
+  ASSERT_EQ(r.count(FloorEvent::Kind::TransitionEnded), 1);
+  EXPECT_EQ(r.ended()->from, 0);
+  EXPECT_EQ(r.ended()->to, 0);
+  EXPECT_EQ(r.mgr.floor(), 0);
+  gait(r.pos + Vector3d(9, 0, 3.0), 15);  // the stairs
+  gait(r.pos + Vector3d(15, 0, 0), 15);   // on along floor 1
+  ASSERT_EQ(r.count(FloorEvent::Kind::TransitionStarted), 2);
+  ASSERT_EQ(r.count(FloorEvent::Kind::TransitionEnded), 2);
+  EXPECT_EQ(r.events.back().to, 1);
+  EXPECT_EQ(r.events.back().type, TransitionType::Stairs);
+  EXPECT_NEAR(r.events.back().delta_z, 3.0, 0.2);
+}
+
+// A hand-held rig up a gentle ramp with a landing 0.7 m up, walked for 25 s: no floor seen under
+// it, the landing is no device picked up (that rises steeper than any ramp), and the transition
+// goes on to the floor the second flight reaches. Closed on the landing, the 2.3 m that followed
+// were measured from it and the floor came out 0.7 m low.
+TEST(FloorManager, AHandHeldRigOnAGentleRampsLandingReachesTheWholeFloor) {
+  FloorManagerConfig c;
+  c.floor_height_prior.reset();
+  c.handheld_platform = true;
+  Rig r(c);
+  r.stand(3);
+  r.walk(5);
+  r.climb(0.7, 12.0, false);
+  r.walk(25);
+  r.climb(2.3, 38.0, false);
+  r.walk(20);
+  r.stand(8);
+  EXPECT_EQ(r.mgr.floor(), 1);
+  EXPECT_NEAR(r.mgr.level_altitude(1), 3.0, 0.2);
+}
+
+// A hand-held rig taken from a low table and held overhead while its bearer walks off, 1.2 m up in
+// 2 s, then carried 25 m: the floor its LiDAR sees under it stays where it was, so the device rose,
+// not the floor, and the stairs that follow are measured from the floor. Without that floor, a
+// plateau 1.2 m up walked on is a level of its own (the twin case below).
+TEST(FloorManager, AHandHeldRigRaisedOverItsFloorStaysOnIt) {
+  for (const bool floor_seen : {true, false}) {
+    SCOPED_TRACE(floor_seen ? "floor seen" : "no floor seen");
+    FloorManagerConfig c;
+    c.floor_height_prior.reset();
+    c.handheld_platform = true;
+    Rig r(c);
+    if (floor_seen) r.ground = 0.0;  // the floor, in the odometry frame
+    r.stand(3);
+    r.climb(1.2, 2.0, false);  // raised while walking off
+    r.walk(25);
+    ASSERT_EQ(r.count(FloorEvent::Kind::TransitionEnded), 1);
+    if (!floor_seen) {
+      EXPECT_EQ(r.mgr.floor(), 1);
+      EXPECT_NEAR(r.mgr.level_altitude(1), 1.2, 0.2);
+      continue;
+    }
+    EXPECT_EQ(r.ended()->from, 0);
+    EXPECT_EQ(r.ended()->to, 0);
+    EXPECT_EQ(r.mgr.floor(), 0);
+    EXPECT_NEAR(r.mgr.altitude(), 0.0, 0.2);  // the device's height taken out
+    r.ground.reset();                         // the stairs: no floor seen under it
+    r.climb(3.0, 9.0, true);
+    r.walk(20);
+    r.stand(8);
+    EXPECT_EQ(r.mgr.floor(), 1);
+    EXPECT_NEAR(r.mgr.level_altitude(1), 3.0, 0.2);
+  }
+}
+
+// A hand-held rig carried up a gentle slope 0.9 m and on along it: the floor its LiDAR sees under
+// it rose with it, 0.6 m of it after the transition opened, more than a device picked up leaves,
+// so the floor changed (a raised wing of the same storey), and the transition ends there, the
+// height kept. Without that floor it is taken for a ramp's landing, and the transition stays open
+// for the floor its next flight reaches (the twin case below).
+TEST(FloorManager, AHandHeldRigWhoseFloorRoseWithItEndsWhereItIs) {
+  for (const bool floor_seen : {true, false}) {
+    SCOPED_TRACE(floor_seen ? "floor seen" : "no floor seen");
+    FloorManagerConfig c;
+    c.floor_height_prior.reset();
+    c.handheld_platform = true;
+    Rig r(c);
+    if (floor_seen) r.ground = 0.0;
+    r.stand(3);
+    r.walk(5);
+    const int n = static_cast<int>(18.0 / kDt);  // 0.9 m up over 18 m, the floor with it
+    const Vector3d p0 = r.pos;
+    for (int i = 1; i <= n; ++i) {
+      const double k = static_cast<double>(i) / n;
+      if (floor_seen) r.ground = 0.9 * k;
+      r.step(p0 + Vector3d(18.0 * k, 0, 0.9 * k));
+    }
+    r.walk(25);
+    if (!floor_seen) {
+      EXPECT_EQ(r.mgr.state(), FloorState::InTransition);
+      continue;
+    }
+    ASSERT_EQ(r.count(FloorEvent::Kind::TransitionEnded), 1);
+    EXPECT_EQ(r.ended()->from, 0);
+    EXPECT_EQ(r.ended()->to, 0);
+    EXPECT_NEAR(r.ended()->delta_z, 0.9, 0.15);
+    EXPECT_EQ(r.mgr.state(), FloorState::OnFloor);
+    EXPECT_NEAR(r.mgr.altitude(), 0.9, 0.15);
+  }
 }
 
 TEST(FloorManager, ALongPlateauAfterAClimbThatIsNotAWholeFloorIsALevel) {
@@ -753,6 +886,31 @@ TEST(FloorManager, TheWalkIntoACabinThatLeavesAtOnceDoesNotEndTheRide) {
   ASSERT_NE(e, nullptr);
   EXPECT_EQ(e->type, TransitionType::Elevator);
   EXPECT_NEAR(e->delta_z, -1.2 * (1.5 + 5.0), 0.5);
+}
+
+// The cabin leaves while a robot is still rolling in: the IMU opens the ride only once the base is
+// still, three seconds into the push. Counted from a fixed second before that, half the push was
+// lost and the brake that followed never matched it; the push is found back where the
+// acceleration left rest.
+TEST(FloorManager, ARideOpenedLateIsCountedFromWhereItsPushBegan) {
+  FloorManagerConfig c;
+  c.floor_height_prior.reset();
+  c.ground_platform = true;
+  Rig r(c);
+  for (int i = 0; i < 30; ++i) r.step(r.pos, std::nullopt, 0.0);
+  const auto steps = [](double sec) { return static_cast<int>(std::lround(sec / kDt)); };
+  Vector3d p = r.pos;
+  for (int i = 0; i < steps(2.0); ++i) r.step(p += Vector3d(kDt, 0, 0), std::nullopt, 0.0);
+  for (int i = 0; i < steps(1.0); ++i)  // a gentle cabin leaves, the robot still rolling in
+    r.step(p += Vector3d(kDt, 0, 0), std::nullopt, -0.3);
+  for (int i = 0; i < steps(3.0); ++i) r.step(p, std::nullopt, -0.3);
+  for (int i = 0; i < steps(6.0); ++i) r.step(p, std::nullopt, 0.0);
+  for (int i = 0; i < steps(4.0); ++i) r.step(p, std::nullopt, 0.3);
+  for (int i = 0; i < steps(5.0); ++i) r.step(p, std::nullopt, 0.0);
+  const FloorEvent* e = r.ended();
+  ASSERT_NE(e, nullptr);
+  EXPECT_EQ(e->type, TransitionType::Elevator);
+  EXPECT_NEAR(e->delta_z, -1.2 * (2.0 + 6.0 + 2.0), 0.8);
 }
 
 // The brake of a ride whose push the IMU did not see, taken for a push.

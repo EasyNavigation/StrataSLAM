@@ -1612,3 +1612,106 @@ image to try. It tried the camera alone when there was one, unverified, and neve
 
 **Tests.** `lidar_test.cpp`: a planar scanner's camera two sweeps behind gives each keyframe an image, its depth placed
 by the motion (walls in place); without the motion it fails.
+
+## ADR-0082 · A hand-held rig's plateau is lived on, whatever its calm
+
+A hand-held rig picked up from a table slowly, while its bearer walked off, rose 0.5 m in two seconds: under the lift
+detection's trigger (ADR-0076), which asks for the rise within 0.8 s and twice what is walked. The transition it opened
+was never closed: a plateau between `depart_dz` (0.3 m) and `plateau_min_change` (1 m) had no rule, and the plateau's
+own clock restarted every few seconds, because it counted only uninterrupted calm and a carried rig's odometry bobs a
+few centimetres with each step, over `calm_vz` and the slope windows' bounds in single samples. The walk on the first
+floor and the stairs that followed closed together, minutes later, as one ramp.
+
+**Decision.**
+- *A plateau is the height kept.* It starts calm, and ends when the altitude leaves it by `depart_dz` (a stair in a
+  second, a gentle ramp within a few metres) or with a ride the IMU measures; single samples over the calm bounds do
+  not end it.
+- *A plateau lived on decides* (`plateau_s` long, `plateau_travel_m` walked; no new parameters), without waiting for the
+  settle: from `plateau_min_change` up a level, as before.
+- *Below it, on a hand-held rig*, the plateau is the device's height, taken out as a lift's: the floor the LiDAR sees
+  under the rig (median over 2 s, `FloorSample::ground_z`) still the floor it left, within 0.4 m as for a lift, or no
+  floor seen and a rise steeper than any ramp (15 degrees over the run to the plateau's peak). A floor that moved with
+  the rig is a floor change of its own: the transition ends there on its floor. Reached at a ramp's slope, the plateau
+  is a landing on the way and the transition goes on, as it does for any other platform, whose sensor keeps its
+  height: closed on a gentle ramp's landing 0.7-0.9 m up, the climb that followed was measured from the landing and
+  the floor came out low.
+- `odometry_rebased` (the odometry's frame moved: the floors seen in it too) and `shift_altitude` (only the altitude's
+  offset: a lift, a plateau) are told apart.
+
+**Evidence** (offline, one thread, against `49c9284`).
+- *The hand-held rig picked up slowly*: the pick-up ends on its floor and the stairs that follow close as stairs of
+  their own, the first floor's walk no longer inside a transition.
+- *Elevator-VIGS*: with ADR-0083 and ADR-0084, every simulated sequence has its true number of floors, and of the real
+  ones all but one, where the head's version had four sequences and two with a floor too many.
+- *Scenarios*: the same as before over seeds 1001-1020 but for S17, whose landing closed as a floor of its own (a
+  collapse in two seeds) until the ramp's slope kept the transition open.
+
+**Limits.** A table that hides the floor under the rig at the start leaves no floor to compare: the rise decides.
+Stairs of under a metre to a split level, climbed steeply, read as a device picked up.
+
+**Tests.** `floor_manager_test.cpp`: a carried rig picked up slowly stays on its floor and its stairs are their own; a
+hand-held rig on a gentle ramp's landing reaches the whole floor.
+
+## ADR-0083 · The IMU's gravity is not tilted by a person's gait
+
+On a hand-held rig the map's corridors went down 2-3 cm a metre, whatever the heading: each 0.3 m opened a floor
+transition and the map took ramps and floors that were not there. Without the IMU, the LiDAR odometry kept the same
+corridors level. Two parts of the IMU's gravity were tilted by the gait.
+- *The gravity tracker* (a Mahony filter, ADR-0058) corrected the gyroscope with each accelerometer sample whose
+  magnitude was within 10 % of gravity. A person's step, accelerations of a few m/s^2 at about 2 Hz with a harmonic at
+  the heel strike, kept only some phases of the step, and their mean was tilted by the gait's fore-and-aft surge: up
+  5-8 degrees off the floors the LiDAR sees while walking, and the integral term took it for a gyroscope bias. The
+  LiDAR's attitude, bounded within 1 degree of that up, followed it.
+- *The keyframes' gravity in motion* (ADR-0073, the accelerometer's mean over 2 s, with a calibrated accelerometer)
+  read 1.5 degrees off the floors in the bearer's hand, where on a table it agreed with them within 0.2: every keyframe
+  walked by was tilted by as much in the graph.
+
+**Decision.**
+- *The tracker's correction is the specific force low-passed over 1 s in the turning body* (carried by the gyroscope,
+  as gravity is seen from it), gated by its magnitude as well as the sample's: the gait averages out, and a sustained
+  acceleration is still no tilt. The time constant (10 s) is kept: shorter, a robot's start tilts it.
+- *The keyframes' gravity in motion is corrected by what the accelerometer's 2 s mean has differed from the floors the
+  LiDAR sees, in motion, over the last three minutes* (`TiltOffset`: the median of the differences once their headings
+  go all round, where a sloping floor cancels and an offset of the IMU's stays; up to 3 degrees, beyond which it is a
+  TF to fix, ADR-0074). The calibration holds the accelerometer at rest; this is the IMU as it is in motion, kept up to
+  date, also when the profile sets `accel_bias`.
+
+**Evidence** (offline, one thread, against `49c9284`).
+- *The hand-held rig*: the tracker's up within 2-3 degrees of the floors while walking; with the corrected keyframes'
+  gravity, every floor of the map level within 1 cm a metre (it learns 1.6 degrees), where they went down 2-3.
+- *Two other recordings of the same rig*: their floors, which went down 1.8-2.8 cm a metre, go down 0.6-1.7; one loses
+  two false ramps and their floors, the other has a different staircase cut.
+- *Elevator-VIGS*: the three simulated walks without a ride, which kept a false floor (ADR-0059's limit), have one floor;
+  the simulated sequences' trajectory errors fall by a third (with ADR-0082 and ADR-0084).
+- *A ground robot* (the Summit XL, ten recordings, elevators, ramps and outdoor drives) and *a TIAGo*: the same floors and
+  rides, but one long outdoor descent, cut into one ramp more.
+- *Scenarios* over seeds 1001-1020: S11 and S15 lose one seed each, a fused floor's translation over its bound and a
+  stairwell's third flight the odometry did not follow (the degenerate stairwell of S15). Over twenty more seeds
+  (1021-1040) both pass all, with the tracker as before and as now: fragile seeds, not a trend. The other scenarios are
+  the same. `docs/seeds_baseline.json` holds S11 and S15 at 19 of 20.
+
+**Limits.** The keyframes' correction needs a LiDAR that sees the floor and headings all round: a camera alone, or a
+walk along one corridor, keeps the calibration's. What is left of the tracker's tilt while walking (1-2 degrees, the
+gyroscope under the gait) stays within the LiDAR's bound.
+
+**Tests.** `imu_mount_test.cpp`: a walking gait does not tilt the tracker (sample by sample it did, 1.2 degrees in the
+test); `TiltOffset` learns the IMU's own offset and not a slope, nothing at one heading, nothing beyond 3 degrees.
+
+## ADR-0084 · A ride the IMU opens late is counted from where its push began
+
+A ride the IMU opens or takes over was counted from one second before its 1 s mean crossed the departure threshold. When
+the crossing came late (a robot still rolling into the cabin, a person still settling, an odometry still moving), the
+start of the push was lost: half of a 0.6 m/s push was counted, the brake that followed never matched it, and a 19 m
+ride was measured as 3 m. The head's walking drift had hidden it: the odometry opened those transitions first.
+
+**Decision.** The onset is found back from the crossing while the 1 s mean stands clear of the rest level before it
+(by 0.1 m/s^2, up to 5 s back), and a second before where that ends. The rest level is a low quantile of the 1 s means
+over those seconds: zero, or what a ride leaves of the bias, often a tenth or two; measured from zero, such a flat
+offset read as a push seconds long and a floor that was not there. Without that history, a second before the crossing,
+as before.
+
+**Evidence.** Elevator-VIGS (with ADR-0082 and ADR-0083): the simulated rides lost with ADR-0083 alone measured again
+within decimetres; the scenarios are the same.
+
+**Tests.** `floor_manager_test.cpp`: a ride opened late (a gentle cabin leaving while a robot rolls in) is counted from
+where its push began; counted from the crossing it came out a sixth of its height.

@@ -92,6 +92,33 @@ std::optional<Timestamp> FloorManager::push_before(Timestamp onset, double v_bra
   return std::nullopt;
 }
 
+/// Where the push that kept the 1 s mean beyond the threshold from `over_since` began: back from
+/// there while the 1 s mean still stands clear of the rest level before it, and 1 s before where it
+/// stops. The rest level is a low quantile of the 1 s means over the last seconds (a push lasts a
+/// second or two of them): zero, or what a ride leaves of the bias, often a tenth or two. A fixed
+/// second before the crossing lost the start of a push when the crossing came late (a person still
+/// settling in the cabin: half of a 0.6 m/s push, and the brake that followed never matched it);
+/// measured from zero, a flat offset read as a push seconds long (ADR-0084).
+Timestamp FloorManager::push_onset(Timestamp over_since) const {
+  constexpr Timestamp kSecond = 1'000'000'000, kStep = 100'000'000, kMaxBack = 5'000'000'000;
+  constexpr double kClear = 0.1;  // m/s^2 over the rest level: still pushing
+  const double sign = az_mean_between(over_since - kSecond, over_since) >= 0 ? 1.0 : -1.0;
+  const Timestamp first = az_hist_.empty() ? over_since : az_hist_.front().first + kSecond;
+  const auto mean_at = [&](Timestamp t) { return sign * az_mean_between(t - kSecond, t); };
+  std::vector<double> means;
+  for (Timestamp t = over_since; t > over_since - kMaxBack && t >= first; t -= kStep)
+    means.push_back(mean_at(t));
+  if (means.size() < 10) return over_since - kSecond;
+  const auto q = means.begin() + static_cast<std::ptrdiff_t>(means.size() / 4);
+  std::nth_element(means.begin(), q, means.end());
+  const double rest = std::max(*q, 0.0);
+  Timestamp t = over_since;
+  while (t - kStep > over_since - kMaxBack && t - kStep >= first &&
+         mean_at(t - kStep) > rest + kClear)
+    t -= kStep;
+  return t - kSecond;
+}
+
 /// The trimmed mean of the vertical acceleration between `from` and `to` (0 without samples).
 double FloorManager::az_mean_between(Timestamp from, Timestamp to) const {
   std::vector<double> v;
@@ -200,6 +227,14 @@ FloorId FloorManager::assign_level(double altitude, double tol_override, double 
 }
 
 void FloorManager::odometry_rebased(double dz) {
+  // The odometry's frame moved by dz: so did the floors seen in it.
+  for (auto& g : ground_win_) g.second += dz;
+  if (ground_floor_) *ground_floor_ += dz;
+  if (acc_.ground0) *acc_.ground0 += dz;
+  shift_altitude(dz);
+}
+
+void FloorManager::shift_altitude(double dz) {
   altitude_offset_ -= dz;
   alt_hist_.clear();
   slope_win_.clear();
@@ -212,7 +247,7 @@ FloorEvent FloorManager::device_lifted(double dz, Timestamp since) {
   // In a transition open before the lift (stairs, a ride on the way), the lift is taken out of its
   // height too: the device's height is not the floor's.
   const bool opened_by_lift = state_ == FloorState::InTransition && started_ && acc_.t0 >= since;
-  odometry_rebased(dz);
+  shift_altitude(dz);
   // Its push and brake are the device's, no cabin's: the IMU opens no ride on them, nor on what of
   // them stays in its 1 s means (on a recorded ride, the brake of a rig picked up in a cabin opened
   // a ride, 17 s integrated to -9.2 m and a level).
@@ -371,6 +406,12 @@ void FloorManager::ingest_height_sensors(const FloorSample& s) {
     ref_alt_ = 0.0;
     levels_[0] = 0.0;
   }
+  if (s.ground_z) {
+    ground_win_.push_back({s.stamp, *s.ground_z});
+    while (s.stamp - ground_win_.front().first > 2'000'000'000) ground_win_.pop_front();
+  }
+  if (state_ == FloorState::OnFloor)
+    if (const auto g = ground_now()) ground_floor_ = g;
   if (s.imu_vertical_accel) {
     az_hist_.push_back({s.stamp, *s.imu_vertical_accel - az_bias_});
     // 12 s, or from the onset of a ride the IMU is measuring: a ride is decided once the height has
@@ -484,7 +525,7 @@ FloorEvent FloorManager::update_on_floor(const FloorSample& s, const Motion& m) 
       if (az_over_since_ == 0) az_over_since_ = s.stamp;
       if ((s.stamp - az_over_since_) * 1e-9 >= cfg_.imu_depart_s) {
         imu_departure = true;
-        imu_onset = az_over_since_ - static_cast<Timestamp>(1.0e9);
+        imu_onset = push_onset(az_over_since_);
       }
     } else {
       az_over_since_ = 0;
@@ -508,6 +549,7 @@ FloorEvent FloorManager::update_on_floor(const FloorSample& s, const Motion& m) 
     run_win_.clear();
     acc_.t0 = s.stamp;
     acc_.alt0 = ref_alt_;
+    acc_.ground0 = ground_floor_;
     acc_.had_baro = baro_ref_.has_value() && s.baro_height.has_value();
     acc_.baro0 = baro_ref_.value_or(0.0);
     acc_.last_pos = s.position;
@@ -584,7 +626,7 @@ FloorEvent FloorManager::update_in_transition(const FloorSample& s, const Motion
         // (a recorded flight of stairs down read as a 2.4 m ride to a level of its own). Checked
         // again each sample: a ride that starts as the last steps into the cabin are taken is
         // taken once they stop.
-        const Timestamp onset = acc_.az_over_since - static_cast<Timestamp>(1.0e9);
+        const Timestamp onset = push_onset(acc_.az_over_since);
         // Lost, for the whole half second: a short loss while the rig swings is not a cabin.
         const bool lost_through =
             !s.tracking_ok && lost_since_ != 0 &&
@@ -697,15 +739,24 @@ FloorEvent FloorManager::update_in_transition(const FloorSample& s, const Motion
     }
     if (acc_.ride_push >= kRideMinSpeed && !braked) calm = false;
   }
-  if (!calm) {
+  if (!calm)
     acc_.calm_since = 0;
+  else if (acc_.calm_since == 0)
+    acc_.calm_since = s.stamp;
+  // A plateau is the height kept, not every sample calm: a carried rig's odometry bobs a few
+  // centimetres with each step, over calm_vz and the slope windows' bounds in single samples, and
+  // its calm restarted every few seconds of a 25 s walk on one floor (ADR-0082). It ends when the
+  // height leaves it by depart_dz (a stair in a second, a gentle ramp within a few metres), or with
+  // a ride the IMU measures, whose cabin holds the altitude still.
+  const bool off_plateau =
+      acc_.unobserved ||
+      (acc_.plateau_since != 0 && std::abs(altitude_ - acc_.plateau_alt) > cfg_.depart_dz);
+  if (off_plateau) {
     acc_.plateau_since = 0;
-  } else {
-    if (acc_.calm_since == 0) acc_.calm_since = s.stamp;
-    if (acc_.plateau_since == 0) {
-      acc_.plateau_since = s.stamp;
-      acc_.plateau_h0 = acc_.s_h;
-    }
+  } else if (acc_.plateau_since == 0 && calm) {
+    acc_.plateau_since = s.stamp;
+    acc_.plateau_h0 = acc_.s_h;
+    acc_.plateau_alt = altitude_;
   }
   // A ride the IMU measures ends when the cabin stops: braked and the acceleration calm. Closed
   // there, with the height integrated up to there (the zero-velocity update at that end removes a
@@ -813,12 +864,27 @@ FloorEvent FloorManager::update_in_transition(const FloorSample& s, const Motion
   const double settle = cfg_.settle_s * (cfg_.floor_height_prior ? 1.0 : 2.5);
   const bool settled = acc_.calm_since != 0 && (s.stamp - acc_.calm_since) * 1e-9 >= settle;
   const double elapsed = (s.stamp - acc_.t0) * 1e-9;
-  if (settled || elapsed > cfg_.max_transition_s) {
+  if (settled || lived_on(s) || elapsed > cfg_.max_transition_s) {
     ev = decide_transition(s, elapsed > cfg_.max_transition_s);
     if (ev.kind == FloorEvent::Kind::None)
       acc_.calm_since = 0;  // a landing in the middle of a stair or ramp: keep waiting
   }
   return ev;
+}
+
+std::optional<double> FloorManager::ground_now() const {
+  if (ground_win_.size() < 5) return std::nullopt;
+  std::vector<double> v;
+  v.reserve(ground_win_.size());
+  for (const auto& g : ground_win_) v.push_back(g.second);
+  const auto mid = v.begin() + static_cast<std::ptrdiff_t>(v.size() / 2);
+  std::nth_element(v.begin(), mid, v.end());
+  return *mid;
+}
+
+bool FloorManager::lived_on(const FloorSample& s) const {
+  return acc_.plateau_since != 0 && (s.stamp - acc_.plateau_since) * 1e-9 >= cfg_.plateau_s &&
+         acc_.s_h - acc_.plateau_h0 >= cfg_.plateau_travel_m;
 }
 
 void FloorManager::drop_ride() {
@@ -868,10 +934,57 @@ FloorEvent FloorManager::decide_transition(const FloorSample& s, bool forced) {
   // Went back to where it started: no floor change.
   if (std::abs(dz) < cfg_.depart_dz) return end_on_floor(s, dz);
   if (valid_level_change(dz) || forced) return close_transition(s);
-  if (std::abs(dz) >= cfg_.plateau_min_change && acc_.plateau_since != 0 &&
-      (s.stamp - acc_.plateau_since) * 1e-9 >= cfg_.plateau_s &&
-      acc_.s_h - acc_.plateau_h0 >= cfg_.plateau_travel_m)
-    return close_transition(s, true);
+  // A plateau lived on (a stair landing lasts a few seconds, a floor is walked on) is a level from
+  // plateau_min_change up; below it, the floor left. A hand-held rig picked up slowly while its
+  // bearer walked off, which no lift detection saw, kept its transition open for the walk and the
+  // stairs that followed, which then closed as one ramp. Its height is the device's: taken out, as
+  // a lift's (ADR-0076), or a lift detected later is counted against it (ADR-0082).
+  if (lived_on(s)) {
+    // A hand-held rig: the floor its LiDAR sees under it tells the device's height from the floor's
+    // (ADR-0076). Still the floor it left, the device was picked up or put down, which a lift
+    // detection may miss (slow, or put on the floor): the floor left, whatever the height. Moved
+    // with it, the floor changed.
+    bool floor_kept = false, floor_moved = false;
+    const auto g = ground_now();
+    if (cfg_.handheld_platform && acc_.ground0 && g) {
+      constexpr double kFloorKept = 0.4;  // m, as a lift's
+      floor_kept = std::abs(*g - *acc_.ground0) <= kFloorKept;
+      floor_moved = !floor_kept;
+    }
+    if (debug_channel("FLOORS"))
+      log_->log(
+          LogLevel::Debug,
+          strprintf("plateau: dz=%.3f ground0=%s ground=%s kept=%d moved=%d", dz,
+                    acc_.ground0 ? strprintf("%.2f", *acc_.ground0).c_str() : "none",
+                    g ? strprintf("%.2f", *g).c_str() : "none", int(floor_kept), int(floor_moved)));
+    if (!floor_kept) {
+      if (std::abs(dz) >= cfg_.plateau_min_change) return close_transition(s, true);
+      // Below plateau_min_change, reached at a ramp's slope, the plateau is a landing on the way (a
+      // gentle ramp's, 0.9 m up over 15 m), and the transition goes on to the floor it reaches:
+      // closed there, the climb that followed was measured from the landing and fell short of a
+      // level. So is it for a robot, whose sensor keeps its height. A device picked up rises
+      // steeper than any ramp (0.5 m over a metre or two walked).
+      constexpr double kRampMaxSlope = 0.27;  // tan(15 deg): building ramps stay under 10 deg
+      constexpr double kNear = 0.1;           // m under the peak: the rise reached it
+      // The rise to the plateau: its highest point (drift may since have lowered the plateau) and
+      // the run from the departure to where it first came within kNear of it.
+      double peak = 0;
+      for (const auto& pr : acc_.profile) peak = std::max(peak, std::abs(pr.second - acc_.alt0));
+      double rise_run = acc_.s_h;
+      for (const auto& [run, alt] : acc_.profile)
+        if (std::abs(alt - acc_.alt0) >= peak - kNear) {
+          rise_run = run;
+          break;
+        }
+      const double rise = std::max(0.0, peak - cfg_.depart_dz);
+      const bool lifted = rise > kRampMaxSlope * std::max(rise_run, 0.1);
+      if (!cfg_.handheld_platform || (!floor_moved && !lifted)) return ev;
+      if (floor_moved) return end_on_floor(s, dz);
+    }
+    shift_altitude(dz);
+    altitude_ -= dz;
+    return end_on_floor(s, 0.0);
+  }
   return ev;
 }
 

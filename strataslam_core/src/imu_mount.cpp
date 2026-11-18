@@ -3,6 +3,7 @@
 #include <Eigen/SVD>
 #include <algorithm>
 #include <cmath>
+#include <vector>
 
 #include "strataslam/sensors/barometer.hpp"  // kStandardGravity
 
@@ -11,7 +12,8 @@ namespace strataslam {
 namespace {
 constexpr Timestamp kKeep = 10'000'000'000;  // ns of IMU kept for the gyro integrals
 constexpr double kAccelTolerance =
-    0.1;  // relative: specific force this close to gravity is "at rest"
+    0.1;                           // relative: specific force this close to gravity is "at rest"
+constexpr double kLowPassS = 1.0;  // s, the specific force's low-pass for the gravity tracker
 /// Sum over the intervals of the base's horizontal acceleration squared, (m/s^2)^2, before the
 /// heading is decided: on a Summit XL recording (LiDAR odometry) the heading is within about
 /// 10 deg of its final value from 4, and 20 deg at 2. Its error tilts the IMU's slope by only
@@ -186,8 +188,17 @@ void GravityTracker::add(Timestamp stamp, const Eigen::Vector3d& accel_base,
   const double kp = 1.0 / (settling ? 0.2 * settle_s_ : tau_s_);
   const double ki = settling ? 0.0 : 0.25 * kp * kp;  // critically damped
   Eigen::Vector3d w = gyro_base - bias_;
-  if (at_rest) {
-    const Eigen::Vector3d e = (accel_base / n).cross(*up_);
+  // The specific force low-passed in the turning body (a world-fixed vector seen from it, like
+  // gravity): a person's gait, accelerations of a few m/s^2 at about 2 Hz, averages out there. The
+  // samples one by one, gated by their magnitude, kept only some phases of the step, and their mean
+  // was tilted by the gait's own fore-and-aft acceleration (ADR-0083).
+  if (!lp_) lp_ = accel_base;
+  *lp_ -= w.cross(*lp_) * dt;
+  *lp_ += (accel_base - *lp_) * std::min(1.0, dt / kLowPassS);
+  const double nl = lp_->norm();
+  const bool lp_at_rest = std::abs(nl - kStandardGravity) < kAccelTolerance * kStandardGravity;
+  if (at_rest && lp_at_rest) {
+    const Eigen::Vector3d e = (*lp_ / nl).cross(*up_);
     w += kp * e;
     bias_ -= ki * e * dt;
   }
@@ -200,6 +211,34 @@ std::optional<Eigen::Vector3d> GravityTracker::up() const {
   if (!up_ || since < settle_s_ || gyro_n_ || (!static_start_ && since < settle_s_ + 3.0 * tau_s_))
     return std::nullopt;
   return up_;
+}
+
+bool TiltOffset::add(const Eigen::Vector3d& d, double yaw) {
+  samples_.push_back({d.x(), d.y(), yaw});
+  while (samples_.size() > keep_) samples_.pop_front();
+  if (samples_.size() < min_) return false;
+  double c = 0, s = 0;
+  for (const auto& t : samples_) {
+    c += std::cos(t.yaw);
+    s += std::sin(t.yaw);
+  }
+  if (std::hypot(c, s) / static_cast<double>(samples_.size()) > 0.5) return false;  // headings
+  std::vector<double> xs, ys;
+  xs.reserve(samples_.size());
+  ys.reserve(samples_.size());
+  for (const auto& t : samples_) {
+    xs.push_back(t.dx);
+    ys.push_back(t.dy);
+  }
+  const auto median = [](std::vector<double>& v) {
+    const auto mid = v.begin() + static_cast<std::ptrdiff_t>(v.size() / 2);
+    std::nth_element(v.begin(), mid, v.end());
+    return *mid;
+  };
+  const Eigen::Vector3d off(median(xs), median(ys), 0.0);
+  if (off.norm() > max_) return false;
+  offset_ = off;
+  return true;
 }
 
 }  // namespace strataslam

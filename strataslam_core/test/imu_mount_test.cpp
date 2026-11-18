@@ -204,6 +204,22 @@ TEST(GravityTracker, TurnedWithALearnedMountingItStaysReadyAndRight) {
   EXPECT_NEAR(g.up()->dot(Vector3d::UnitZ()), 1.0, 1e-6);
 }
 
+// Reset (a new mounting): nothing is known until it settles again, and then it reads the new up,
+// with nothing of the old specific force in its low-pass.
+TEST(GravityTracker, AfterAResetItSettlesOnTheNewUp) {
+  GravityTracker g;
+  Timestamp t = 1'000'000'000;
+  for (int i = 0; i < 300; ++i, t += 10'000'000)
+    g.add(t, Vector3d(0, 0, kStandardGravity), Vector3d::Zero());
+  ASSERT_TRUE(g.up().has_value());
+  g.reset();
+  EXPECT_FALSE(g.up().has_value());
+  const Vector3d up = gtsam::Rot3::Pitch(0.3).matrix().transpose() * Vector3d::UnitZ();
+  for (int i = 0; i < 300; ++i, t += 10'000'000) g.add(t, kStandardGravity * up, Vector3d::Zero());
+  ASSERT_TRUE(g.up().has_value());
+  EXPECT_LT(std::acos(std::clamp(g.up()->dot(up), -1.0, 1.0)) * 180.0 / M_PI, 0.5);
+}
+
 TEST(GravityTracker, FollowsATiltAndIgnoresTheRobotsOwnAcceleration) {
   GravityTracker g;
   const double hz = 100.0;
@@ -227,6 +243,53 @@ TEST(GravityTracker, FollowsATiltAndIgnoresTheRobotsOwnAcceleration) {
   ASSERT_TRUE(g.up().has_value());
   EXPECT_LT(error_deg(), 0.5);  // the ramp's tilt, carried by the gyroscope
   EXPECT_LT(worst_deg, 0.75);   // the acceleration (5.8 deg of apparent tilt) moved it little
+}
+
+// A person's gait as the IMU of a hand-held sensor feels it: a vertical bounce of a few m/s^2 at
+// two steps a second with its harmonic (the heel strike), a fore-and-aft surge, and the pitch
+// that goes with them. Fed sample by sample, gated by their magnitude, only some phases of the
+// step corrected the tracker, and their mean was tilted by the surge (several degrees on a
+// recorded walk); low-passed in the turning body, the gait averages out.
+TEST(GravityTracker, AWalkingGaitDoesNotTiltIt) {
+  GravityTracker g;
+  const double hz = 200.0, w = 2.0 * M_PI * 2.0;
+  double worst_deg = 0;
+  for (int i = 0; i <= static_cast<int>(60 * hz); ++i) {
+    const double t = i / hz;
+    const double pitch = 0.05 * std::sin(w * t + 1.0), rate = 0.05 * w * std::cos(w * t + 1.0);
+    const Vector3d a_world(1.0 * std::sin(w * t + 0.4), 0,
+                           2.5 * std::sin(w * t) + 1.2 * std::sin(2 * w * t + 0.7));
+    const gtsam::Rot3 R_wb = gtsam::Rot3::Pitch(pitch);
+    const Vector3d f = R_wb.matrix().transpose() * (a_world + Vector3d(0, 0, kStandardGravity));
+    g.add(1'000'000'000LL + static_cast<Timestamp>(t * 1e9), f, Vector3d(0, rate, 0));
+    if (t > 20 && g.up()) {
+      const Vector3d expected = R_wb.matrix().transpose() * Vector3d::UnitZ();
+      worst_deg = std::max(worst_deg,
+                           std::acos(std::clamp(g.up()->dot(expected), -1.0, 1.0)) * 180.0 / M_PI);
+    }
+  }
+  EXPECT_LT(worst_deg, 0.85);  // 1.2 deg sample by sample
+}
+
+// The IMU's up against the floor at headings all round: an offset of the IMU (it turns with the
+// body) is learned; a sloping floor (fixed in the world: in the body it turns the other way with
+// the heading) cancels; at one heading the two cannot be told apart and nothing is learned.
+TEST(TiltOffset, LearnsTheIMUsOwnOffsetAndNotASlope) {
+  const Vector3d body(0.02, -0.01, 0);
+  TiltOffset own, slope, one_way, beyond;
+  for (int i = 0; i < 120; ++i) {
+    const double yaw = 2.0 * M_PI * i / 40.0;  // three turns
+    own.add(body, yaw);
+    const Vector3d world(0.03, 0, 0);
+    slope.add(gtsam::Rot3::Yaw(-yaw).matrix() * world, yaw);
+    one_way.add(body, 0.3);
+    beyond.add(Vector3d(0.07, 0, 0), yaw);  // 4 deg: a TF to fix, not learned
+  }
+  EXPECT_NEAR(own.offset().x(), 0.02, 1e-9);
+  EXPECT_NEAR(own.offset().y(), -0.01, 1e-9);
+  EXPECT_LT(slope.offset().norm(), 0.005);
+  EXPECT_EQ(one_way.offset().norm(), 0.0);
+  EXPECT_EQ(beyond.offset().norm(), 0.0);
 }
 
 namespace {

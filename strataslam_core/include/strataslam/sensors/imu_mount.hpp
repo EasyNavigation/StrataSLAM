@@ -123,6 +123,7 @@ class GravityTracker {
   std::optional<Eigen::Vector3d> up() const;
   void reset() {
     up_.reset();
+    lp_.reset();
     bias_.setZero();
     first_ = last_ = 0;
     gyro_sum_.setZero();
@@ -134,6 +135,7 @@ class GravityTracker {
   /// three time constants (on a recorded ride, 20 m went unmeasured).
   void rotate(const Eigen::Matrix3d& dR) {
     if (up_) up_ = (dR * *up_).normalized();
+    if (lp_) lp_ = dR * *lp_;
     bias_ = dR * bias_;
     gyro_sum_ = dR * gyro_sum_;
   }
@@ -148,6 +150,7 @@ class GravityTracker {
  private:
   double tau_s_, settle_s_;
   std::optional<Eigen::Vector3d> up_;
+  std::optional<Eigen::Vector3d> lp_;  // the specific force, low-passed in the body frame
   Eigen::Vector3d bias_ = Eigen::Vector3d::Zero();
   Eigen::Vector3d gyro_sum_ =
       Eigen::Vector3d::Zero();  // during the settling: the bias if the body was at rest
@@ -155,6 +158,34 @@ class GravityTracker {
   bool still_ = true;         // at rest so far during the settling
   bool static_start_ = true;  // it was, once settled
   Timestamp first_ = 0, last_ = 0;
+};
+
+/// The IMU's up against the floors the LiDAR sees, in the base frame, over a sliding window of
+/// samples (horizontal components of their difference, with the base's heading): their median once
+/// the headings go all round. A sloping floor reads at each heading the other way and cancels; an
+/// offset of the IMU turns with the body and stays. Beyond `max_rad` it is a TF to fix (ADR-0074),
+/// not learned.
+class TiltOffset {
+ public:
+  explicit TiltOffset(size_t keep = 180, size_t min_samples = 60, double max_rad = 0.0524)
+      : keep_(keep), min_(min_samples), max_(max_rad) {}
+  /// One sample: up by the IMU minus up by the floor (base frame), at heading `yaw`. True when it
+  /// changed the offset.
+  bool add(const Eigen::Vector3d& d, double yaw);
+  const Eigen::Vector3d& offset() const { return offset_; }
+  void reset() {
+    samples_.clear();
+    offset_.setZero();
+  }
+
+ private:
+  struct Sample {
+    double dx, dy, yaw;
+  };
+  size_t keep_, min_;
+  double max_;
+  std::deque<Sample> samples_;
+  Eigen::Vector3d offset_ = Eigen::Vector3d::Zero();
 };
 
 }  // namespace strataslam

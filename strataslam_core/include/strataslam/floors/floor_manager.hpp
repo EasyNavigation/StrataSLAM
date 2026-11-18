@@ -63,6 +63,9 @@ struct FloorManagerConfig {
   /// robot.platform == ground: a cabin carries it standing still, so the IMU measures a ride only
   /// while the base does not travel (its vibration while driving averages to tenths of m/s^2).
   bool ground_platform = false;
+  /// robot.platform == handheld: the sensor's height over its floor changes as it is picked up or
+  /// put down (ADR-0076).
+  bool handheld_platform = false;
 };
 
 struct FloorSample {
@@ -74,6 +77,8 @@ struct FloorSample {
   std::optional<Eigen::Vector3d> up_axis;
   std::optional<double> baro_height;         ///< m, filtered, relative to boot
   std::optional<double> imu_vertical_accel;  ///< m/s^2, gravity-free, world frame
+  /// A hand-held rig: the height of the floor its LiDAR sees under it, in the odometry's frame.
+  std::optional<double> ground_z;
   /// false: the odometry tracks but cannot see the body's vertical motion (a confined space, an
   /// elevator cabin: it tracks the cabin, which climbs with the body). Its altitude is then held.
   bool vertical_observed = true;
@@ -172,8 +177,10 @@ class FloorManager {
     Eigen::Vector3d last_pos = Eigen::Vector3d::Zero();
     std::vector<std::pair<double, double>> profile;  ///< (horizontal run, altitude)
     Timestamp calm_since = 0;
-    Timestamp plateau_since = 0;    ///< start of the current uninterrupted calm
+    Timestamp plateau_since = 0;    ///< start of the current plateau (no climb, height kept)
     double plateau_h0 = 0;          ///< s_h at that moment
+    double plateau_alt = 0;         ///< altitude at that moment
+    std::optional<double> ground0;  ///< the floor seen under a hand-held rig before it opened
     bool unobserved = false;        ///< opened by baro/IMU while the odometry stayed put
     Timestamp imu_onset = 0;        ///< start of the vertical-acceleration window that triggered it
     Timestamp az_over_since = 0;    ///< opened by the odometry: since when the IMU accelerates
@@ -211,6 +218,12 @@ class FloorManager {
   FloorEvent end_on_floor(const FloorSample& s, double dz);
   /// An IMU ride that was none: the transition goes back to the odometry.
   void drop_ride();
+  /// The transition sits on a plateau it has lived on: plateau_s long, plateau_travel_m walked.
+  bool lived_on(const FloorSample& s) const;
+  /// The altitude's offset moved by `dz` without the odometry's frame moving (a lift, a plateau).
+  void shift_altitude(double dz);
+  /// The floor seen under a hand-held rig over the last 2 s (median), when seen often enough.
+  std::optional<double> ground_now() const;
   /// A ground robot's base has not travelled over the last 2 s (any other platform: always).
   bool base_still(const FloorSample& s) const;
   FloorSample last_sample_;
@@ -232,6 +245,8 @@ class FloorManager {
   std::optional<double> baro_ref_;
   // vertical speed estimation
   std::deque<std::pair<Timestamp, double>> alt_hist_;
+  std::deque<std::pair<Timestamp, double>> ground_win_;  ///< the floor under a hand-held rig, 2 s
+  std::optional<double> ground_floor_;  ///< that floor while on a floor, the last time it was seen
   std::deque<std::pair<Timestamp, double>> run_win_;  ///< horizontal run in a transition, last 3 s
   std::deque<std::pair<Timestamp, double>> odom_vz_win_;  ///< tracked vertical speed, last 6 s
   std::deque<std::tuple<Timestamp, double, double>>
@@ -264,6 +279,7 @@ class FloorManager {
   double imu_delta_z(Timestamp onset, Timestamp end) const;
   double az_mean(Timestamp now, double window_s) const;
   double az_mean_between(Timestamp from, Timestamp to) const;
+  Timestamp push_onset(Timestamp over_since) const;
   double az_spread(Timestamp from, Timestamp to) const;
   std::optional<Timestamp> push_before(Timestamp onset, double v_brake) const;
   Eigen::Vector3d last_pos_ = Eigen::Vector3d::Zero();
