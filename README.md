@@ -148,3 +148,7 @@ real-data and performance figures, one row per measurement, taken from the same 
 ## Citing
 
 See [CITATION.cff](CITATION.cff).
+
+## Acknowledgements
+
+This work is part of the project AURORAS (PID2024-161761OB-C22), funded by MICIU/AEI/10.13039/501100011033.

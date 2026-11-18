@@ -4,9 +4,21 @@ title: "StrataSLAM: open multi-floor 3D SLAM for ROS 2"
 version: 0.2.0
 license: Apache-2.0
 authors:
-  - family-names: Guerrero
+  - family-names: Guerrero Hernández
     given-names: José Miguel
     email: josemiguel.guerrero@urjc.es
+    affiliation: "Universidad Rey Juan Carlos"
+    orcid: "https://orcid.org/0000-0003-2521-514X"
+abstract: >-
+  Open multi-floor 3D SLAM for ROS 2 that keeps one point cloud per floor and a
+  global one, detects and classifies floor transitions and fuses the floors
+  offline. This work is part of the project AURORAS (PID2024-161761OB-C22),
+  funded by MICIU/AEI/10.13039/501100011033.
+keywords:
+  - SLAM
+  - multi-floor mapping
+  - ROS 2
+  - mobile robots
 date-released: 2026-11-02
 repository-code: "https://github.com/EasyNavigation/StrataSLAM"
 # TODO(decision): add `doi:` after archiving the tagged release on Zenodo (see docs/release_checklist.md).
